@@ -1,0 +1,21 @@
+# root ignores
+.env
+*.env
+.DS_Store
+*.log
+backups/
+exports/
+
+# API
+api/.env
+api/node_modules/
+api/.cache/
+
+# Agent
+agent/last_sync.json
+agent/*.log
+
+# Editor / OS
+.vscode/
+*.swp
+Thumbs.db

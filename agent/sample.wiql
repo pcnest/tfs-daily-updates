@@ -1,0 +1,9 @@
+{
+  "query": "SELECT [System.Id] FROM WorkItems
+            WHERE [System.TeamProject] = @project
+              AND ([System.WorkItemType] = 'Bug' OR [System.WorkItemType] = 'Product Backlog Item')
+              AND [System.State] <> 'Done'
+              AND [System.IterationPath] UNDER @CurrentIteration
+            ORDER BY [System.ChangedDate] DESC"
+}
+

@@ -1,0 +1,519 @@
+<!doctype html>
+<html>
+
+<head>
+  <meta charset="utf-8" />
+  <title>TFS Daily Updates — Iteration A (Login + Submit Day)</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body {
+      font-family: system-ui, Arial, sans-serif;
+      margin: 20px;
+    }
+
+    h1 {
+      margin-bottom: 6px;
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 8px;
+      margin: 6px 0;
+      align-items: center;
+    }
+
+    input,
+    select,
+    textarea {
+      padding: 6px;
+      font-size: 14px;
+      width: 100%;
+    }
+
+    button {
+      padding: 8px 12px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 14px;
+    }
+
+    th,
+    td {
+      border: 1px solid #ddd;
+      padding: 8px;
+      font-size: 13px;
+      vertical-align: top;
+    }
+
+    th {
+      background: #f6f6f6;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: #eee;
+    }
+
+    .ok {
+      color: #0a0;
+    }
+
+    .err {
+      color: #a00;
+    }
+
+    .card {
+      border: 1px solid #ddd;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 14px;
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    a[disabled] {
+      pointer-events: none;
+      opacity: .5;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>TFS Daily Updates — Iteration A</h1>
+  <p><span class="badge">POC</span> Login + My Tickets + Submit Day</p>
+
+  <section class="card">
+    <h3>Login</h3>
+    <div class="row"><label>Email</label><input id="loginEmail" placeholder="dev@company.com" /></div>
+    <div class="row"><label>Password</label><input id="loginPw" type="password" placeholder="••••••" /></div>
+    <div class="row">
+      <div></div><button onclick="signup()">Sign up (POC)</button> <button onclick="login()">Login</button> <span
+        id="loginStatus"></span>
+    </div>
+    <div id="me"></div>
+    <button id="logoutBtn" class="hidden" onclick="logout()">Logout</button>
+  </section>
+
+  <section class="card">
+    <h3>Find My Tickets</h3>
+    <div class="row"><label>Assigned to</label><input id="assigned" placeholder="email or domain\alias" /></div>
+    <div class="row"><label>Contains</label><input id="q" placeholder="search title/id (optional)" /></div>
+    <div class="row">
+      <div></div><button onclick="loadTickets()">Load</button> <span id="loadStatus"></span>
+    </div>
+    <table id="ticketsTbl">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>Title</th>
+          <th>State</th>
+          <th>Iteration</th>
+          <th>Action</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h3>Submit Progress</h3>
+    <div class="row"><label>Ticket ID</label><input id="tId" /></div>
+    <div class="row"><label>Code</label>
+      <select id="code">
+        <option value="100_01">100_01 — queued</option>
+        <option value="200_01">200_01 — started</option>
+        <option value="300_01">300_01 — ready for internal testing</option>
+        <option value="400_01">400_01 — code review</option>
+        <option value="500_00">500_00 — done</option>
+        <option value="600_01">600_01 — blocker</option>
+        <option value="700_01">700_01 — investigating</option>
+        <option value="800_01">800_01 — delayed</option>
+      </select>
+    </div>
+    <div class="row"><label>Note</label><textarea id="note" rows="3" placeholder="short, concrete update"></textarea>
+    </div>
+    <div class="row"><label>&nbsp;</label><small>Note required for codes 300_**, 600_**, 700_**,
+        800_**</small>
+    </div>
+    <div class="row"><label>Risk</label>
+      <select id="risk">
+        <option>low</option>
+        <option>medium</option>
+        <option>high</option>
+        <option>critical</option>
+      </select>
+    </div>
+    <div class="row"><label>Impact</label><input id="impact" placeholder="module/system" /></div>
+    <div class="row">
+      <div></div><button onclick="submitProgress()">Submit</button> <span id="submitStatus"></span>
+    </div>
+  </section>
+
+  <section class="card">
+    <h3>Submit Day (lock)</h3>
+    <div class="row">
+      <div></div><button onclick="lockDay()">Submit Day</button> <span id="lockStatus"></span>
+    </div>
+  </section>
+
+  <section id="pm" class="card hidden" data-role="pm-only">
+    <h3>Today's Collation</h3>
+    <h3>Who hasn't updated yet</h3>
+    <div class="row">
+      <div></div><button onclick="loadMissing()">Refresh</button>
+    </div>
+    <div id="missing"></div>
+    <h3>PM: Unlock a user</h3>
+    <div class="row">
+      <label>User email</label>
+      <input id="unlockEmail" placeholder="dev@company.com" />
+    </div>
+    <div class="row">
+      <div></div><button onclick="pmUnlock()">Unlock</button> <span id="unlockStatus"></span>
+    </div>
+    <h3>Pre-Meeting Updates</h3>
+    <div class="row">
+      <div></div>
+      <a id="tsvLive" href="/api/updates/today.tsv" target="_blank">Download Live TSV</a>
+      &nbsp;|&nbsp;
+      <a id="tsvFinal" href="/api/exports/today" target="_blank">Download Final TSV</a>
+      <span id="exportStatus"></span>
+    </div>
+
+    <div id="today"></div>
+
+    <h3>Blockers Radar</h3>
+    <div class="row">
+      <div></div><button onclick="loadBlockers()">Refresh</button>
+    </div>
+    <div id="blockers"></div>
+  </section>
+
+
+  <script>
+    const API = "";
+    const tokenKey = "pocToken";
+
+    function setStatus(id, msg, ok = true) {
+      const el = document.getElementById(id);
+      el.innerHTML = ok ? `<span class="ok">${msg}</span>` : `<span class="err">${msg}</span>`;
+    }
+    function token() { return localStorage.getItem(tokenKey) || ""; }
+    function setMe(email, name) {
+      // auto-fill "Assigned to" once with the user's alias
+      const assigned = document.getElementById("assigned");
+      if (assigned && !assigned.value && email) {
+        assigned.value = String(email).split("@")[0];
+      }
+      // show "Logged in as …"
+      const me = document.getElementById("me");
+      me.textContent = email ? `Logged in as: ${name || email}` : "";
+      // show logout button if logged in
+      const btn = document.getElementById("logoutBtn");
+      if (btn) btn.classList.toggle("hidden", !email);
+    }
+    function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+    function setRoleUI(role) {
+      const isPM = (role === 'pm');
+
+      // Hide/show anything marked pm-only (your PM section has data-role="pm-only")
+      document.querySelectorAll('[data-role="pm-only"]').forEach(el => {
+        el.classList.toggle('hidden', !isPM);
+      });
+
+      // Disable PM controls for non-PM (defense in depth)
+      const pmBox = document.getElementById('pm');
+      if (pmBox) {
+        pmBox.querySelectorAll('button, a').forEach(el => {
+          if (!isPM) el.setAttribute('disabled', 'disabled'); else el.removeAttribute('disabled');
+        });
+      }
+
+      // Little role badge next to “Logged in as…”
+      const me = document.getElementById("me");
+      if (me) {
+        const badge = `<span class="badge">${isPM ? 'PM' : 'DEV'}</span>`;
+        // strip any previous badge then add fresh
+        me.innerHTML = (me.textContent || me.innerHTML).replace(/<span class="badge">.*<\/span>/, '').trim() + ' ' + badge;
+      }
+      if (role === 'pm') { loadToday(); loadBlockers(); loadMissing(); }
+
+    }
+
+    async function signup() {
+      const email = document.getElementById("loginEmail").value.trim();
+      const pw = document.getElementById("loginPw").value;
+      setStatus("loginStatus", "Signing up...");
+      const res = await fetch((API || location.origin) + "/api/auth/signup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password: pw }) });
+      const js = await res.json();
+      if (js.error) return setStatus("loginStatus", js.error, false);
+      setStatus("loginStatus", "Account created. Please login.");
+    }
+    async function login() {
+      const email = document.getElementById("loginEmail").value.trim();
+      const pw = document.getElementById("loginPw").value;
+      setStatus("loginStatus", "Logging in...");
+      const res = await fetch((API || location.origin) + "/api/auth/login", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email, password: pw }) });
+      const js = await res.json();
+      if (js.error) return setStatus("loginStatus", js.error, false);
+      localStorage.setItem(tokenKey, js.token);
+      setMe(js.email, js.name);
+      setRoleUI(js.role || 'dev');       // NEW
+      setStatus("loginStatus", "Logged in.");
+    }
+    async function logout(all = false) {
+      const t = localStorage.getItem("pocToken");
+      try {
+        if (t) {
+          await fetch((API || location.origin) + (all ? "/api/auth/logout_all" : "/api/auth/logout"), {
+            method: "POST",
+            headers: { "Authorization": "Bearer " + t }
+          });
+        }
+      } catch (_) {/* ignore network errors on logout */ }
+      // client-side cleanup
+      localStorage.removeItem("pocToken");
+      setMe("", "");
+      setRoleUI("dev");                 // hide PM-only sections
+      setStatus("loginStatus", "Logged out.");
+      // optionally clear user-specific fields
+      document.getElementById("assigned").value = "";
+      document.getElementById("today").innerHTML = "";
+      document.getElementById("blockers").innerHTML = "";
+      document.getElementById("missing").innerHTML = "";
+      document.getElementById("logoutBtn").classList.add("hidden");
+    }
+    async function loadTickets() {
+      const assigned = document.getElementById("assigned").value.trim();
+      const q = document.getElementById("q").value.trim();
+      const status = document.getElementById("loadStatus");
+      status.textContent = "Loading...";
+      const url = new URL((API || location.origin) + "/api/tickets");
+      if (assigned) url.searchParams.set("assignedTo", assigned);
+      if (q) url.searchParams.set("q", q);
+      const res = await fetch(url);
+      const js = await res.json();
+      status.textContent = `Loaded ${js.count} ticket(s)`;
+      const tbody = document.querySelector("#ticketsTbl tbody");
+      tbody.innerHTML = "";
+      js.items.forEach(t => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = `<td>${t.id}</td><td>${t.title}</td><td>${t.state}</td><td>${t.iterationPath || ""}</td>
+    <td><button onclick="prefill(${t.id})">Select</button></td>`;
+        tbody.appendChild(tr);
+      });
+    }
+    function prefill(id) {
+      document.getElementById("tId").value = id;
+      window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
+    }
+    async function submitProgress() {
+      const tkn = token();
+      if (!tkn) return setStatus("submitStatus", "Please login first.", false);
+
+      const ticket = document.getElementById("tId").value.trim();
+      const code = document.getElementById("code").value;
+      const note = document.getElementById("note").value.trim();
+      const risk = document.getElementById("risk").value;
+      const impact = document.getElementById("impact").value.trim();
+
+      setStatus("submitStatus", "Submitting...");
+      const btn = document.querySelector('button[onclick="submitProgress()"]');
+      btn.disabled = true;
+
+      let js;
+      try {
+        const res = await fetch((API || location.origin) + "/api/progress", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tkn },
+          body: JSON.stringify({ ticketId: ticket, code, note, riskLevel: risk, impactArea: impact })
+        });
+        js = await res.json();
+      } catch (e) {
+        setStatus("submitStatus", "Network error", false);
+        btn.disabled = false;
+        return;
+      } finally {
+        btn.disabled = false;
+      }
+
+      if (js && js.error) {
+        setStatus("submitStatus", js.error, false);
+      } else {
+        setStatus("submitStatus", "Saved!");
+        // clear fields after a successful save
+        document.getElementById("note").value = "";
+        document.getElementById("impact").value = "";
+      }
+    }
+    async function lockDay() {
+      const tkn = token();
+      if (!tkn) return setStatus("lockStatus", "Please login first.", false);
+      setStatus("lockStatus", "Submitting day...");
+      const res = await fetch((API || location.origin) + "/api/updates/lock", { method: "POST", headers: { "Authorization": "Bearer " + tkn } });
+      const js = await res.json();
+      if (js.error) setStatus("lockStatus", js.error, false);
+      else setStatus("lockStatus", js.locked ? "Day submitted (locked)" : "Not locked", !!js.locked);
+      if (js.locked) {
+        const badge = document.querySelector("#me .badge")?.textContent || "";
+        if (badge === "PM") { loadToday(); loadBlockers(); loadMissing(); }
+      }
+
+    }
+
+
+    async function loadToday() {
+      const box = document.getElementById("today");
+      const res = await fetch((API || location.origin) + "/api/updates/today");
+      const js = await res.json();
+
+      let html = `<p><span class="badge">${esc(js.date || "")}</span></p>`;
+      const users = js.users || [];
+      users.forEach(u => {
+        const lock = u.locked ? "🔒" : "🔓";
+        const who = u.name ? `${esc(u.name)} <small>(${esc(u.email)})</small>` : esc(u.email);
+        html += `<h3>${lock} ${who}</h3>`;
+
+        // group by assignedTo
+        const groups = {};
+        (u.tickets || []).forEach(t => {
+          const key = t.assignedTo && String(t.assignedTo).trim() ? t.assignedTo : "(unassigned)";
+          (groups[key] ||= []).push(t);
+        });
+
+        const keys = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+        if (keys.length === 0) {
+          html += `<p><em>No updates yet today.</em></p>`;
+        } else {
+          keys.forEach(gk => {
+            html += `<h4>## ${esc(gk)} ##</h4><ul>`;
+            groups[gk].forEach(t => {
+              html += `<li>${esc(t.ticketId)} - <i>${esc(t.title)}</i> - ${esc(t.state)} - ${esc(t.code)} - ${esc(t.note)} - ${esc(t.iterationPath)}</li>`;
+            });
+            html += `</ul>`;
+          });
+        }
+      });
+
+      box.innerHTML = html;
+    }
+
+    async function loadBlockers() {
+      const box = document.getElementById("blockers");
+      const res = await fetch((API || location.origin) + "/api/updates/blockers");
+      const js = await res.json();
+
+      // severity: 600_* < 700_* < 800_* < others
+      const sev = (c) => c?.startsWith("600_") ? 0 : c?.startsWith("700_") ? 1 : c?.startsWith("800_") ? 2 : 3;
+
+      // group by assignedTo
+      const items = js.items || [];
+      const groups = {};
+      items.forEach(h => {
+        const k = h.assignedTo && h.assignedTo.trim() ? h.assignedTo : "(unassigned)";
+        (groups[k] ||= []).push(h);
+      });
+
+      let html = `<p><span class="badge">${esc(js.date || "")}</span></p>`;
+      const keys = Object.keys(groups).sort((a, b) => a.localeCompare(b));
+      if (keys.length === 0) {
+        box.innerHTML = html + `<p><em>No blockers detected today.</em></p>`;
+        return;
+      }
+
+      keys.forEach(k => {
+        // sort by severity, then newest first
+        groups[k].sort((a, b) => sev(a.code) - sev(b.code) || (b.at || "").localeCompare(a.at || ""));
+
+        html += `<h4>## ${esc(k)} ##</h4><ul>`;
+        groups[k].forEach(h => {
+          html += `<li>${esc(h.ticketId)} - <i>${esc(h.title)}</i> - ${esc(h.state)} - ${esc(h.code)} - ${esc(h.note)} - ${esc(h.iterationPath)}</li>`;
+        });
+        html += `</ul>`;
+      });
+
+      box.innerHTML = html;
+    }
+    async function loadMissing() {
+      const box = document.getElementById("missing");
+      const res = await fetch((API || location.origin) + "/api/updates/missing", {
+        headers: { "Authorization": "Bearer " + (localStorage.getItem("pocToken") || "") }
+      });
+      const js = await res.json();
+      if (js.error) { box.innerHTML = `<p class="err">${esc(js.error)}</p>`; return; }
+      if (!js.missing || js.missing.length === 0) {
+        box.innerHTML = `<p><span class="badge">${esc(js.date || "")}</span> — everyone has updated 🎉</p>`;
+        return;
+      }
+      let html = `<p><span class="badge">${esc(js.date || "")}</span> — ${js.count} dev(s) with no update</p><ul>`;
+      js.missing.forEach(m => html += `<li>${esc(m.label)} <small>(${esc(m.email)})</small></li>`);
+      html += `</ul>`;
+      box.innerHTML = html;
+    }
+    async function pmUnlock() {
+      const email = document.getElementById("unlockEmail").value.trim();
+      const tkn = localStorage.getItem("pocToken") || "";
+      if (!tkn) { document.getElementById("unlockStatus").innerHTML = `<span class="err">Please login</span>`; return; }
+      document.getElementById("unlockStatus").textContent = "Unlocking...";
+      const res = await fetch((API || location.origin) + "/api/updates/unlock", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": "Bearer " + tkn },
+        body: JSON.stringify({ email })
+      });
+      const js = await res.json();
+      if (js.error) document.getElementById("unlockStatus").innerHTML = `<span class="err">${esc(js.error)}</span>`;
+      else document.getElementById("unlockStatus").innerHTML = `<span class="ok">Unlocked ${esc(js.target)}</span>`;
+    }
+
+    // PM-only helper: show if final export is ready and who’s locked
+    async function loadExportStatus() {
+      const tkn = localStorage.getItem("pocToken") || "";
+      if (!tkn) return;
+
+      const res = await fetch((API || location.origin) + "/api/exports/status", {
+        headers: { "Authorization": "Bearer " + tkn }
+      });
+      const js = await res.json();
+      const box = document.getElementById("exportStatus");
+      if (js.error) { box.textContent = ""; return; }
+
+      // Example: "3/5 locked — Final not ready"
+      const msg = `${js.lockedUpdaters}/${js.totalUpdaters} locked — ${js.ready ? "Final ready" : "Final not ready"}`;
+      box.innerHTML = `<span class="badge">${js.date}</span> ${msg}`;
+    }
+
+    (async () => {
+      const tkn = token();
+      if (tkn) {
+        try {
+          const res = await fetch((API || location.origin) + "/api/me", { headers: { "Authorization": "Bearer " + tkn } });
+          if (res.ok) {
+            const js = await res.json();
+            setMe(js.email, js.name);
+            document.getElementById("assigned").value ||= (js.email || "").split("@")[0];
+
+            setRoleUI(js.role || 'dev');       // NEW
+            setStatus("loginStatus", "Logged in.");
+          } else {
+            localStorage.removeItem(tokenKey);
+          }
+        } catch { }
+      }
+    })();
+
+
+
+  </script>
+</body>
+
+</html>
