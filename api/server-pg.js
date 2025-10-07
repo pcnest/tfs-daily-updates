@@ -28,7 +28,19 @@ if (!fs.existsSync(EXPORT_DIR)) fs.mkdirSync(EXPORT_DIR, { recursive: true });
 
 // helpers
 const todayISO = () => new Date().toISOString().slice(0, 10);
-const noteRequiredPrefixes = ['300_', '600_', '700_', '800_'];
+
+const noteRequiredPrefixes = ['600_', '700_', '800_'];
+async function isNoteRequired(pool, code) {
+  // DB-driven rule
+  const r = await pool.query(
+    'SELECT require_note FROM progress_codes WHERE code=$1 AND active=true',
+    [String(code)]
+  );
+  if (r.rowCount > 0) return !!r.rows[0].require_note;
+  // Fallback to legacy prefix rule if code not found
+  return noteRequiredPrefixes.some((p) => String(code).startsWith(p));
+}
+
 const HARD_LOCK = process.env.HARD_LOCK === '1';
 const blockerKeywords = (
   process.env.BLOCKER_KEYWORDS ||
@@ -42,6 +54,13 @@ function hashPassword(pw, salt = crypto.randomBytes(16)) {
   const hash = crypto.scryptSync(pw, salt, 32);
   return `${salt.toString('base64')}:${hash.toString('base64')}`;
 }
+function escapeHtml(s) {
+  return String(s || '').replace(
+    /[&<>"]/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])
+  );
+}
+
 function verifyPassword(pw, encoded) {
   const [saltB64, hashB64] = String(encoded).split(':');
   if (!saltB64 || !hashB64) return false;
@@ -321,10 +340,11 @@ app.post('/api/progress', requireAuth, async (req, res) => {
   if (HARD_LOCK && locked.rowCount)
     return res.status(403).json({ error: 'day already submitted (locked)' });
 
-  if (noteRequiredPrefixes.some((p) => String(code).startsWith(p))) {
+  if (await isNoteRequired(pool, code)) {
     if (!note || !String(note).trim())
       return res.status(400).json({ error: `note required for code ${code}` });
   }
+
   await pool.query(
     `insert into progress_updates(ticket_id,email,code,note,risk_level,impact_area,date,at)
      values ($1,$2,$3,$4,$5,$6,$7,now())`,
@@ -551,6 +571,55 @@ app.get('/api/updates/today.tsv', async (_req, res) => {
     `attachment; filename="updates-${date}.tsv"`
   );
   res.send(tsv);
+});
+
+// --- progress codes (dynamic)
+
+// JSON: return codes + metadata
+app.get('/api/progress-codes', async (_req, res) => {
+  const { rows } = await pool.query(`
+    SELECT code, label, family,
+           require_note AS "requireNote",
+           active, sort_order AS "order",
+           updated_at AS "updatedAt"
+    FROM progress_codes
+    WHERE active = true
+    ORDER BY sort_order, code
+  `);
+  res.set('Cache-Control', 'public, max-age=300, stale-while-revalidate=60');
+  res.json({ version: new Date().toISOString(), items: rows });
+});
+
+// HTMX: return just the <option> HTML (grouped by family)
+app.get('/api/ui/progress-codes/options', async (_req, res) => {
+  const { rows } = await pool.query(`
+    SELECT code, label, family, require_note
+    FROM progress_codes
+    WHERE active = true
+    ORDER BY sort_order, code
+  `);
+
+  const byFam = rows.reduce((acc, r) => {
+    (acc[r.family] ||= []).push(r);
+    return acc;
+  }, {});
+
+  res.set('Cache-Control', 'public, max-age=300, stale-while-revalidate=60');
+  res.type('html');
+
+  let html = '';
+  Object.keys(byFam)
+    .sort()
+    .forEach((fam) => {
+      html += `<optgroup label="${fam}">`;
+      byFam[fam].forEach((r) => {
+        html += `<option value="${r.code}" data-requirenote="${
+          r.require_note ? 'true' : 'false'
+        }">${r.code} — ${escapeHtml(r.label)}</option>`;
+      });
+      html += `</optgroup>`;
+    });
+  res.send(html);
 });
 
 // static web
