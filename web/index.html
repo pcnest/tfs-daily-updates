@@ -304,8 +304,9 @@
       </div>
       <div class="row"><label for="note">Note</label><textarea id="note" rows="3"
           placeholder="short, concrete update"></textarea></div>
-      <div class="row"><label>&nbsp;</label><small id="noteHint" class="help">Note required for codes 300_**, 600_**,
-          700_**, 800_**</small></div>
+      <div class="row"><label>&nbsp;</label><small id="noteHint" class="help">
+          A note may be required for some codes.
+        </small></div>
       <div class="row"><label>&nbsp;</label><small class="help">Submit Day locks in your updates for today so PMs can
           finalize the report. You can still add updates until you click Submit Day. After locking, only a PM can unlock
           you.</small></div>
@@ -380,10 +381,13 @@
         if (ok === void 0) ok = true;
         var el = byId(id);
         if (!el) return;
-        el.className = (el.className.replace(/(ok|err)/g, '').trim() + ' status').trim();
-        if (ok) el.classList.add('ok'); else el.classList.add('err');
+        el.classList.remove('ok');   // remove old state
+        el.classList.remove('err');
+        el.classList.add('status');
+        el.classList.add(ok ? 'ok' : 'err');
         el.textContent = msg || '';
       }
+
 
       function token() { return localStorage.getItem(tokenKey) || ""; }
 
@@ -393,7 +397,13 @@
         return s.replace(/[&<>"']/g, function (c) { return map[c]; });
       }
 
-      function requiresNote(code) { return /^(300|600|700|800)_/.test(code || ""); }
+      function requiresNote(code) {
+        var sel = document.getElementById('code');
+        if (!sel) return false;
+        var opt = sel.querySelector('option[value="' + code + '"]');
+        return !!(opt && opt.getAttribute('data-requirenote') === 'true');
+      }
+
 
       function clearForNewSession() {
         var ids = ['loginStatus', 'loadStatus', 'submitStatus', 'lockStatus', 'exportStatus', 'unlockStatus'];
@@ -735,6 +745,12 @@
             })
             .catch(function () { localStorage.removeItem(tokenKey); });
         }
+      });
+
+      // Re-run requirement hint after <select id="code"> is populated by HTMX
+      document.body.addEventListener('htmx:afterSwap', function (ev) {
+        var tgt = ev.target || (ev.detail && ev.detail.target);
+        if (tgt && tgt.id === 'code') { syncNoteRequirement(); }
       });
 
       // expose globals for inline handlers
