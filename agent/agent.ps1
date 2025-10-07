@@ -13,7 +13,7 @@ $Project       = "SupplyPro.Core"
 $Team          = "Enterprise Software Team" 
 $Pat           = "x34cxkcnvd7zuxw6egqyg2yyf6frsbw3vjjnmh37xgar2aopxwqa"                # Read-only PAT is recommended
 $WiqlFile      = ".\sample.wiql"               # WIQL file path (relative to this script)
-$PublicApiBase = "https://tfs-daily-api.onrender.com/"  # e.g., https://your-host/api
+$PublicApiBase = "https://tfs-daily-api.onrender.com"  # e.g., https://your-host/api
 $PublicApiKey  = "3bded27a3b75ee54e2ae2da4293687c26172d3f551e3584e343c71d399e4054f"           # Must match API_KEY in the server's .env
 # --------------------------------------------
 
