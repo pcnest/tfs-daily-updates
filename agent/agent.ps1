@@ -88,22 +88,16 @@ try {
 } catch { }
 if (-not $q) { $q = [string]$wiqlRaw }
 
-# Build delta clause (date-only)
-$deltaClause = "[System.ChangedDate] >= '$SinceDateOnly'"
-
-# Insert delta BEFORE ORDER BY (if present), otherwise append both WHERE/AND + ORDER BY.
-$hasWhere = [regex]::IsMatch($q, '\bWHERE\b', 'IgnoreCase')
-$matchOB  = [regex]::Match($q, '\bORDER\s+BY\b', 'IgnoreCase')
-
-if ($matchOB.Success) {
-    $head = $q.Substring(0, $matchOB.Index).TrimEnd()
-    $tail = $q.Substring($matchOB.Index)  # "ORDER BY ..."
-    if ($hasWhere) { $head = "$head`n  AND $deltaClause" } else { $head = "$head`nWHERE $deltaClause" }
-    $q = "$head`n$tail"
-} else {
-    if ($hasWhere) { $q = "$q`n  AND $deltaClause" } else { $q = "$q`nWHERE $deltaClause" }
-    $q = "$q`nORDER BY [System.ChangedDate] DESC"
+# Inject Source/Target delta via placeholders in WIQL template (no brittle substring ops)
+$srcDelta = ""
+$tgtDelta = ""
+if ($SinceDateOnly) {
+  $srcDelta = "`n    AND Source.[System.ChangedDate] >= '$SinceDateOnly'"
+  $tgtDelta = "`n    AND Target.[System.ChangedDate] >= '$SinceDateOnly'"
 }
+# Replace placeholders if present; otherwise no-op
+$q = $q.Replace('{{SOURCE_DELTA}}', $srcDelta).Replace('{{TARGET_DELTA}}', $tgtDelta)
+
 
 $wiqlBody = @{ query = $q } | ConvertTo-Json -Depth 3
 
@@ -133,7 +127,16 @@ try {
 
 Write-Log "Posting WIQL (delta since $SinceDateOnly) to $wiqlUrl ..."
 $wiqlResponse = Invoke-RestMethod -Method Post -Uri $wiqlUrl -Headers $tfsHeaders -Body $wiqlBody -ContentType 'application/json'
-$ids = $wiqlResponse.workItems | ForEach-Object { $_.id } | Select-Object -Unique
+# Collect IDs from either flat (.workItems) or link (.workItemRelations) results
+$ids = @()
+if ($wiqlResponse.workItems) {
+    $ids = $wiqlResponse.workItems | ForEach-Object { $_.id } | Select-Object -Unique
+} elseif ($wiqlResponse.workItemRelations) {
+    $ids = $wiqlResponse.workItemRelations |
+        Where-Object { $_.rel -eq 'System.LinkTypes.Hierarchy-Forward' -and $_.source } |
+        ForEach-Object { $_.source.id } |
+        Sort-Object -Unique
+}
 
 if (!$ids -or $ids.Count -eq 0) {
     Write-Log "No work items returned by WIQL (delta)."

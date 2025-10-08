@@ -295,33 +295,78 @@ app.get('/api/tickets', async (req, res) => {
   const params = [];
   let i = 1;
 
+  // same filters, but prefix columns with t.
   if (assignedTo) {
     clauses.push(
-      `lower(regexp_replace(assigned_to,'^.*\\\\','')) like $${i++}`
+      `lower(regexp_replace(t.assigned_to,'^.*\\\\','')) like $${i++}`
     );
     params.push(`%${normId(assignedTo)}%`);
   }
   if (state) {
-    clauses.push(`lower(state)=lower($${i++})`);
+    clauses.push(`lower(t.state)=lower($${i++})`);
     params.push(state);
   }
   if (iterationPath) {
-    clauses.push(`lower(iteration_path) like lower($${i++})`);
+    clauses.push(`lower(t.iteration_path) like lower($${i++})`);
     params.push(`%${iterationPath}%`);
   }
   if (areaPath) {
-    clauses.push(`lower(area_path) like lower($${i++})`);
+    clauses.push(`lower(t.area_path) like lower($${i++})`);
     params.push(`%${areaPath}%`);
   }
   if (q) {
-    clauses.push(`(lower(title) like lower($${i++}) or id like $${i++})`);
+    clauses.push(`(lower(t.title) like lower($${i++}) or t.id like $${i++})`);
     params.push(`%${q}%`, `%${q}%`);
   }
-
   const where = clauses.length ? `where ${clauses.join(' and ')}` : '';
-  const sql = `select id,type,title,state,assigned_to as "assignedTo",area_path as "areaPath",
-                      iteration_path as "iterationPath",changed_date as "changedDate",tags
-               from tickets ${where} order by changed_date desc nulls last, id::bigint nulls last`;
+
+  // if caller is authenticated, include their latest code/note via LATERAL join
+  const me = await tryGetAuthEmail(req);
+  let sql, rows;
+  if (me) {
+    params.push(me); // $i for email in the lateral
+    const emailParam = `$${i++}`;
+
+    sql = `
+      select
+        t.id,
+        t.type,
+        t.title,
+        t.state,
+        t.assigned_to as "assignedTo",
+        t.area_path   as "areaPath",
+        t.iteration_path as "iterationPath",
+        t.changed_date   as "changedDate",
+        t.tags,
+        u.code as "lastCode",
+        u.note as "lastNote"
+      from tickets t
+      left join lateral (
+        select code, note
+        from progress_updates
+        where ticket_id = t.id and email = ${emailParam}
+        order by at desc
+        limit 1
+      ) u on true
+      ${where}
+      order by t.changed_date desc nulls last, t.id::bigint nulls last
+    `;
+  } else {
+    // original behavior (no extra columns)
+    sql = `
+      select
+        t.id, t.type, t.title, t.state,
+        t.assigned_to as "assignedTo",
+        t.area_path   as "areaPath",
+        t.iteration_path as "iterationPath",
+        t.changed_date   as "changedDate",
+        t.tags
+      from tickets t
+      ${where}
+      order by t.changed_date desc nulls last, t.id::bigint nulls last
+    `;
+  }
+
   const r = await pool.query(sql, params);
   res.json({ items: r.rows, count: r.rowCount });
 });
@@ -360,6 +405,21 @@ app.post('/api/progress', requireAuth, async (req, res) => {
   );
   res.json({ status: 'ok' });
 });
+
+// Add a helper to read the auth token without enforcing it
+async function tryGetAuthEmail(req) {
+  const hdr = req.header('Authorization') || '';
+  const token = hdr.startsWith('Bearer ') ? hdr.slice(7) : null;
+  if (!token) return null;
+  try {
+    const s = await pool.query('select email from sessions where token=$1', [
+      token,
+    ]);
+    return s.rowCount ? s.rows[0].email : null;
+  } catch (_e) {
+    return null;
+  }
+}
 
 // --- lock / unlock / lock status
 app.post('/api/updates/lock', requireAuth, async (req, res) => {
