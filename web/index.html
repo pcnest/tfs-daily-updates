@@ -80,7 +80,7 @@
     textarea {
       padding: 8px 10px;
       font-size: 14px;
-      width: 100%;
+      display: block;
       background: var(--card);
       color: var(--fg);
       border: 1px solid var(--border);
@@ -233,6 +233,79 @@
       align-items: center;
       flex-wrap: wrap;
     }
+
+    /* PM sections grid */
+    .section-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+
+
+    .card.thin {
+      margin: 0;
+      padding: 12px;
+    }
+
+    /* Modal */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, .5);
+      display: none;
+      z-index: 999;
+    }
+
+    .modal {
+      position: fixed;
+      inset: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+
+    .modal.open,
+    .modal-backdrop.open {
+      display: flex;
+    }
+
+    .modal-card {
+      /* width: min(720px, 96vw); */
+      width: min(50vw, 96vw);
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, .35);
+    }
+
+    .modal-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .modal-body {
+      padding: 14px;
+      max-height: 70vh;
+      overflow: auto;
+    }
+
+    .modal-foot {
+      padding: 12px 14px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 10px;
+      justify-content: flex-end;
+    }
+
+    .modal-close {
+      background: transparent;
+      color: var(--fg);
+      border: 1px solid var(--border);
+    }
   </style>
 </head>
 
@@ -241,7 +314,7 @@
     <header class="card">
       <div class="toolbar" style="justify-content: space-between;">
         <div>
-          <h1>TFS Daily Updates — Iteration A</h1>
+          <h1>TFS Daily Updates — v.1</h1>
           <p><span class="badge">POC</span> Login · My Tickets · Submit Day</p>
         </div>
         <div class="pill">
@@ -260,15 +333,15 @@
       <div class="row">
         <div></div>
         <div class="toolbar">
-          <button onclick="signup()">Sign up (POC)</button>
-          <button onclick="login()">Login</button>
+          <button onclick="signup()">Sign Up</button>
+          <button onclick="login()">Log In</button>
           <span id="loginStatus" class="status" role="status" aria-live="polite"></span>
         </div>
       </div>
     </section>
 
     <section class="card hidden" id="ticketsCard">
-      <h3>Find My Tickets</h3>
+      <h3>My Tickets</h3>
       <div id="findFilters">
         <div class="row"><label for="assigned">Assigned to</label><input id="assigned"
             placeholder="email or domain\alias" /></div>
@@ -285,10 +358,11 @@
         <thead>
           <tr>
             <th style="width:100px">ID</th>
-            <th>Title</th>
+            <th style="width:350px">Title</th>
             <th style="width:120px">State</th>
-            <th style="width:220px">Iteration</th>
-            <th style="width:100px">Action</th>
+            <th style="width:75x">Code</th>
+            <th>Note</th>
+            <th style="width:75px">Action</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -307,66 +381,125 @@
       <div class="row"><label>&nbsp;</label><small id="noteHint" class="help">
           A note may be required for some codes.
         </small></div>
-      <div class="row"><label>&nbsp;</label><small class="help">Submit Day locks in your updates for today so PMs can
-          finalize the report. You can still add updates until you click Submit Day. After locking, only a PM can unlock
-          you.</small></div>
+
       <div class="row">
         <div></div>
         <div class="toolbar">
-          <button class="secondary" onclick="lockDay()">Submit Day</button>
-          <span id="lockStatus" class="status" role="status" aria-live="polite"></span>
+          <button id="submitBtn" onclick="submitProgress()">Submit</button>
+          <span id="submitStatus" class="status" role="status" aria-live="polite"></span>
+
         </div>
+        <div></div>
       </div>
       <div class="sticky-actions">
-        <button id="submitBtn" onclick="submitProgress()">Submit</button>
-        <span id="submitStatus" class="status" role="status" aria-live="polite"></span>
+        <div class="row">
+          <label>
+            <button class="secondary" onclick="lockDay()">Submit Day</button>
+            <span id="lockStatus" class="status" role="status" aria-live="polite" style="display: inline-block;"></span>
+          </label>
+          <p>Submit Day locks in your updates for today so PMs can
+            finalize the report. After locking, only a PM can
+            unlock
+            you.</p>
+        </div>
+
       </div>
+
     </section>
 
     <section id="pm" class="card hidden" data-role="pm-only" aria-labelledby="pmHeader">
-      <h3 id="pmHeader">PM Tools</h3>
+      <div class="section-grid">
+        <!-- (1) Pre-Meeting Updates -->
+        <section class="card thin" aria-labelledby="preHeader">
+          <h4 id="preHeader">Pre-Meeting Updates</h4>
+          <div id="today"></div>
+        </section>
 
-      <h4>Today's Collation</h4>
-      <div id="today"></div>
+        <!-- (2) Who hasn't updated yet -->
+        <section class="card thin" aria-labelledby="missingHeader">
+          <h4 id="missingHeader">Who hasn't updated yet</h4>
+          <div class="row">
+            <div></div>
+            <div class="toolbar">
+              <button onclick="loadMissing()">Refresh</button>
+            </div>
+          </div>
+          <div id="missing"></div>
+        </section>
 
-      <h4>Who hasn't updated yet</h4>
-      <div class="row">
-        <div></div>
-        <div class="toolbar"><button onclick="loadMissing()">Refresh</button></div>
-      </div>
-      <div id="missing"></div>
+        <!-- (3) Unlock a user -->
+        <section class="card thin" aria-labelledby="unlockHeader">
+          <h4 id="unlockHeader">Unlock a user</h4>
+          <div class="row">
+            <label for="unlockEmail">User email</label>
+            <input id="unlockEmail" placeholder="dev@company.com" />
+          </div>
+          <div class="row">
+            <div></div>
+            <div class="toolbar">
+              <button onclick="pmUnlock()">Unlock</button>
+              <span id="unlockStatus" class="status" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+        </section>
 
-      <h4>PM: Unlock a user</h4>
-      <div class="row">
-        <label for="unlockEmail">User email</label>
-        <input id="unlockEmail" placeholder="dev@company.com" />
-      </div>
-      <div class="row">
-        <div></div>
-        <div class="toolbar">
-          <button onclick="pmUnlock()">Unlock</button>
-          <span id="unlockStatus" class="status" role="status" aria-live="polite"></span>
-        </div>
+        <!-- (4) Download TSV links -->
+        <section class="card thin" aria-labelledby="downloadHeader">
+          <h4 id="downloadHeader">Pre-Meeting Downloads</h4>
+          <div class="row">
+            <div></div>
+            <div class="toolbar">
+              <a id="tsvLive" href="/api/updates/today.tsv" target="_blank">Download Live TSV</a>
+              <span>·</span>
+              <a id="tsvFinal" href="/api/exports/today" target="_blank">Download Final TSV</a>
+              <span id="exportStatus" class="status" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+        </section>
+
+        <!-- (5) Blockers radar -->
+        <section class="card thin" aria-labelledby="blockersHeader">
+          <h4 id="blockersHeader">Blockers Radar</h4>
+          <div class="row">
+            <div></div>
+            <div class="toolbar">
+              <button onclick="loadBlockers()">Refresh</button>
+            </div>
+          </div>
+          <div id="blockers"></div>
+        </section>
       </div>
 
-      <h4>Pre-Meeting Updates</h4>
-      <div class="row">
-        <div></div>
-        <div class="toolbar">
-          <a id="tsvLive" href="/api/updates/today.tsv" target="_blank">Download Live TSV</a>
-          <span>·</span>
-          <a id="tsvFinal" href="/api/exports/today" target="_blank">Download Final TSV</a>
-          <span id="exportStatus" class="status" role="status" aria-live="polite"></span>
-        </div>
-      </div>
-
-      <h4>Blockers Radar</h4>
-      <div class="row">
-        <div></div>
-        <div class="toolbar"><button onclick="loadBlockers()">Refresh</button></div>
-      </div>
-      <div id="blockers"></div>
     </section>
+
+    <!-- Submit Progress Modal -->
+    <div id="spBackdrop" class="modal-backdrop" onclick="closeSPModal()"></div>
+    <div id="spModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="spTitle">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-head">
+          <h3 id="spTitle">Submit Progress</h3>
+          <button class="modal-close" onclick="closeSPModal()" aria-label="Close">Close</button>
+        </div>
+        <div class="modal-body">
+          <div class="row"><label for="tId">Ticket ID</label><input id="tId" inputmode="numeric" /></div>
+          <div class="row">
+            <label for="code">Progress Code</label>
+            <select id="code" hx-get="/api/ui/progress-codes/options" hx-trigger="load" hx-swap="innerHTML"></select>
+          </div>
+          <div class="row"><label for="note">Note</label><textarea id="note" rows="4"
+              placeholder="short, concrete update"></textarea></div>
+          <div class="row"><label>&nbsp;</label><small id="noteHint" class="help">A note may be required for some
+              codes.</small></div>
+        </div>
+        <div class="modal-foot">
+          <button class="secondary" onclick="closeSPModal()">Cancel</button>
+          <button id="submitBtn" onclick="submitProgress()">Submit</button>
+          <span id="submitStatus" class="status" role="status" aria-live="polite"></span>
+        </div>
+      </div>
+    </div>
+
+
   </div>
 
   <script>
@@ -558,13 +691,18 @@
         tbody.innerHTML = "";
         for (var i = 0; i < 5; i++) {
           var tr = document.createElement('tr'); tr.className = 'skeleton';
-          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td>';
+          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td>';
+
           tbody.appendChild(tr);
         }
         var url = new URL((API || location.origin) + "/api/tickets");
         if (assigned && assigned.value.trim()) url.searchParams.set("assignedTo", assigned.value.trim());
         if (q && q.value.trim()) url.searchParams.set("q", q.value.trim());
-        fetch(url)
+        var hdrs = {};
+        var tkn = localStorage.getItem("pocToken");
+        if (tkn) hdrs["Authorization"] = "Bearer " + tkn;
+
+        fetch(url, { headers: hdrs })
           .then(function (res) { return res.json(); })
           .then(function (js) {
             status.textContent = "Loaded " + (js.count || 0) + " ticket(s)";
@@ -573,18 +711,51 @@
             for (var k = 0; k < items.length; k++) {
               var t = items[k];
               var tr2 = document.createElement("tr");
-              tr2.innerHTML = '<td>' + esc(t.id) + '</td><td>' + esc(t.title) + '</td><td>' + esc(t.state) + '</td><td>' + esc(t.iterationPath || "") + '</td>' +
-                '<td><button class="secondary" onclick="prefill(' + Number(t.id) + ')" aria-label="Select ticket ' + esc(t.id) + '">Select</button></td>';
+              tr2.setAttribute("data-id", String(t.id));
+              var code = t.lastCode || t.progressCode || t.code || '';
+              var note = t.lastNote || t.progressNote || t.note || '';
+              tr2.innerHTML =
+                '<td>' + esc(t.id) + '</td>' +
+                '<td><i>' + esc(t.title) + '</i></td>' +
+                '<td>' + esc(t.state) + '</td>' +
+                '<td>' + esc(code || '—') + '</td>' +
+                '<td>' + esc(note || '—') + '</td>' +
+                '<td><button class="secondary" onclick="openSPModal(' + Number(t.id) + ')" aria-label="Select ticket ' + esc(t.id) + '">Select</button></td>';
+
               tbody.appendChild(tr2);
             }
           })
           .catch(function () {
             status.textContent = "Failed to load";
             status.classList.add('err');
-            tbody.innerHTML = '<tr><td colspan="5">Unable to load tickets. Check network or try again.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="6">Unable to load tickets. Check network or try again.</td></tr>';
           })
           .finally(function () { btn.disabled = false; });
       }
+
+      function openSPModal(id) {
+        var m = byId('spModal'), b = byId('spBackdrop');
+        if (id != null) byId('tId').value = String(id);
+        // ensure note-required hint is correct (HTMX may have just populated options)
+        if (window.syncNoteRequirement) syncNoteRequirement();
+        m.classList.add('open'); b.classList.add('open');
+        // focus first field
+        setTimeout(function () { var t = byId('tId'); if (t) t.focus(); }, 0);
+      }
+
+      function closeSPModal() {
+        var m = byId('spModal'), b = byId('spBackdrop');
+        m.classList.remove('open'); b.classList.remove('open');
+      }
+
+      // ESC to close
+      document.addEventListener('keydown', function (ev) {
+        if (ev.key === 'Escape') { closeSPModal(); }
+      });
+
+      // after a successful submit, we already update the row inline;
+      // also close the modal there:
+
 
       function prefill(id) {
         byId("tId").value = id;
@@ -602,7 +773,25 @@
         setStatus("submitStatus", "Submitting...");
         var btn = byId('submitBtn'); btn.disabled = true;
         req('POST', (API || location.origin) + "/api/progress", JSON.stringify({ ticketId: ticket, code: code, note: note }), { "Content-Type": "application/json", "Authorization": "Bearer " + tkn })
-          .then(function (js) { if (js && js.error) setStatus("submitStatus", js.error, false); else { setStatus("submitStatus", "Saved!"); byId("note").value = ""; } })
+          .then(function (js) {
+            if (js && js.error) setStatus("submitStatus", js.error, false); else {
+              setStatus("submitStatus", "Saved!");
+              byId("note").value = "";
+              closeSPModal();
+              // Optimistically update the row in My Tickets
+              var row = document.querySelector('#ticketsTbl tbody tr[data-id="' + ticket + '"]');
+              if (row) {
+                var cells = row.getElementsByTagName('td');
+                // columns: [0]=ID, [1]=Title, [2]=State, [3]=Code, [4]=Note, [5]=Action
+                if (cells[3]) cells[3].textContent = code || '—';
+                if (cells[4]) cells[4].textContent = note || '—';
+              } else {
+                // if the table isn't loaded yet or row not found, just refresh
+                if (typeof loadTickets === 'function') { loadTickets(); }
+              }
+
+            }
+          })
           .catch(function () { setStatus("submitStatus", "Network error", false); })
           .finally(function () { btn.disabled = false; });
       }
@@ -625,37 +814,69 @@
         fetch((API || location.origin) + "/api/updates/today")
           .then(function (res) { return res.json(); })
           .then(function (js) {
-            var html = '<p><span class="badge">' + esc(js.date || "") + '</span></p>';
+            var out = [];
+            out.push('<span class="badge">' + esc(js.date || "") + "</span>");
+
             var users = js.users || [];
             for (var u = 0; u < users.length; u++) {
               var user = users[u];
-              var lock = user.locked ? "🔒" : "🔓";
-              var who = user.name ? (esc(user.name) + ' <small>(' + esc(user.email) + ')</small>') : esc(user.email);
-              html += '<h3>' + lock + ' ' + who + '</h3>';
+
+              // Use HTML entities for lock icons to avoid encoding issues
+              var lock = user.locked ? "&#128274;" /* locked */ : "&#128275;" /* unlocked */;
+              var who = user.name
+                ? (esc(user.name) + " <small>(" + esc(user.email) + ")</small>")
+                : esc(user.email);
+
+              out.push("<h3>" + lock + " " + who + "</h3>");
+
+              // group by assignedTo (alias bucket)
               var groups = {};
               var uts = user.tickets || [];
               for (var t = 0; t < uts.length; t++) {
                 var it = uts[t];
                 var key = (it.assignedTo && String(it.assignedTo).trim()) ? it.assignedTo : "(unassigned)";
-                if (!groups[key]) groups[key] = [];
+                if (!groups[key]) { groups[key] = []; }
                 groups[key].push(it);
               }
+
               var keys = Object.keys(groups).sort(function (a, b) { return a.localeCompare(b); });
-              if (keys.length === 0) { html += '<p><em>No updates yet today.</em></p>'; }
-              else {
+              if (keys.length === 0) {
+                out.push("<p><em>No updates yet today.</em></p>");
+              } else {
                 for (var k = 0; k < keys.length; k++) {
                   var gk = keys[k];
-                  html += '<h4>## ' + esc(gk) + ' ##</h4><ul>';
+                  out.push("<h4>## " + esc(gk) + " ##</h4>");
+
+                  // table
+                  out.push('<table class="today-grid">');
+                  out.push("<thead><tr>");
+                  out.push('<th style="width:75px">ID</th>');
+                  out.push('<th style="width:350px">Title</th>');
+                  out.push('<th style="width:120px">State</th>');
+                  out.push('<th style="width:75px">Code</th>');
+                  out.push("<th>Note</th>");
+
+                  out.push("</tr></thead><tbody>");
+
                   var arr = groups[gk];
                   for (var m = 0; m < arr.length; m++) {
                     var it2 = arr[m];
-                    html += '<li>' + esc(it2.ticketId) + ' - <i>' + esc(it2.title) + '</i> - ' + esc(it2.state) + ' - ' + esc(it2.code) + ' - ' + esc(it2.note) + ' - ' + esc(it2.iterationPath) + '</li>';
+                    out.push("<tr>");
+                    out.push("<td>" + esc(it2.ticketId) + "</td>");
+                    out.push("<td><i>" + esc(it2.title) + "</i></td>");
+                    out.push("<td>" + esc(it2.state) + "</td>");
+                    out.push("<td>" + esc(it2.code) + "</td>");
+                    out.push("<td>" + esc(it2.note) + "</td>");
+
+                    out.push("</tr>");
                   }
-                  html += '</ul>';
+
+                  out.push("</tbody></table>");
                 }
               }
             }
-            box.innerHTML = html;
+
+            box.innerHTML = out.join("");
           });
       }
 
@@ -750,7 +971,9 @@
       // Re-run requirement hint after <select id="code"> is populated by HTMX
       document.body.addEventListener('htmx:afterSwap', function (ev) {
         var tgt = ev.target || (ev.detail && ev.detail.target);
-        if (tgt && tgt.id === 'code') { syncNoteRequirement(); }
+        if (tgt && tgt.id === 'code' && typeof syncNoteRequirement === 'function') {
+          syncNoteRequirement();
+        }
       });
 
       // expose globals for inline handlers
@@ -765,6 +988,9 @@
       window.pmUnlock = pmUnlock;
       window.loadBlockers = loadBlockers;
       window.loadToday = loadToday;
+      window.openSPModal = openSPModal;
+      window.closeSPModal = closeSPModal;
+
     })();
   </script>
   <script src="https://unpkg.com/htmx.org@1.9.12"></script>
