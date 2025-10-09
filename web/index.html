@@ -306,6 +306,38 @@
       color: var(--fg);
       border: 1px solid var(--border);
     }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 12px;
+      line-height: 18px;
+      font-weight: 600;
+      background: #e5e7eb;
+      color: #111827;
+      /* neutral gray */
+      vertical-align: baseline;
+    }
+
+    .badge.ok {
+      background: #22c55e;
+      color: #ffffff;
+    }
+
+    /* green */
+    .badge.muted {
+      background: #9ca3af;
+      color: #111827;
+    }
+
+    /* gray */
+    .badge.off {
+      background: #ef4444;
+      color: #ffffff;
+    }
+
+    /* red (DB offline) */
   </style>
 </head>
 
@@ -371,26 +403,7 @@
 
     <section class="card hidden" id="submitCard">
       <h3>Submit Progress</h3>
-      <div class="row"><label for="tId">Ticket ID</label><input id="tId" inputmode="numeric" /></div>
-      <div class="row"><label for="code">Progress Code</label>
-        <select id="code" hx-get="/api/ui/progress-codes/options" hx-trigger="load" hx-swap="innerHTML">
-        </select>
-      </div>
-      <div class="row"><label for="note">Note</label><textarea id="note" rows="3"
-          placeholder="short, concrete update"></textarea></div>
-      <div class="row"><label>&nbsp;</label><small id="noteHint" class="help">
-          A note may be required for some codes.
-        </small></div>
 
-      <div class="row">
-        <div></div>
-        <div class="toolbar">
-          <button id="submitBtn" onclick="submitProgress()">Submit</button>
-          <span id="submitStatus" class="status" role="status" aria-live="polite"></span>
-
-        </div>
-        <div></div>
-      </div>
       <div class="sticky-actions">
         <div class="row">
           <label>
@@ -440,6 +453,47 @@
               <button onclick="pmUnlock()">Unlock</button>
               <span id="unlockStatus" class="status" role="status" aria-live="polite"></span>
             </div>
+          </div>
+        </section>
+
+        <!-- Report -->
+        <section class="card thin" aria-labelledby="reportsHeader">
+          <h4 id="reportsHeader">Reports (date range)</h4>
+
+          <div class="row">
+            <label for="repFrom">From</label>
+            <input id="repFrom" type="date" />
+          </div>
+          <div class="row">
+            <label for="repTo">To</label>
+            <input id="repTo" type="date" />
+          </div>
+
+          <div class="row">
+            <div></div>
+            <div class="toolbar">
+              <button onclick="presetReportThisWeek(true)">This week</button>
+              <button onclick="presetReportThisMonth(true)">This month</button>
+              <button onclick="loadReportRange()">Load</button>
+              <a id="dlRange" class="secondary" target="_blank" href="/api/updates/range.tsv">Download TSV</a>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table id="reportTbl">
+              <thead>
+                <tr>
+                  <th style="width:110px">Date</th>
+                  <th style="width:140px">Assigned to</th>
+                  <th style="width:100px">Ticket</th>
+                  <th>Title</th>
+                  <th style="width:120px">State</th>
+                  <th style="width:120px">Code</th>
+                  <th>Note</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
           </div>
         </section>
 
@@ -552,7 +606,14 @@
         var tbody = document.querySelector('#ticketsTbl tbody'); if (tbody) tbody.innerHTML = '';
         var sec = ['today', 'blockers', 'missing'];
         for (var j = 0; j < sec.length; j++) { var el2 = byId(sec[j]); if (el2) el2.innerHTML = ''; }
+        setSelectButtonsDisabled(false);
       }
+
+      function setSelectButtonsDisabled(on) {
+        var btns = document.querySelectorAll('#ticketsTbl tbody button');
+        for (var i = 0; i < btns.length; i++) btns[i].disabled = !!on;
+      }
+
 
       function setMe(email, name) {
         var assigned = byId("assigned");
@@ -574,6 +635,7 @@
 
       function setRoleUI(role) {
         var isPM = (role === 'pm');
+        window.__role = role;
         var loginCard = byId('loginCard');
         var ticketsCard = byId('ticketsCard');
         var submitCard = byId('submitCard');
@@ -605,8 +667,11 @@
 
         var filters = byId('findFilters');
         if (isPM) {
+          ensureAssignedDropdownForPM();
           if (filters) filters.style.display = '';
           loadToday(); loadBlockers(); loadMissing(); loadExportStatus();
+
+          presetReportThisWeek(false);
           if (!window.__exportTimer) {
             window.__exportTimer = setInterval(function () {
               var pmEl = byId('pm');
@@ -678,6 +743,63 @@
           req('POST', (API || location.origin) + (all ? "/api/auth/logout_all" : "/api/auth/logout"), null, { "Authorization": "Bearer " + t }).then(function () { done(); }).catch(function () { done(); });
         } else { done(); }
       }
+
+      function ensureAssignedDropdownForPM() {
+        var isPM = (window.__role === 'pm');
+        if (!isPM) return;
+
+        var original = byId('assigned');
+        if (!original) return;
+
+        // If we already replaced it, skip
+        if (original.tagName && original.tagName.toLowerCase() === 'select') return;
+
+        // Create a <select> with the same id
+        var sel = document.createElement('select');
+        sel.id = 'assigned';
+        sel.setAttribute('aria-label', 'Assigned to');
+        sel.style.minWidth = '220px';
+
+        // Put a placeholder option
+        var blank = document.createElement('option');
+        blank.value = '';
+        blank.textContent = '— All / Anyone —';
+        sel.appendChild(blank);
+
+        // Replace the input with the select in-place
+        original.parentNode.replaceChild(sel, original);
+
+        // Load team-members
+        var tkn = localStorage.getItem('pocToken') || '';
+        fetch((API || location.origin) + '/api/team-members', {
+          headers: { 'Authorization': 'Bearer ' + tkn }
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            if (!js || js.error) return;
+            var items = js.items || [];
+
+            items.forEach(function (m) {
+              var opt = document.createElement('option');
+              // value = alias; label = Display Name (alias) <email>
+              opt.value = (m.alias || '').trim();
+              var label = m.display_name ? m.display_name : (m.alias || '');
+              var extra = [];
+              if (m.alias) extra.push(m.alias);
+              if (m.email) extra.push(m.email);
+              opt.textContent = label + (extra.length ? (' — ' + extra.join(' · ')) : '');
+              sel.appendChild(opt);
+            });
+          })
+          .catch(function () { /* ignore network errors silently */ });
+
+        // When changed, auto-run the ticket search (handy for PMs on My Tickets)
+        sel.addEventListener('change', function () {
+          var loadBtn = byId('loadBtn');
+          if (loadBtn) loadBtn.click();
+        });
+      }
+
 
       function loadTickets() {
         var assigned = byId("assigned");
@@ -804,7 +926,7 @@
           .then(function (js) {
             if (js.error) setStatus("lockStatus", js.error, false);
             else setStatus("lockStatus", js.locked ? "Day submitted (locked)" : "Not locked", !!js.locked);
-            if (js.locked) { var badgeEl = byId("me").querySelector('.badge'); var txt = badgeEl ? badgeEl.textContent : ''; if (txt === 'PM') { loadToday(); loadBlockers(); loadMissing(); } }
+            if (js.locked) { setSelectButtonsDisabled(true); var badgeEl = byId("me").querySelector('.badge'); var txt = badgeEl ? badgeEl.textContent : ''; if (txt === 'PM') { loadToday(); loadBlockers(); loadMissing(); } }
           })
           .catch(function () { setStatus("lockStatus", "Network error", false); });
       }
@@ -880,6 +1002,103 @@
           });
       }
 
+      function ymd(d) { return d.toISOString().slice(0, 10); }
+
+      function loadReportRange() {
+        var fromEl = document.getElementById('repFrom');
+        var toEl = document.getElementById('repTo');
+        var from = (fromEl && fromEl.value) ? fromEl.value : ymd(new Date());
+        var to = (toEl && toEl.value) ? toEl.value : from;
+
+        // update the TSV download link
+        var dl = document.getElementById('dlRange');
+        if (dl) dl.href = '/api/updates/range.tsv?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
+
+        // auth header optional; PM view likely has a token
+        var hdrs = {};
+        var tkn = localStorage.getItem('pocToken');
+        if (tkn) hdrs['Authorization'] = 'Bearer ' + tkn;
+
+        fetch('/api/updates/range?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to), { headers: hdrs })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            var tb = document.querySelector('#reportTbl tbody');
+            if (!tb) return;
+            var items = js.items || [];
+            var html = '';
+            for (var i = 0; i < items.length; i++) {
+              var it = items[i];
+              var d = (it.date || '').slice(0, 10); // YYYY-MM-DD
+              var who = it.assignedTo || '';
+              // keep name only if it looks like "Name <DOMAIN\alias>"
+              var lt = who.indexOf('<');
+              if (lt > -1) { who = who.slice(0, lt).trim(); }
+              // otherwise, if it's a raw "DOMAIN\alias", drop the DOMAIN\
+              var bs = who.indexOf('\\');
+              if (bs > -1 && lt === -1) { who = who.slice(bs + 1).trim(); }
+
+              html += '<tr>' +
+                '<td>' + esc(d) + '</td>' +
+                '<td>' + esc(who) + '</td>' +
+                '<td>' + esc(it.ticketId) + '</td>' +
+                '<td><i>' + esc(it.title || '') + '</i></td>' +
+                '<td>' + esc(it.state || '') + '</td>' +
+                '<td>' + esc(it.code || '') + '</td>' +
+                '<td>' + esc(it.note || '') + '</td>' +
+                '</tr>';
+
+            }
+            tb.innerHTML = html || '<tr><td colspan="7"><em>No rows for the selected range.</em></td></tr>';
+          })
+          .catch(function () {
+            var tb = document.querySelector('#reportTbl tbody');
+            if (tb) tb.innerHTML = '<tr><td colspan="7">Failed to load range.</td></tr>';
+          });
+      }
+
+      // optional: prefill dates to "this week" when PM page opens
+      function presetReportThisWeek() {
+        var now = new Date();
+        var day = now.getDay();            // 0..6 (Sun..Sat)
+        var diffToMon = (day + 6) % 7;         // days since Monday
+        var monday = new Date(now); monday.setDate(now.getDate() - diffToMon);
+        var sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
+        var f = document.getElementById('repFrom');
+        var t = document.getElementById('repTo');
+        if (f) f.value = ymd(monday);
+        if (t) t.value = ymd(sunday);
+      }
+
+      function setReportRange(fromDate, toDate, autoLoad) {
+        var f = document.getElementById('repFrom');
+        var t = document.getElementById('repTo');
+        if (f) f.value = ymd(fromDate);
+        if (t) t.value = ymd(toDate);
+        if (autoLoad) loadReportRange();
+      }
+
+      // Monday–Sunday of the current week
+      function presetReportThisWeek(autoLoad) {
+        var now = new Date();
+        var day = now.getDay();                  // 0..6 (Sun..Sat)
+        var diffToMon = (day + 6) % 7;           // days since Monday
+        var monday = new Date(now); monday.setDate(now.getDate() - diffToMon);
+        monday.setHours(0, 0, 0, 0);
+        var sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
+        sunday.setHours(23, 59, 59, 999);
+        setReportRange(monday, sunday, !!autoLoad);
+      }
+
+      // First–last day of the current month
+      function presetReportThisMonth(autoLoad) {
+        var now = new Date();
+        var first = new Date(now.getFullYear(), now.getMonth(), 1);
+        var last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        setReportRange(first, last, !!autoLoad);
+      }
+
+
+
       function loadBlockers() {
         var box = byId("blockers");
         fetch((API || location.origin) + "/api/updates/blockers")
@@ -939,15 +1158,52 @@
       function loadExportStatus() {
         var tkn = localStorage.getItem("pocToken") || "";
         if (!tkn) return;
-        fetch((API || location.origin) + "/api/exports/status", { headers: { "Authorization": "Bearer " + tkn } })
+
+        fetch((API || location.origin) + "/api/exports/status", {
+          headers: { "Authorization": "Bearer " + tkn }
+        })
           .then(function (res) { return res.json(); })
           .then(function (js) {
             var box = byId("exportStatus");
-            if (js.error) { box.textContent = ""; return; }
-            var msg = (js.lockedUpdaters || 0) + '/' + (js.totalUpdaters || 0) + ' locked — ' + (js.ready ? 'Final ready' : 'Final not ready');
-            box.innerHTML = '<span class="badge">' + esc(js.date || '') + '</span> ' + msg;
+            if (!box || js.error) { if (box) box.textContent = ""; return; }
+
+            // derive state
+            var dbUp = !!js.db_up;
+            var has7 = js.counts && Number(js.counts.last7 || 0) > 0;
+            var todayC = Number((js.counts && js.counts.today) || 0);
+            var last7C = Number((js.counts && js.counts.last7) || 0);
+
+            // badge label
+            var badgeTxt = (dbUp && has7) ? 'Data ready' : (dbUp ? 'No recent data' : 'DB offline');
+
+            // NEW: choose color class
+            var badgeClass = (dbUp && has7) ? 'ok' : (dbUp ? 'muted' : 'off');
+
+            // human-ish last sync
+            var lastSync = js.last_sync_tfs_users ? new Date(js.last_sync_tfs_users).toLocaleString() : '—';
+
+            // paint tiny status line
+            box.innerHTML =
+              '<span class="badge ' + badgeClass + '" aria-label="' + esc(badgeTxt) + '">' +
+              esc(badgeTxt) +
+              '</span> ' +
+              'Last sync: ' + esc(lastSync) + ' · ' +
+              'Today: ' + todayC + ' · 7d: ' + last7C;
+
+            // optional: update the “Final TSV” link with suggested range
+            var tsvFinal = byId('tsvFinal');
+            if (tsvFinal && js.urls && js.urls.tsv_range) {
+              tsvFinal.href = js.urls.tsv_range;
+            }
+          })
+          .catch(function () {
+            var box = byId("exportStatus");
+            if (box) {
+              box.innerHTML = '<span class="badge">Network error</span>';
+            }
           });
       }
+
 
       document.addEventListener('DOMContentLoaded', function () {
         var codeSel = byId('code');
@@ -990,6 +1246,10 @@
       window.loadToday = loadToday;
       window.openSPModal = openSPModal;
       window.closeSPModal = closeSPModal;
+      window.loadReportRange = loadReportRange;
+      window.presetReportThisWeek = presetReportThisWeek;
+      window.presetReportThisMonth = presetReportThisMonth;
+
 
     })();
   </script>
