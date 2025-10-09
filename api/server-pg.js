@@ -190,18 +190,20 @@ app.post('/api/auth/signup', async (req, res) => {
   }
   // 2) must exist in tfs_users (by email OR alias), and active
   const alias = normAliasFromEmailOrInput(email);
+  const lowerEmail = String(email).toLowerCase().trim();
+
   const chk = await pool.query(
     `
-    SELECT 1
-    FROM tfs_users
-    WHERE active = true
-      AND (
-            lower(email) = lower($1)
-         OR lower(alias) = lower($2)
-      )
-    LIMIT 1
+  SELECT display_name
+  FROM tfs_users
+  WHERE active = true AND (
+         lower(email) = $1
+      OR lower(alias) = $2
+      OR lower(regexp_replace(alias, '^.*\\\\', '')) = $2
+  )
+  LIMIT 1
   `,
-    [email, alias]
+    [lowerEmail, alias]
   );
 
   if (chk.rowCount === 0) {
@@ -209,13 +211,13 @@ app.post('/api/auth/signup', async (req, res) => {
       .status(403)
       .json({ error: 'no TFS account found for this email/alias' });
   }
-
-  const lower = String(email).toLowerCase().trim();
+  const displayName = chk.rows[0]?.display_name || '';
+  const lower = lowerEmail;
   try {
     await pool.query(
       `insert into users(email, name, pw) values ($1,$2,$3)
-       on conflict (email) do update set name=excluded.name, pw=excluded.pw`,
-      [lower, name || '', hashPassword(password)]
+   on conflict (email) do update set name=excluded.name, pw=excluded.pw`,
+      [lower, displayName, hashPassword(password)]
     );
     res.json({ status: 'ok' });
   } catch (e) {
@@ -316,15 +318,15 @@ app.post('/api/sync/tfs-users', requireSyncKey, async (req, res) => {
 
   let upserted = 0;
   for (const it of items) {
-    // hard guard: alias is your PK
-    const alias = String(it.alias || '')
-      .trim()
-      .toLowerCase();
+    // Normalize: "DOMAIN\user" -> "user" ; also lowercase
+    const alias = normAliasFromEmailOrInput(it.alias);
     if (!alias) continue;
+
+    const emailLower = it.email ? String(it.email).trim().toLowerCase() : null;
 
     await pool.query(sql, [
       alias,
-      it.email || null,
+      emailLower,
       it.displayName || '',
       it.tfs_id || null,
       it.project_id || null,
@@ -333,6 +335,35 @@ app.post('/api/sync/tfs-users', requireSyncKey, async (req, res) => {
     upserted++;
   }
   res.json({ ok: true, upserted });
+});
+
+// Team member list for PMs (used to populate Assigned-to dropdown)
+app.get('/api/team-members', requireAuth, async (req, res) => {
+  try {
+    // only PMs can fetch
+    const me = await pool.query('select role from users where email=$1', [
+      req.userEmail,
+    ]);
+    if ((me.rows[0]?.role || 'dev') !== 'pm') {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+
+    // Pull active tfs_users, sorted by display name then alias
+    const { rows } = await pool.query(`
+      select
+        lower(alias) as alias,
+        coalesce(display_name, '') as display_name,
+        lower(email) as email
+      from tfs_users
+      where active = true
+      order by display_name nulls last, alias
+      limit 1000
+    `);
+
+    res.json({ items: rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // --- agent pushes tickets
@@ -609,6 +640,72 @@ app.get('/api/updates/today', async (_req, res) => {
 
   res.json({ date, users });
 });
+
+// show a green dot when db_up is true and counts.last7 > 0
+app.get('/api/exports/status', async (req, res) => {
+  try {
+    // 1) last tfs_users sync
+    const syncRow = await pool.query(
+      `select max(synced_at) as last_sync from tfs_users`
+    );
+
+    // 2) progress window & counts
+    const stats = await pool.query(
+      `
+      with pu as (
+        select
+          (updated_at at time zone 'Asia/Singapore')::date as d
+        from progress_updates
+      )
+      select
+        min(d) as first_day,
+        max(d) as last_day,
+        count(*) filter (where d = (now() at time zone 'Asia/Singapore')::date) as today_count,
+        count(*) filter (where d >= ((now() at time zone 'Asia/Singapore')::date - 6)) as last7_count,
+        count(*) as rows_total
+      from pu
+      `
+    );
+
+    const lastSync = syncRow.rows[0]?.last_sync || null;
+    const s = stats.rows[0] || {};
+    const hasData = !!s.last_day;
+
+    // Recommend default range = last 7 days (or today if empty)
+    const todayISO = new Date().toISOString().slice(0, 10);
+    const toISO = hasData ? String(s.last_day).slice(0, 10) : todayISO;
+    const fromISO = hasData
+      ? new Date(Date.parse(toISO) - 6 * 24 * 3600 * 1000)
+          .toISOString()
+          .slice(0, 10)
+      : todayISO;
+
+    res.json({
+      api_up: true,
+      db_up: true,
+      last_sync_tfs_users: lastSync, // e.g., "2025-10-09T03:50:12.123Z"
+      first_progress_day: s.first_day || null,
+      last_progress_day: s.last_day || null,
+      counts: {
+        today: Number(s.today_count || 0),
+        last7: Number(s.last7_count || 0),
+        total: Number(s.rows_total || 0),
+      },
+      suggested_ranges: {
+        from: fromISO,
+        to: toISO,
+      },
+      // Handy URLs your PM UI can link to
+      urls: {
+        json_range: `/api/pm/range?from=${fromISO}&to=${toISO}&format=json`,
+        tsv_range: `/api/pm/range?from=${fromISO}&to=${toISO}&format=tsv`,
+      },
+    });
+  } catch (e) {
+    res.status(500).json({ api_up: true, db_up: false, error: e.message });
+  }
+});
+
 // serve the saved TSV if it's been exported already
 app.get('/api/exports/today', (_req, res) => {
   const date = todayISO();
