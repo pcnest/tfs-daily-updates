@@ -73,6 +73,35 @@ function verifyPassword(pw, encoded) {
 }
 const newToken = () => crypto.randomBytes(24).toString('hex');
 
+function emailDomainOk(email) {
+  // optional domain allowlist as a second guard
+  const allow = (process.env.ALLOWED_EMAIL_DOMAINS || '')
+    .split(',')
+    .map((s) => s.trim().toLowerCase())
+    .filter(Boolean);
+  if (allow.length === 0) return true; // disabled
+  const d = String(email).toLowerCase().split('@')[1] || '';
+  return allow.indexOf(d) !== -1;
+}
+
+function normAliasFromEmailOrInput(email) {
+  // "user@company.com" -> "user"; "DOMAIN\\user" -> "user"
+  const e = String(email || '');
+  if (e.indexOf('@') > -1) return e.split('@')[0].toLowerCase();
+  const bs = e.indexOf('\\');
+  if (bs > -1) return e.slice(bs + 1).toLowerCase();
+  return e.toLowerCase();
+}
+
+function requireSyncKey(req, res, next) {
+  const provided = req.header('x-api-key') || '';
+  const expected = process.env.TFS_USERS_SYNC_KEY || process.env.API_KEY || '';
+  if (!expected || provided !== expected) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
 // Auto-export TSV at day end
 async function exportTodayTSVIfReady() {
   const date = new Date().toISOString().slice(0, 10);
@@ -149,9 +178,38 @@ app.get('/health', async (_req, res) => {
 
 // --- auth: signup/login/me
 app.post('/api/auth/signup', async (req, res) => {
-  const { email, password, name } = req.body || {};
+  const { email, password } = req.body || {};
   if (!email || !password)
     return res.status(400).json({ error: 'email and password required' });
+
+  // 1) optional: quick domain allowlist (set ALLOWED_EMAIL_DOMAINS=company.com in Render)
+  if (!emailDomainOk(email)) {
+    return res
+      .status(403)
+      .json({ error: 'sign-up is limited to approved domains' });
+  }
+  // 2) must exist in tfs_users (by email OR alias), and active
+  const alias = normAliasFromEmailOrInput(email);
+  const chk = await pool.query(
+    `
+    SELECT 1
+    FROM tfs_users
+    WHERE active = true
+      AND (
+            lower(email) = lower($1)
+         OR lower(alias) = lower($2)
+      )
+    LIMIT 1
+  `,
+    [email, alias]
+  );
+
+  if (chk.rowCount === 0) {
+    return res
+      .status(403)
+      .json({ error: 'no TFS account found for this email/alias' });
+  }
+
   const lower = String(email).toLowerCase().trim();
   try {
     await pool.query(
@@ -236,6 +294,45 @@ app.post('/api/auth/logout', requireAuth, async (req, res) => {
 app.post('/api/auth/logout_all', requireAuth, async (req, res) => {
   await pool.query('delete from sessions where email=$1', [req.userEmail]);
   res.json({ status: 'ok' });
+});
+
+// POST /api/sync/tfs-users   body: [{ alias, email?, displayName?, tfs_id?, project_id?, team_id? }]
+app.post('/api/sync/tfs-users', requireSyncKey, async (req, res) => {
+  const items = Array.isArray(req.body) ? req.body : [];
+
+  const sql = `
+    INSERT INTO tfs_users (alias, email, display_name, active, updated_at, synced_at, tfs_id, project_id, team_id)
+    VALUES ($1, $2, $3, true, now(), now(), $4, $5, $6)
+    ON CONFLICT (alias) DO UPDATE SET
+      email        = COALESCE(EXCLUDED.email, tfs_users.email),
+      display_name = EXCLUDED.display_name,
+      active       = true,
+      updated_at   = now(),
+      synced_at    = now(),
+      tfs_id       = COALESCE(EXCLUDED.tfs_id, tfs_users.tfs_id),
+      project_id   = EXCLUDED.project_id,
+      team_id      = EXCLUDED.team_id
+  `;
+
+  let upserted = 0;
+  for (const it of items) {
+    // hard guard: alias is your PK
+    const alias = String(it.alias || '')
+      .trim()
+      .toLowerCase();
+    if (!alias) continue;
+
+    await pool.query(sql, [
+      alias,
+      it.email || null,
+      it.displayName || '',
+      it.tfs_id || null,
+      it.project_id || null,
+      it.team_id || null,
+    ]);
+    upserted++;
+  }
+  res.json({ ok: true, upserted });
 });
 
 // --- agent pushes tickets
@@ -555,6 +652,94 @@ app.get('/api/updates/missing', requireAuth, async (req, res) => {
   `;
   const r = await pool.query(sql, [date]);
   res.json({ date, count: r.rowCount, missing: r.rows });
+});
+
+// utils: parse YYYY-MM-DD or default to today
+function parseDateParam(s, def) {
+  if (!s) return def;
+  // very strict YYYY-MM-DD
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return def;
+  return s;
+}
+
+// JSON: /api/updates/range?from=YYYY-MM-DD&to=YYYY-MM-DD
+app.get('/api/updates/range', async (req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const from = parseDateParam(req.query.from, today);
+  const to = parseDateParam(req.query.to, today);
+
+  const r = await pool.query(
+    `
+    SELECT
+      u.at::date                          AS "date",
+      t.assigned_to                       AS "assignedTo",
+      u.ticket_id                         AS "ticketId",
+      t.title,
+      t.state,
+      u.code,
+      u.note
+    FROM progress_updates u
+    JOIN tickets t ON t.id = u.ticket_id
+    WHERE u.at::date BETWEEN $1 AND $2
+    ORDER BY u.at::date DESC, t.assigned_to NULLS LAST, u.ticket_id
+  `,
+    [from, to]
+  );
+
+  res.json({ from, to, items: r.rows, count: r.rowCount });
+});
+
+// TSV: /api/updates/range.tsv?from=YYYY-MM-DD&to=YYYY-MM-DD
+app.get('/api/updates/range.tsv', async (req, res) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const from = parseDateParam(req.query.from, today);
+  const to = parseDateParam(req.query.to, today);
+
+  const r = await pool.query(
+    `
+    SELECT
+      u.at::date        AS "date",
+      t.assigned_to     AS "assignedTo",
+      u.ticket_id       AS "ticketId",
+      t.title,
+      t.state,
+      u.code,
+      u.note
+    FROM progress_updates u
+    JOIN tickets t ON t.id = u.ticket_id
+    WHERE u.at::date BETWEEN $1 AND $2
+    ORDER BY u.at::date DESC, t.assigned_to NULLS LAST, u.ticket_id
+  `,
+    [from, to]
+  );
+
+  function cell(x) {
+    // basic TSV escaping: replace tabs/newlines
+    return String(x == null ? '' : x)
+      .replace(/\t/g, ' ')
+      .replace(/\r?\n/g, ' ');
+  }
+
+  let out = 'date\tassignedTo\tticketId\ttitle\tstate\tcode\tnote\n';
+  for (const row of r.rows) {
+    out +=
+      [
+        cell(row.date),
+        cell(row.assignedTo),
+        cell(row.ticketId),
+        cell(row.title),
+        cell(row.state),
+        cell(row.code),
+        cell(row.note),
+      ].join('\t') + '\n';
+  }
+
+  res.setHeader('Content-Type', 'text/tab-separated-values; charset=utf-8');
+  res.setHeader(
+    'Content-Disposition',
+    `attachment; filename="progress_${from}_to_${to}.tsv"`
+  );
+  res.send(out);
 });
 
 // --- blockers radar
