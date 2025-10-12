@@ -462,10 +462,24 @@ function normId(v) {
   return s;
 }
 app.get('/api/tickets', async (req, res) => {
-  const { assignedTo, state, iterationPath, areaPath, q, types } = req.query;
+  const {
+    assignedTo,
+    state,
+    iterationPath,
+    areaPath,
+    q,
+    types,
+    includeDeleted,
+  } = req.query;
   const clauses = [];
   const params = [];
   let i = 1;
+
+  // Exclude soft-deleted rows by default. Override with ?includeDeleted=1 if you ever need to audit.
+  if (!includeDeleted || String(includeDeleted) !== '1') {
+    // coalesce handles legacy rows where 'deleted' might be null
+    clauses.push(`coalesce(t.deleted, false) = false`);
+  }
 
   // Default: only Bug + Product Backlog Item.
   // Override with ?types=all or ?types=Bug,Product Backlog Item
