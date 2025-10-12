@@ -471,6 +471,44 @@ app.get('/api/iteration/current', async (_req, res) => {
   }
 });
 
+// GET /api/iteration/:name/live-ids
+// Returns the IDs currently in our DB for that iteration (default hides deleted and limits to Bug/PBI)
+app.get('/api/iteration/:name/live-ids', async (req, res) => {
+  const name = req.params.name || '';
+  const { includeDeleted, types } = req.query;
+
+  const clauses = [];
+  const params = [];
+  let i = 1;
+
+  if (!includeDeleted || String(includeDeleted) !== '1') {
+    clauses.push(`coalesce(deleted, false) = false`);
+  }
+
+  if (!types || String(types).toLowerCase() === 'default') {
+    clauses.push(`lower(type) in ('bug','product backlog item')`);
+  } else if (String(types).toLowerCase() !== 'all') {
+    const list = String(types)
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    if (list.length) {
+      clauses.push(`lower(type) = any($${i++})`);
+      params.push(list);
+    }
+  }
+
+  if (name) {
+    clauses.push(`lower(iteration_path) like lower($${i++})`);
+    params.push(`%${name}%`);
+  }
+
+  const where = clauses.length ? `where ${clauses.join(' and ')}` : '';
+  const sql = `select id from tickets ${where}`;
+  const r = await pool.query(sql, params);
+  res.json({ ids: r.rows.map((r) => String(r.id)), count: r.rowCount });
+});
+
 // --- agent pushes tickets
 app.post('/api/sync/tickets', async (req, res) => {
   const key = req.header('x-api-key');
