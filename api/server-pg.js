@@ -299,42 +299,103 @@ app.post('/api/auth/logout_all', requireAuth, async (req, res) => {
 });
 
 // POST /api/sync/tfs-users   body: [{ alias, email?, displayName?, tfs_id?, project_id?, team_id? }]
-app.post('/api/sync/tfs-users', requireSyncKey, async (req, res) => {
-  const items = Array.isArray(req.body) ? req.body : [];
+app.post('/api/sync/tickets', async (req, res) => {
+  // The agent can send: { source, tickets: [...], pushedAt, presentIds: [...], presentIteration: "Sprint 2025-400" }
+  const {
+    source = 'unknown',
+    tickets = [],
+    pushedAt,
+    presentIds = [],
+    presentIteration = '',
+  } = req.body || {};
 
-  const sql = `
-    INSERT INTO tfs_users (alias, email, display_name, active, updated_at, synced_at, tfs_id, project_id, team_id)
-    VALUES ($1, $2, $3, true, now(), now(), $4, $5, $6)
-    ON CONFLICT (alias) DO UPDATE SET
-      email        = COALESCE(EXCLUDED.email, tfs_users.email),
-      display_name = EXCLUDED.display_name,
-      active       = true,
-      updated_at   = now(),
-      synced_at    = now(),
-      tfs_id       = COALESCE(EXCLUDED.tfs_id, tfs_users.tfs_id),
-      project_id   = EXCLUDED.project_id,
-      team_id      = EXCLUDED.team_id
-  `;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-  let upserted = 0;
-  for (const it of items) {
-    // Normalize: "DOMAIN\user" -> "user" ; also lowercase
-    const alias = normAliasFromEmailOrInput(it.alias);
-    if (!alias) continue;
+    // Upsert all tickets we just saw; set last_seen_at and clear deleted
+    for (const t of tickets) {
+      const seenAt = pushedAt || new Date().toISOString();
+      await client.query(
+        `
+        INSERT INTO tickets (
+          id, type, title, state, assigned_to, area_path, iteration_path,
+          changed_date, tags, last_seen_at, deleted
+        )
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false)
+        ON CONFLICT (id) DO UPDATE SET
+          type           = EXCLUDED.type,
+          title          = EXCLUDED.title,
+          state          = EXCLUDED.state,
+          assigned_to    = EXCLUDED.assigned_to,
+          area_path      = EXCLUDED.area_path,
+          iteration_path = EXCLUDED.iteration_path,
+          changed_date   = EXCLUDED.changed_date,
+          tags           = EXCLUDED.tags,
+          last_seen_at   = EXCLUDED.last_seen_at,
+          deleted        = false
+        `,
+        [
+          String(t.id),
+          t.type || '',
+          t.title || '',
+          t.state || '',
+          t.assignedTo || '',
+          t.areaPath || '',
+          t.iterationPath || '',
+          t.changedDate || null,
+          t.tags || '',
+          seenAt,
+        ]
+      );
+    }
 
-    const emailLower = it.email ? String(it.email).trim().toLowerCase() : null;
+    // ---- Presence sweep (tombstone anything missing from this run's scope) ----
+    // Only trigger if the agent provided both presentIds[] and the presentIteration name.
+    if (
+      Array.isArray(presentIds) &&
+      presentIds.length > 0 &&
+      presentIteration &&
+      presentIteration.trim()
+    ) {
+      const idsText = presentIds.map(String);
 
-    await pool.query(sql, [
-      alias,
-      emailLower,
-      it.displayName || '',
-      it.tfs_id || null,
-      it.project_id || null,
-      it.team_id || null,
-    ]);
-    upserted++;
+      // 1) Make sure all "present" IDs are un-deleted and bump last_seen_at
+      await client.query(
+        `UPDATE tickets
+           SET deleted = false, last_seen_at = now()
+         WHERE id = ANY($1::text[])`,
+        [idsText]
+      );
+
+      // 2) Mark as deleted anything in the same iteration that is NOT in the present list
+      await client.query(
+        `UPDATE tickets
+           SET deleted = true
+         WHERE lower(iteration_path) LIKE lower($1)
+           AND NOT (id = ANY($2::text[]))`,
+        ['%' + presentIteration + '%', idsText]
+      );
+    }
+    // ---- end presence sweep ----
+
+    await client.query('COMMIT');
+    res.json({
+      status: 'ok',
+      source,
+      count: tickets.length,
+      prunedScope: Array.isArray(presentIds) ? presentIds.length : 0,
+      iteration: presentIteration || null,
+    });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('sync error:', e);
+    res
+      .status(500)
+      .json({ status: 'error', error: 'sync_failed', detail: e.message });
+  } finally {
+    client.release();
   }
-  res.json({ ok: true, upserted });
 });
 
 // Team member list for PMs (used to populate Assigned-to dropdown)
