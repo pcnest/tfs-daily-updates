@@ -49,7 +49,7 @@
     }
 
     .container {
-      max-width: 1100px;
+      max-width: min(1400px, 96vw);
       margin: 0 auto;
       padding: 20px;
     }
@@ -338,6 +338,54 @@
     }
 
     /* red (DB offline) */
+
+    /* Code family badges */
+    .badge.code-100,
+    .badge.code-200,
+    .badge.code-300,
+    .badge.code-400 {
+      background: var(--accent-weak);
+      color: var(--fg);
+    }
+
+    .badge.code-500 {
+      background: #16a34a;
+      color: #ffffff;
+    }
+
+    /* done */
+    .badge.code-600 {
+      background: #f59e0b;
+      color: #111827;
+    }
+
+    /* challenge */
+    .badge.code-700 {
+      background: #eab308;
+      color: #111827;
+    }
+
+    /* investigation */
+    .badge.code-800 {
+      background: #ef4444;
+      color: #ffffff;
+    }
+
+    /* delay */
+
+    /* Desktop: PM grid in 2 columns */
+    @media (min-width: 1024px) {
+      .section-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    /* Sticky header for My Tickets */
+    #ticketsTbl thead th {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
   </style>
 </head>
 
@@ -373,7 +421,7 @@
     </section>
 
     <section class="card hidden" id="ticketsCard">
-      <h3>My Tickets</h3>
+      <h3>My Tickets <small id="iterLabel" class="badge muted" title="Active iteration">—</small></h3>
       <div id="findFilters">
         <div class="row"><label for="assigned">Assigned to</label><input id="assigned"
             placeholder="email or domain\alias" /></div>
@@ -390,9 +438,10 @@
         <thead>
           <tr>
             <th style="width:100px">ID</th>
+            <th style="width:110px">Type</th>
             <th style="width:350px">Title</th>
             <th style="width:120px">State</th>
-            <th style="width:75x">Code</th>
+            <th style="width:75px">Code</th>
             <th>Note</th>
             <th style="width:75px">Action</th>
           </tr>
@@ -486,6 +535,7 @@
                   <th style="width:110px">Date</th>
                   <th style="width:140px">Assigned to</th>
                   <th style="width:100px">Ticket</th>
+                  <th style="width:110px">Type</th>
                   <th>Title</th>
                   <th style="width:120px">State</th>
                   <th style="width:120px">Code</th>
@@ -813,7 +863,7 @@
         tbody.innerHTML = "";
         for (var i = 0; i < 5; i++) {
           var tr = document.createElement('tr'); tr.className = 'skeleton';
-          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td>';
+          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
 
           tbody.appendChild(tr);
         }
@@ -836,8 +886,10 @@
               tr2.setAttribute("data-id", String(t.id));
               var code = t.lastCode || t.progressCode || t.code || '';
               var note = t.lastNote || t.progressNote || t.note || '';
+              var typ = t.type || t.workItemType || t.itemType || t.kind || '';
               tr2.innerHTML =
                 '<td>' + esc(t.id) + '</td>' +
+                '<td>' + esc(typ || '—') + '</td>' +
                 '<td><i>' + esc(t.title) + '</i></td>' +
                 '<td>' + esc(t.state) + '</td>' +
                 '<td>' + esc(code || '—') + '</td>' +
@@ -845,12 +897,15 @@
                 '<td><button class="secondary" onclick="openSPModal(' + Number(t.id) + ')" aria-label="Select ticket ' + esc(t.id) + '">Select</button></td>';
 
               tbody.appendChild(tr2);
+              var cells = tr2.getElementsByTagName('td');
+              renderCodeBadge(cells[3], code);
+
             }
           })
           .catch(function () {
             status.textContent = "Failed to load";
             status.classList.add('err');
-            tbody.innerHTML = '<tr><td colspan="6">Unable to load tickets. Check network or try again.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="7">Unable to load tickets. Check network or try again.</td></tr>';
           })
           .finally(function () { btn.disabled = false; });
       }
@@ -905,8 +960,8 @@
               if (row) {
                 var cells = row.getElementsByTagName('td');
                 // columns: [0]=ID, [1]=Title, [2]=State, [3]=Code, [4]=Note, [5]=Action
-                if (cells[3]) cells[3].textContent = code || '—';
-                if (cells[4]) cells[4].textContent = note || '—';
+                if (cells[4]) renderCodeBadge(cells[4], code || '');
+                if (cells[5]) cells[5].textContent = note || '—';
               } else {
                 // if the table isn't loaded yet or row not found, just refresh
                 if (typeof loadTickets === 'function') { loadTickets(); }
@@ -973,6 +1028,7 @@
                   out.push('<table class="today-grid">');
                   out.push("<thead><tr>");
                   out.push('<th style="width:75px">ID</th>');
+                  out.push('<th style="width:110px">Type</th>');
                   out.push('<th style="width:350px">Title</th>');
                   out.push('<th style="width:120px">State</th>');
                   out.push('<th style="width:75px">Code</th>');
@@ -985,6 +1041,7 @@
                     var it2 = arr[m];
                     out.push("<tr>");
                     out.push("<td>" + esc(it2.ticketId) + "</td>");
+                    out.push("<td>" + esc(typ2 || '—') + "</td>");
                     out.push("<td><i>" + esc(it2.title) + "</i></td>");
                     out.push("<td>" + esc(it2.state) + "</td>");
                     out.push("<td>" + esc(it2.code) + "</td>");
@@ -1010,6 +1067,7 @@
         var from = (fromEl && fromEl.value) ? fromEl.value : ymd(new Date());
         var to = (toEl && toEl.value) ? toEl.value : from;
 
+
         // update the TSV download link
         var dl = document.getElementById('dlRange');
         if (dl) dl.href = '/api/updates/range.tsv?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
@@ -1030,17 +1088,19 @@
               var it = items[i];
               var d = (it.date || '').slice(0, 10); // YYYY-MM-DD
               var who = it.assignedTo || '';
+
               // keep name only if it looks like "Name <DOMAIN\alias>"
               var lt = who.indexOf('<');
               if (lt > -1) { who = who.slice(0, lt).trim(); }
               // otherwise, if it's a raw "DOMAIN\alias", drop the DOMAIN\
               var bs = who.indexOf('\\');
               if (bs > -1 && lt === -1) { who = who.slice(bs + 1).trim(); }
-
+              var typ3 = it.type || it.workItemType || it.itemType || it.kind || '';
               html += '<tr>' +
                 '<td>' + esc(d) + '</td>' +
                 '<td>' + esc(who) + '</td>' +
                 '<td>' + esc(it.ticketId) + '</td>' +
+                '<td>' + esc(typ3 || '') + '</td>' +
                 '<td><i>' + esc(it.title || '') + '</i></td>' +
                 '<td>' + esc(it.state || '') + '</td>' +
                 '<td>' + esc(it.code || '') + '</td>' +
@@ -1048,11 +1108,11 @@
                 '</tr>';
 
             }
-            tb.innerHTML = html || '<tr><td colspan="7"><em>No rows for the selected range.</em></td></tr>';
+            tb.innerHTML = html || '<tr><td colspan="8"><em>No rows for the selected range.</em></td></tr>';
           })
           .catch(function () {
             var tb = document.querySelector('#reportTbl tbody');
-            if (tb) tb.innerHTML = '<tr><td colspan="7">Failed to load range.</td></tr>';
+            if (tb) tb.innerHTML = '<tr><td colspan="8">Failed to load range.</td></tr>';
           });
       }
 
@@ -1095,6 +1155,46 @@
         var first = new Date(now.getFullYear(), now.getMonth(), 1);
         var last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
         setReportRange(first, last, !!autoLoad);
+      }
+
+      // Render a colored chip for a progress code (e.g., "300_01")
+      function renderCodeBadge(cell, code) {
+        if (!cell) return;
+        if (!code) { cell.textContent = '—'; return; }
+        var fam = String(code).slice(0, 3); // "100".."800"
+        cell.innerHTML = '<span class="badge code-' + fam + '">' + esc(code) + '</span>';
+      }
+
+      // Keyboard shortcuts: /, L, N, Ctrl+Enter (modal submit)
+      function initShortcuts() {
+        document.addEventListener('keydown', function (e) {
+          var tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
+          if (tag === 'input' || tag === 'textarea') return;
+          var k = e.key || '';
+          if (k === '/') { var q = byId('q'); if (q) { e.preventDefault(); q.focus(); } }
+          else if (k.toLowerCase() === 'l') { var lb = byId('loadBtn'); if (lb) { e.preventDefault(); lb.click(); } }
+          else if (k.toLowerCase() === 'n') { e.preventDefault(); openSPModal(); }
+          else if ((e.ctrlKey || e.metaKey) && k === 'Enter') {
+            var m = byId('spModal'); if (m && m.classList.contains('open')) {
+              var sb = byId('submitBtn'); if (sb) sb.click();
+            }
+          }
+        });
+      }
+
+      // Set/clear the "current iteration" badge
+      function setIterationLabel(name) {
+        var el = byId('iterLabel');
+        if (!el) return;
+        name = (name || '').trim();
+        if (name) { el.textContent = name; el.classList.remove('muted'); }
+        else { el.textContent = '—'; el.classList.add('muted'); }
+      }
+      // Get last segment of a TFS Iteration Path (e.g., "Project\2025\Sprint 400" -> "Sprint 400")
+      function lastIterSegment(path) {
+        if (!path) return '';
+        var p = String(path).split('\\');
+        return (p[p.length - 1] || '').trim();
       }
 
 
@@ -1223,6 +1323,11 @@
             .catch(function () { localStorage.removeItem(tokenKey); });
         }
       });
+      initShortcuts();
+      var tryLogin = function (e) { if (e.key === 'Enter') login(); };
+      var lem = byId('loginEmail'); if (lem) lem.addEventListener('keydown', tryLogin);
+      var lpw = byId('loginPw'); if (lpw) lpw.addEventListener('keydown', tryLogin);
+
 
       // Re-run requirement hint after <select id="code"> is populated by HTMX
       document.body.addEventListener('htmx:afterSwap', function (ev) {

@@ -366,6 +366,50 @@ app.get('/api/team-members', requireAuth, async (req, res) => {
   }
 });
 
+// store current iteration via the Agent
+app.post('/api/iteration/current', requireSyncKey, async (req, res) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    const team = String(req.body?.team || '').trim();
+    const at = req.body?.at || null;
+
+    if (!name) return res.status(400).json({ error: 'name is required' });
+
+    await pool.query(
+      `insert into meta (key, value, extra, updated_at)
+       values ('current_iteration', $1, $2, now())
+       on conflict (key) do update
+         set value = excluded.value,
+             extra = excluded.extra,
+             updated_at = now()`,
+      [name, JSON.stringify({ team, at })]
+    );
+
+    res.json({ ok: true, name });
+  } catch (e) {
+    console.error('POST /api/iteration/current error:', e);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// read current iteration for the UI badge
+app.get('/api/iteration/current', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `select value, updated_at, extra from meta where key='current_iteration'`
+    );
+    const row = rows[0] || null;
+    res.json({
+      name: row?.value || null,
+      updated_at: row?.updated_at || null,
+      extra: row?.extra || null,
+    });
+  } catch (e) {
+    console.error('GET /api/iteration/current error:', e);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
 // --- agent pushes tickets
 app.post('/api/sync/tickets', async (req, res) => {
   const key = req.header('x-api-key');
@@ -418,10 +462,26 @@ function normId(v) {
   return s;
 }
 app.get('/api/tickets', async (req, res) => {
-  const { assignedTo, state, iterationPath, areaPath, q } = req.query;
+  const { assignedTo, state, iterationPath, areaPath, q, types } = req.query;
   const clauses = [];
   const params = [];
   let i = 1;
+
+  // Default: only Bug + Product Backlog Item.
+  // Override with ?types=all or ?types=Bug,Product Backlog Item
+  if (!types || String(types).toLowerCase() === 'default') {
+    clauses.push(`lower(t.type) in ('bug','product backlog item')`);
+  } else if (String(types).toLowerCase() !== 'all') {
+    const list = String(types)
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+    if (list.length) {
+      // pg will serialize JS array to Postgres text[]
+      clauses.push(`lower(t.type) = any($${i++})`);
+      params.push(list);
+    }
+  }
 
   // same filters, but prefix columns with t.
   if (assignedTo) {
@@ -697,8 +757,8 @@ app.get('/api/exports/status', async (req, res) => {
       },
       // Handy URLs your PM UI can link to
       urls: {
-        json_range: `/api/pm/range?from=${fromISO}&to=${toISO}&format=json`,
-        tsv_range: `/api/pm/range?from=${fromISO}&to=${toISO}&format=tsv`,
+        json_range: `/api/updates/range?from=${fromISO}&to=${toISO}`,
+        tsv_range: `/api/updates/range.tsv?from=${fromISO}&to=${toISO}`,
       },
     });
   } catch (e) {
@@ -966,6 +1026,25 @@ app.get('/api/ui/progress-codes/options', async (_req, res) => {
 
 // static web
 app.use('/', express.static(path.join(process.cwd(), '..', 'web')));
+
+// --- boot: ensure meta table exists (key/value store) ---
+pool
+  .query(
+    `
+  create table if not exists meta (
+    key text primary key,
+    value text,
+    extra jsonb,
+    updated_at timestamptz default now()
+  )
+`
+  )
+  .then(() => {
+    console.log('[boot] meta table is ready');
+  })
+  .catch((e) => {
+    console.error('[boot] meta table ensure failed:', e);
+  });
 
 app.listen(PORT, () =>
   console.log(`API (Postgres) on http://localhost:${PORT}`)
