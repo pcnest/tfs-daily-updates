@@ -351,30 +351,30 @@ app.post('/api/sync/tickets', async (req, res) => {
     }
 
     // ---- Presence sweep (tombstone anything missing from this run's scope) ----
-    // Only trigger if the agent provided both presentIds[] and the presentIteration name.
-    if (
-      Array.isArray(presentIds) &&
-      presentIds.length > 0 &&
-      presentIteration &&
-      presentIteration.trim()
-    ) {
-      const idsText = presentIds.map(String);
+    // Run if the agent provided the iteration name; we handle empty lists too.
+    if (presentIteration && presentIteration.trim()) {
+      const idsText = Array.isArray(presentIds)
+        ? presentIds.map(String).filter(Boolean)
+        : [];
 
-      // 1) Make sure all "present" IDs are un-deleted and bump last_seen_at
+      // If there are any "present" IDs, un-delete them and bump last_seen_at
+      if (idsText.length > 0) {
+        await client.query(
+          `UPDATE tickets
+         SET deleted = false, last_seen_at = now()
+       WHERE id = ANY($1::text[])`,
+          [idsText]
+        );
+      }
+
+      // Now mark missing rows (same iteration) as deleted.
+      // If idsText is empty, this marks ALL rows in that iteration as deleted.
       await client.query(
         `UPDATE tickets
-           SET deleted = false, last_seen_at = now()
-         WHERE id = ANY($1::text[])`,
-        [idsText]
-      );
-
-      // 2) Mark as deleted anything in the same iteration that is NOT in the present list
-      await client.query(
-        `UPDATE tickets
-           SET deleted = true
-         WHERE lower(iteration_path) LIKE lower($1)
-           AND NOT (id = ANY($2::text[]))`,
-        ['%' + presentIteration + '%', idsText]
+       SET deleted = true
+     WHERE lower(iteration_path) LIKE lower($1)
+       AND ($2::text[] IS NULL OR array_length($2::text[],1) IS NULL OR NOT (id = ANY($2::text[])))`,
+        ['%' + presentIteration + '%', idsText.length ? idsText : null]
       );
     }
     // ---- end presence sweep ----
