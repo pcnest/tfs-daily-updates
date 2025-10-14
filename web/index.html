@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="utf-8" />
-  <title>TFS Daily Updates — Iteration A (Login + Submit Day)</title>
+  <title>TFS Daily Updates — v.1</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     :root {
@@ -85,6 +85,10 @@
       color: var(--fg);
       border: 1px solid var(--border);
       border-radius: 8px;
+    }
+
+    select {
+      width: 100%;
     }
 
     label {
@@ -386,6 +390,63 @@
       top: 0;
       z-index: 1;
     }
+
+    /* PM: two-column split inside a card */
+    /* PM: two equal-width columns */
+    .pm-2col {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      /* equal widths */
+      gap: 16px;
+      align-items: start;
+    }
+
+    .pm-2col>div {
+      min-width: 0;
+    }
+
+    /* prevent overflow/scrolling */
+
+    @media (max-width: 900px) {
+      .pm-2col {
+        grid-template-columns: 1fr;
+      }
+
+      /* stack on small screens */
+    }
+
+    /* align toolbar content to the right inside its grid cell */
+    .toolbar.right {
+      justify-content: flex-end;
+    }
+
+    /* Two equal-width fields inside the right cell */
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      align-items: center;
+    }
+
+    /* .field label {
+      display: block;
+      margin-bottom: 4px;
+    } */
+    .field {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .field input {
+      width: 100%;
+    }
+
+    @media (max-width: 800px) {
+      .grid-2 {
+        grid-template-columns: 1fr;
+      }
+    }
   </style>
 </head>
 
@@ -395,7 +456,9 @@
       <div class="toolbar" style="justify-content: space-between;">
         <div>
           <h1>TFS Daily Updates — v.1</h1>
-          <p><span class="badge">POC</span> Login · My Tickets · Submit Day</p>
+
+          <p><span class="badge">POC</span> A lightweight ledger of daily ticket progress to spot blockers and track
+            momentum.</p>
         </div>
         <div class="pill">
           <span id="me"></span>
@@ -448,18 +511,16 @@
         </thead>
         <tbody></tbody>
       </table>
-    </section>
 
-    <section class="card hidden" id="submitCard">
-      <h3>Submit Progress</h3>
+      <h3 style="margin-top: 1.33rem;">Submit Progress</h3>
 
       <div class="sticky-actions">
         <div class="row">
           <label>
-            <button class="secondary" onclick="lockDay()">Submit Day</button>
+            <button class="secondary" onclick="lockDay()">Update Complete</button>
             <span id="lockStatus" class="status" role="status" aria-live="polite" style="display: inline-block;"></span>
           </label>
-          <p>Submit Day locks in your updates for today so PMs can
+          <p>This locks in your updates for today so PMs can
             finalize the report. After locking, only a PM can
             unlock
             you.</p>
@@ -467,66 +528,82 @@
 
       </div>
 
+
     </section>
+
+
 
     <section id="pm" class="card hidden" data-role="pm-only" aria-labelledby="pmHeader">
       <div class="section-grid">
         <!-- (1) Pre-Meeting Updates -->
         <section class="card thin" aria-labelledby="preHeader">
-          <h4 id="preHeader">Pre-Meeting Updates</h4>
+          <h3 id="preHeader">Pre-Meeting Updates</h3>
           <div id="today"></div>
         </section>
 
         <!-- (2) Who hasn't updated yet -->
         <section class="card thin" aria-labelledby="missingHeader">
-          <h4 id="missingHeader">Who hasn't updated yet</h4>
-          <div class="row">
-            <div></div>
-            <div class="toolbar">
-              <button onclick="loadMissing()">Refresh</button>
+          <div class="pm-2col">
+            <!-- LEFT: Who hasn't updated -->
+            <div>
+
+              <h3 id="missingHeader">Who hasn't updated yet</h3>
+
+
+
+              <div id="missing"></div>
+              <div class="toolbar">
+                <button onclick="loadMissing()">Refresh</button>
+              </div>
+            </div>
+
+            <!-- RIGHT: Unlock a user -->
+            <div>
+              <h3 id="unlockHeader">Unlock a user</h3>
+              <div class="row">
+                <label for="unlockEmail">User email</label>
+                <input id="unlockEmail" placeholder="dev@company.com" />
+              </div>
+              <div class="row">
+                <div></div>
+                <div class="toolbar">
+                  <button onclick="pmUnlock()">Unlock</button>
+                  <span id="unlockStatus" class="status" role="status" aria-live="polite"></span>
+                </div>
+              </div>
             </div>
           </div>
-          <div id="missing"></div>
         </section>
 
-        <!-- (3) Unlock a user -->
-        <section class="card thin" aria-labelledby="unlockHeader">
-          <h4 id="unlockHeader">Unlock a user</h4>
-          <div class="row">
-            <label for="unlockEmail">User email</label>
-            <input id="unlockEmail" placeholder="dev@company.com" />
-          </div>
-          <div class="row">
-            <div></div>
-            <div class="toolbar">
-              <button onclick="pmUnlock()">Unlock</button>
-              <span id="unlockStatus" class="status" role="status" aria-live="polite"></span>
-            </div>
-          </div>
-        </section>
+
+
 
         <!-- Report -->
         <section class="card thin" aria-labelledby="reportsHeader">
-          <h4 id="reportsHeader">Reports (date range)</h4>
-
           <div class="row">
-            <label for="repFrom">From</label>
-            <input id="repFrom" type="date" />
-          </div>
-          <div class="row">
-            <label for="repTo">To</label>
-            <input id="repTo" type="date" />
-          </div>
-
-          <div class="row">
-            <div></div>
-            <div class="toolbar">
+            <h3 id="reportsHeader" style="margin:0; max-width: fit-content;">Reports (date range)</h3>
+            <div class="toolbar right">
               <button onclick="presetReportThisWeek(true)">This week</button>
               <button onclick="presetReportThisMonth(true)">This month</button>
               <button onclick="loadReportRange()">Load</button>
               <a id="dlRange" class="secondary" target="_blank" href="/api/updates/range.tsv">Download TSV</a>
             </div>
           </div>
+
+          <!-- From/To side-by-side -->
+
+
+          <div class="grid-2">
+            <div class="field">
+              <label for="repFrom">From</label>
+              <input id="repFrom" type="date" />
+            </div>
+            <div class="field">
+              <label for="repTo">To</label>
+              <input id="repTo" type="date" />
+            </div>
+          </div>
+
 
           <div class="table-wrap">
             <table id="reportTbl">
@@ -545,10 +622,7 @@
               <tbody></tbody>
             </table>
           </div>
-        </section>
 
-        <!-- (4) Download TSV links -->
-        <section class="card thin" aria-labelledby="downloadHeader">
           <h4 id="downloadHeader">Pre-Meeting Downloads</h4>
           <div class="row">
             <div></div>
@@ -561,17 +635,36 @@
           </div>
         </section>
 
+
+
+
         <!-- (5) Blockers radar -->
         <section class="card thin" aria-labelledby="blockersHeader">
-          <h4 id="blockersHeader">Blockers Radar</h4>
           <div class="row">
-            <div></div>
-            <div class="toolbar">
+            <h3 id="blockersHeader" style="margin:0">Blockers Radar</h3>
+            <div class="toolbar right">
               <button onclick="loadBlockers()">Refresh</button>
             </div>
           </div>
-          <div id="blockers"></div>
+
+          <div class="table-wrap">
+            <table id="blockersTbl" aria-live="polite">
+              <thead>
+                <tr>
+                  <th style="width:100px">ID</th>
+                  <th style="width:110px">Type</th>
+                  <th style="width:350px">Title</th>
+                  <th style="width:120px">State</th>
+                  <th style="width:100px">Code</th>
+                  <th>Note</th>
+                  <th style="width:180px">Iteration</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
         </section>
+
       </div>
 
     </section>
@@ -1197,39 +1290,77 @@
         return (p[p.length - 1] || '').trim();
       }
 
-
-
       function loadBlockers() {
-        var box = byId("blockers");
+        var tbody = document.querySelector('#blockersTbl tbody');
+        if (!tbody) return;
+
+        // skeleton rows for a quick visual while loading
+        tbody.innerHTML = '';
+        for (var i = 0; i < 4; i++) {
+          var tr = document.createElement('tr');
+          tr.className = 'skeleton';
+          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
+          tbody.appendChild(tr);
+        }
+
         fetch((API || location.origin) + "/api/updates/blockers")
           .then(function (res) { return res.json(); })
           .then(function (js) {
-            function sev(c) { return c && c.indexOf('600_') === 0 ? 0 : c && c.indexOf('700_') === 0 ? 1 : c && c.indexOf('800_') === 0 ? 2 : 3; }
             var items = js.items || [];
-            var groups = {};
+
+            // sort by severity (600 > 700 > 800), then by assignedTo, then by most recent
+            function sev(c) {
+              if (!c) return 9;
+              if (String(c).indexOf('600_') === 0) return 0; // most severe/urgent
+              if (String(c).indexOf('700_') === 0) return 1;
+              if (String(c).indexOf('800_') === 0) return 2;
+              return 3;
+            }
+            items.sort(function (a, b) {
+              return sev(a.code) - sev(b.code)
+                || String(a.assignedTo || '').localeCompare(String(b.assignedTo || ''))
+                || String(b.at || '').localeCompare(String(a.at || ''));
+            });
+
+            if (!items.length) {
+              tbody.innerHTML = '<tr><td colspan="7"><em>No blockers detected today.</em></td></tr>';
+              return;
+            }
+
+            var html = '';
             for (var i = 0; i < items.length; i++) {
               var h = items[i];
-              var k = (h.assignedTo && h.assignedTo.trim()) ? h.assignedTo : "(unassigned)";
-              if (!groups[k]) groups[k] = [];
-              groups[k].push(h);
+              // type may be absent unless added on the API (see server patch below)
+              var typ = h.type || h.workItemType || h.itemType || h.kind || '';
+              html += ''
+                + '<tr data-id="' + esc(h.ticketId) + '">'
+                + '<td>' + esc(h.ticketId) + '</td>'
+                + '<td>' + esc(typ || '—') + '</td>'
+                + '<td><i>' + esc(h.title || '') + '</i></td>'
+                + '<td>' + esc(h.state || '') + '</td>'
+                + '<td>' + esc(h.code || '—') + '</td>'
+                + '<td>' + esc(h.note || '') + '</td>'
+                + '<td>' + esc(h.iterationPath || '') + '</td>'
+                + '</tr>';
             }
-            var html = '<p><span class="badge">' + esc(js.date || "") + '</span></p>';
-            var keys = Object.keys(groups).sort(function (a, b) { return a.localeCompare(b); });
-            if (keys.length === 0) { box.innerHTML = html + '<p><em>No blockers detected today.</em></p>'; return; }
-            for (var j = 0; j < keys.length; j++) {
-              var key = keys[j];
-              groups[key].sort(function (a, b) { return sev(a.code) - sev(b.code) || String(b.at || "").localeCompare(String(a.at || "")); });
-              html += '<h4>## ' + esc(key) + ' ##</h4><ul>';
-              var arr = groups[key];
-              for (var n = 0; n < arr.length; n++) {
-                var hh = arr[n];
-                html += '<li>' + esc(hh.ticketId) + ' - <i>' + esc(hh.title) + '</i> - ' + esc(hh.state) + ' - ' + esc(hh.code) + ' - ' + esc(hh.note) + ' - ' + esc(hh.iterationPath) + '</li>';
+            tbody.innerHTML = html;
+
+            // turn Code text into colored badges
+            var rows = tbody.querySelectorAll('tr');
+            for (var r = 0; r < rows.length; r++) {
+              var cells = rows[r].getElementsByTagName('td');
+              if (cells[4]) {
+                var raw = cells[4].textContent;
+                renderCodeBadge(cells[4], raw);
               }
-              html += '</ul>';
             }
-            box.innerHTML = html;
+          })
+          .catch(function () {
+            tbody.innerHTML = '<tr><td colspan="7">Failed to load blockers.</td></tr>';
           });
       }
+
+
 
       function loadMissing() {
         var box = byId("missing");

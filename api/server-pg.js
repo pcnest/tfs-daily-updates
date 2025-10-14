@@ -1017,7 +1017,7 @@ app.get('/api/updates/blockers', async (_req, res) => {
   const date = todayISO();
   const r = await pool.query(
     `select u.ticket_id as "ticketId", u.email, u.code, u.note, u.at,
-            t.title, t.state, t.assigned_to as "assignedTo", t.iteration_path as "iterationPath"
++          t.title, t.state, t.type, t.assigned_to as "assignedTo", t.iteration_path as "iterationPath"
      from progress_updates u
      left join tickets t on t.id = u.ticket_id
      where u.date = $1`,
