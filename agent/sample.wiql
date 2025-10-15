@@ -1,17 +1,8 @@
 SELECT [System.Id]
-FROM WorkItemLinks
+FROM WorkItems
 WHERE
-  (
-    Source.[System.TeamProject] = @project
-    AND (Source.[System.WorkItemType] = 'Bug' OR Source.[System.WorkItemType] = 'Product Backlog Item')
-    AND Source.[System.State] <> 'Done'{{SOURCE_DELTA}}
-  )
-  AND [System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward'
-  AND (
-    Target.[System.TeamProject] = @project
-    AND Target.[System.WorkItemType] = 'Task'
-    AND Target.[System.IterationPath] UNDER @CurrentIteration
-    AND Target.[System.State] <> 'Done'{{TARGET_DELTA}}
-  )
-MODE (MustContain)
-ORDER BY [System.ChangedDate] DESC
+  [System.TeamProject] = @project
+  AND [System.WorkItemType] IN ('Bug','Product Backlog Item')
+  AND [System.IterationPath] UNDER @CurrentIteration
+  AND [System.State] <> 'Done'
+  AND [System.ChangedDate] >= '{SINCE_ISO}'

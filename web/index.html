@@ -447,6 +447,87 @@
         grid-template-columns: 1fr;
       }
     }
+
+    /* Pre-Meeting Updates: compact cards per user, 2-up on wide screens */
+    .pre-list {
+      display: grid;
+      gap: 14px;
+    }
+
+    @media (min-width: 1100px) {
+      .pre-list {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .pre-user {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      background: var(--card);
+    }
+
+    .pre-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      background: var(--table-head);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .pre-ident {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    .pre-title {
+      font-weight: 600;
+    }
+
+    .pre-meta {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .avatar {
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      font-weight: 700;
+      background: var(--accent-weak);
+      color: var(--fg);
+    }
+
+    .subgroup {
+      padding: 8px 12px;
+      border-top: 1px dashed var(--border);
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .today-grid {
+      margin: 0;
+      border-top: 0;
+    }
+
+    .today-grid th,
+    .today-grid td {
+      font-size: 12.5px;
+    }
+
+    .state-chip {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--card);
+    }
   </style>
 </head>
 
@@ -511,22 +592,25 @@
         </thead>
         <tbody></tbody>
       </table>
+      <section id="submitCard" aria-labelledby="spHeader">
+        <h3 style="margin-top: 1.33rem;">Submit Progress</h3>
 
-      <h3 style="margin-top: 1.33rem;">Submit Progress</h3>
+        <div class="sticky-actions">
+          <div class="row">
+            <label>
+              <button class="secondary" onclick="lockDay()">Update Complete</button>
+              <span id="lockStatus" class="status" role="status" aria-live="polite"
+                style="display: inline-block;"></span>
+            </label>
+            <p>This locks in your updates for today so PMs can
+              finalize the report. After locking, only a PM can
+              unlock
+              you.</p>
+          </div>
 
-      <div class="sticky-actions">
-        <div class="row">
-          <label>
-            <button class="secondary" onclick="lockDay()">Update Complete</button>
-            <span id="lockStatus" class="status" role="status" aria-live="polite" style="display: inline-block;"></span>
-          </label>
-          <p>This locks in your updates for today so PMs can
-            finalize the report. After locking, only a PM can
-            unlock
-            you.</p>
         </div>
+      </section>
 
-      </div>
 
 
     </section>
@@ -581,7 +665,7 @@
         <!-- Report -->
         <section class="card thin" aria-labelledby="reportsHeader">
           <div class="row">
-            <h3 id="reportsHeader" style="margin:0; max-width: fit-content;">Reports (date range)</h3>
+            <h3 id="reportsHeader" style="margin:0; max-width: fit-content;">Reports</h3>
             <div class="toolbar right">
               <button onclick="presetReportThisWeek(true)">This week</button>
               <button onclick="presetReportThisMonth(true)">This month</button>
@@ -764,7 +848,7 @@
           assigned.value = String(email).split("@")[0];
         }
         var me = byId("me");
-        me.textContent = email ? ("Logged in as: " + (name || email)) : "";
+        me.textContent = email ? (name || email) : "";
         var btn = byId("logoutBtn");
         if (btn) btn.classList.toggle("hidden", !email);
 
@@ -786,7 +870,8 @@
 
         if (loginCard) loginCard.classList.add('hidden');
         if (ticketsCard) ticketsCard.classList.remove('hidden');
-        if (submitCard) submitCard.classList.remove('hidden');
+        // if (submitCard) submitCard.classList.remove('hidden');
+        if (submitCard) submitCard.classList.toggle('hidden', isPM); // hide for PMs
         if (pmBox) pmBox.classList.toggle('hidden', !isPM);
 
         if (pmBox) {
@@ -863,6 +948,7 @@
             localStorage.setItem(tokenKey, js.token);
             setMe(js.email, js.name);
             setRoleUI(js.role || 'dev');
+            refreshIterationBadge();
             setStatus("loginStatus", "Logged in.");
           })
           .catch(function () { setStatus("loginStatus", "Network error", false); });
@@ -987,11 +1073,14 @@
                 '<td>' + esc(t.state) + '</td>' +
                 '<td>' + esc(code || '—') + '</td>' +
                 '<td>' + esc(note || '—') + '</td>' +
-                '<td><button class="secondary" onclick="openSPModal(' + Number(t.id) + ')" aria-label="Select ticket ' + esc(t.id) + '">Select</button></td>';
+                '<td>' + (window.__role === 'pm'
+                  ? ''
+                  : '<button class="secondary" onclick="openSPModal(' + Number(t.id) + ')" aria-label="Select ticket ' + esc(t.id) + '">Select</button>') + '</td>';
+
 
               tbody.appendChild(tr2);
               var cells = tr2.getElementsByTagName('td');
-              renderCodeBadge(cells[3], code);
+              renderCodeBadge(cells[4], code);
 
             }
           })
@@ -1004,6 +1093,7 @@
       }
 
       function openSPModal(id) {
+        if (window.__role === 'pm') return; // PMs don’t submit progress
         var m = byId('spModal'), b = byId('spBackdrop');
         if (id != null) byId('tId').value = String(id);
         // ensure note-required hint is correct (HTMX may have just populated options)
@@ -1073,84 +1163,116 @@
         req('POST', (API || location.origin) + "/api/updates/lock", null, { "Authorization": "Bearer " + tkn })
           .then(function (js) {
             if (js.error) setStatus("lockStatus", js.error, false);
-            else setStatus("lockStatus", js.locked ? "Day submitted (locked)" : "Not locked", !!js.locked);
+            else setStatus("lockStatus", js.locked ? "Update submitted (locked)" : "Not locked", !!js.locked);
             if (js.locked) { setSelectButtonsDisabled(true); var badgeEl = byId("me").querySelector('.badge'); var txt = badgeEl ? badgeEl.textContent : ''; if (txt === 'PM') { loadToday(); loadBlockers(); loadMissing(); } }
           })
           .catch(function () { setStatus("lockStatus", "Network error", false); });
       }
 
+
+      function initials(s) {
+        s = String(s || '').trim();
+        if (!s) return "?";
+        var parts = s.split(/\s+/);
+        var a = (parts[0] || '')[0] || '';
+        var b = (parts.length > 1 ? (parts[parts.length - 1] || '')[0] : '') || '';
+        return (a + b).toUpperCase();
+      }
       function loadToday() {
-        var box = byId("today");
-        fetch((API || location.origin) + "/api/updates/today")
+        var box = document.getElementById("today");
+        fetch((window.API || location.origin) + "/api/updates/today")
           .then(function (res) { return res.json(); })
           .then(function (js) {
             var out = [];
-            out.push('<span class="badge">' + esc(js.date || "") + "</span>");
+            out.push('<div class="pre-list">'); // grid of user cards
 
             var users = js.users || [];
             for (var u = 0; u < users.length; u++) {
               var user = users[u];
+              var display = user.name ? user.name : user.email;
+              var meta = user.name ? user.email : '';
+              var tickets = user.tickets || [];
+              var total = tickets.length;
 
-              // Use HTML entities for lock icons to avoid encoding issues
-              var lock = user.locked ? "&#128274;" /* locked */ : "&#128275;" /* unlocked */;
-              var who = user.name
-                ? (esc(user.name) + " <small>(" + esc(user.email) + ")</small>")
-                : esc(user.email);
+              // Card head
+              out.push('<div class="pre-user">');
+              out.push('<div class="pre-head">');
+              out.push('<div class="pre-ident">');
+              out.push('<span class="avatar">' + initials(display) + '</span>');
+              out.push('<div>');
+              out.push('<div class="pre-title">' + esc(display) + '</div>');
+              if (meta) out.push('<div class="pre-meta">' + esc(meta) + '</div>');
+              out.push('</div>');
+              out.push('</div>');
 
-              out.push("<h3>" + lock + " " + who + "</h3>");
+              // badge + total count
+              out.push('<span class="pill">');
+              out.push('<span class="pre-meta">' + total + ' item(s)</span>');
+              out.push('<span class="badge ' + (user.locked ? 'ok' : 'muted') + '">' + (user.locked ? 'Locked' : 'Open') + '</span>');
 
-              // group by assignedTo (alias bucket)
+              out.push('</span>');
+
+              out.push('</div>'); // /pre-head
+
+              // group by assignedTo
               var groups = {};
-              var uts = user.tickets || [];
-              for (var t = 0; t < uts.length; t++) {
-                var it = uts[t];
+              for (var t = 0; t < tickets.length; t++) {
+                var it = tickets[t];
                 var key = (it.assignedTo && String(it.assignedTo).trim()) ? it.assignedTo : "(unassigned)";
-                if (!groups[key]) { groups[key] = []; }
+                if (!groups[key]) groups[key] = [];
                 groups[key].push(it);
               }
 
               var keys = Object.keys(groups).sort(function (a, b) { return a.localeCompare(b); });
               if (keys.length === 0) {
-                out.push("<p><em>No updates yet today.</em></p>");
+                out.push('<div class="subgroup">No updates yet today.</div>');
               } else {
                 for (var k = 0; k < keys.length; k++) {
                   var gk = keys[k];
-                  out.push("<h4>## " + esc(gk) + " ##</h4>");
+                  var arr = groups[gk];
 
-                  // table
-                  out.push('<table class="today-grid">');
-                  out.push("<thead><tr>");
+                  // REMOVED the subgroup line with count per your request
+                  // out.push('<div class="subgroup">' + esc(gk) + ' · ' + arr.length + ' item(s)</div>');
+
+                  out.push('<table class="today-grid"><thead><tr>');
                   out.push('<th style="width:75px">ID</th>');
                   out.push('<th style="width:110px">Type</th>');
                   out.push('<th style="width:350px">Title</th>');
                   out.push('<th style="width:120px">State</th>');
                   out.push('<th style="width:75px">Code</th>');
-                  out.push("<th>Note</th>");
+                  out.push('<th>Note</th>');
+                  out.push('</tr></thead><tbody>');
 
-                  out.push("</tr></thead><tbody>");
-
-                  var arr = groups[gk];
                   for (var m = 0; m < arr.length; m++) {
                     var it2 = arr[m];
-                    out.push("<tr>");
-                    out.push("<td>" + esc(it2.ticketId) + "</td>");
-                    out.push("<td>" + esc(typ2 || '—') + "</td>");
-                    out.push("<td><i>" + esc(it2.title) + "</i></td>");
-                    out.push("<td>" + esc(it2.state) + "</td>");
-                    out.push("<td>" + esc(it2.code) + "</td>");
-                    out.push("<td>" + esc(it2.note) + "</td>");
+                    var typ2 = it2.type || it2.workItemType || it2.itemType || it2.kind || '';
+                    var fam = (it2.code ? String(it2.code).slice(0, 3) : null);
+                    var codeBadge = it2.code
+                      ? '<span class="badge code-' + fam + '">' + esc(it2.code) + '</span>'
+                      : '—';
 
-                    out.push("</tr>");
+                    out.push('<tr>');
+                    out.push('<td>' + esc(it2.ticketId) + '</td>');
+                    out.push('<td>' + esc(typ2 || '—') + '</td>');
+                    out.push('<td><i>' + esc(it2.title || '') + '</i></td>');
+                    out.push('<td>' + esc(it2.state || '—') + '</td>');
+                    out.push('<td>' + codeBadge + '</td>');
+                    out.push('<td>' + esc(it2.note || '') + '</td>');
+                    out.push('</tr>');
                   }
 
-                  out.push("</tbody></table>");
+                  out.push('</tbody></table>');
                 }
               }
+
+              out.push('</div>'); // /pre-user
             }
 
-            box.innerHTML = out.join("");
+            out.push('</div>'); // /pre-list
+            box.innerHTML = '<p><span class="badge">' + esc(js.date || "") + '</span></p>' + out.join('');
           });
       }
+
 
       function ymd(d) { return d.toISOString().slice(0, 10); }
 
@@ -1289,6 +1411,21 @@
         var p = String(path).split('\\');
         return (p[p.length - 1] || '').trim();
       }
+      function refreshIterationBadge() {
+        fetch((API || location.origin) + "/api/iteration/current")
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            var name = (js && js.name) ? String(js.name) : '';
+            // optional: shorten to last path segment (Project\2025\Sprint 400 -> Sprint 400)
+            if (name.indexOf('\\') > -1) {
+              var parts = name.split('\\');
+              name = (parts[parts.length - 1] || '').trim();
+            }
+            setIterationLabel(name);
+          })
+          .catch(function () { /* keep badge muted on network errors */ });
+      }
+
 
       function loadBlockers() {
         var tbody = document.querySelector('#blockersTbl tbody');
@@ -1449,6 +1586,7 @@
               setMe(js.email, js.name);
               var asn = byId("assigned"); if (asn && !asn.value && js.email) asn.value = js.email.split('@')[0];
               setRoleUI(js.role || 'dev');
+              refreshIterationBadge();
               setStatus("loginStatus", "Logged in.");
             })
             .catch(function () { localStorage.removeItem(tokenKey); });
