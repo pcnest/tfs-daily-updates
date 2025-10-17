@@ -355,14 +355,13 @@ app.post('/api/sync/tickets', async (req, res) => {
       );
     }
 
-    // ---- Presence sweep (tombstone anything missing from this run's scope) ----
-    // Run if the agent provided the iteration name; we handle empty lists too.
-    if (presentIteration && presentIteration.trim()) {
+    // ---- Presence sweep (derive scope from the IDs themselves) ----
+    {
       const idsText = Array.isArray(presentIds)
         ? presentIds.map(String).filter(Boolean)
         : [];
 
-      // If there are any "present" IDs, un-delete them and bump last_seen_at
+      // 1) If we have any "present" IDs, un-delete them and bump last_seen_at
       if (idsText.length > 0) {
         await client.query(
           `UPDATE tickets
@@ -370,51 +369,52 @@ app.post('/api/sync/tickets', async (req, res) => {
        WHERE id = ANY($1::text[])`,
           [idsText]
         );
-      }
 
-      // Now mark missing rows (same iteration) as deleted.
-      // If idsText is empty, this marks ALL rows in that iteration as deleted.
-      // Prefer exact full path if provided; fallback to name substring
-      const presentIterationPath = (
-        req.body?.presentIterationPath || ''
-      ).trim();
-      const scopeByPath = presentIterationPath
-        ? `%${presentIterationPath}%`
-        : null;
-      const scopeByName = (presentIteration || '').trim()
-        ? `%${presentIteration}%`
-        : null;
-
-      // Un-delete present ids
-      if (idsText.length > 0) {
-        await client.query(
-          `UPDATE tickets
-       SET deleted = false, last_seen_at = now()
-     WHERE id = ANY($1::text[])`,
+        // 2) Derive exact iteration_path values of *this* presence set
+        const { rows: pathRows } = await client.query(
+          `SELECT DISTINCT iteration_path
+         FROM tickets
+        WHERE id = ANY($1::text[])`,
           [idsText]
         );
-      }
 
-      // Mark missing as deleted within the scoped iteration
-      if (scopeByPath || scopeByName) {
-        await client.query(
-          `
-    UPDATE tickets
-       SET deleted = true
-     WHERE
-       (
-         ($1::text IS NOT NULL AND COALESCE(iteration_path,'') ILIKE $1)
-         OR
-         ($1::text IS NULL AND $2::text IS NOT NULL AND COALESCE(iteration_path,'') ILIKE $2)
-       )
-       AND (
-         $3::text[] IS NULL
-         OR array_length($3::text[],1) IS NULL
-         OR NOT (id = ANY($3::text[]))
-       )
-    `,
-          [scopeByPath, scopeByName, idsText.length ? idsText : null]
-        );
+        const scopePaths = pathRows
+          .map((r) => r.iteration_path)
+          .filter((p) => p != null);
+
+        // 3) Tombstone anything in those paths that wasn't present this run
+        if (scopePaths.length > 0) {
+          await client.query(
+            `UPDATE tickets
+           SET deleted = true
+         WHERE iteration_path = ANY($1::text[])
+           AND NOT (id = ANY($2::text[]))`,
+            [scopePaths, idsText]
+          );
+        }
+
+        // 4) Also handle items whose iteration_path IS NULL (if any present had NULL)
+        const hasNullPath = pathRows.some((r) => r.iteration_path == null);
+        if (hasNullPath) {
+          await client.query(
+            `UPDATE tickets
+           SET deleted = true
+         WHERE iteration_path IS NULL
+           AND NOT (id = ANY($1::text[]))`,
+            [idsText]
+          );
+        }
+
+        // optional: one-line debug
+        console.log('[sweep]', {
+          presentCount: idsText.length,
+          scopePaths: scopePaths.length,
+          hasNullPath,
+        });
+      } else {
+        // No present IDs provided → do NOT sweep by guesswork.
+        // (If you prefer the old behavior, you could fall back to presentIteration/name here.)
+        console.log('[sweep] skipped (no presentIds)');
       }
     }
     // ---- end presence sweep ----
