@@ -626,6 +626,7 @@ app.get('/api/tickets', async (req, res) => {
   // - otherwise fall back to the requester (if authenticated)
   const requester = await tryGetAuthEmail(req);
   let updatesEmail = null;
+  let updatesAlias = null; // keep the alias around for a local-part fallback
 
   if (requester) {
     // If a target is provided, try to resolve it to an email
@@ -642,25 +643,42 @@ app.get('/api/tickets', async (req, res) => {
       } else {
         // treat as alias (DOMAIN\alias or alias)
         const aliasOnly = normId(ub);
-        const map = await pool.query(
-          `select lower(email) as email from tfs_users
-             where active=true
-               and lower(regexp_replace(alias,'^.*\\\\','')) = $1
-             limit 1`,
+        updatesAlias = aliasOnly;
+
+        // 1) Try TFS users (email present)
+        const tfs = await pool.query(
+          `select lower(email) as email, lower(coalesce(display_name,'')) as display_name
+             from tfs_users
+            where active=true
+              and lower(regexp_replace(alias,'^.*\\\\','')) = $1
+            limit 1`,
           [aliasOnly]
         );
-        if (map.rowCount && map.rows[0].email) {
-          updatesEmail = map.rows[0].email;
-        } else {
-          // fallback: find a signed-up user whose email local-part matches the alias
-          const u2 = await pool.query(
+        const tfsRow = tfs.rows[0];
+        if (tfsRow?.email) {
+          updatesEmail = tfsRow.email;
+        } else if (tfsRow?.display_name) {
+          // 2) Match by display name captured at signup (users.name)
+          const byName = await pool.query(
             `select lower(email) as email
-              from users
-             where lower(split_part(email,'@',1)) = $1
-             limit 1`,
+               from users
+              where lower(name) = $1
+              limit 1`,
+            [tfsRow.display_name]
+          );
+          if (byName.rowCount) updatesEmail = byName.rows[0].email;
+        }
+
+        if (!updatesEmail) {
+          // 3) Fallback: local-part == alias
+          const byLocal = await pool.query(
+            `select lower(email) as email
+               from users
+              where lower(split_part(email,'@',1)) = $1
+              limit 1`,
             [aliasOnly]
           );
-          if (u2.rowCount) updatesEmail = u2.rows[0].email;
+          if (byLocal.rowCount) updatesEmail = byLocal.rows[0].email;
         }
       }
     }
@@ -678,10 +696,26 @@ app.get('/api/tickets', async (req, res) => {
     if (!updatesEmail) updatesEmail = requester;
   }
 
-  let sql, rows;
-  if (updatesEmail) {
-    params.push(updatesEmail); // $i for email in the lateral
-    const emailParam = `$${i++}`;
+  let sql;
+  if (updatesEmail || updatesAlias) {
+    // Build lateral predicate that can match on exact email OR local-part (alias) if needed
+    let emailParam = null,
+      aliasParam = null;
+    if (updatesEmail) {
+      params.push(updatesEmail);
+      emailParam = `$${i++}`;
+    }
+    if (updatesAlias) {
+      params.push(updatesAlias);
+      aliasParam = `$${i++}`;
+    }
+
+    const lateralPred =
+      updatesEmail && updatesAlias
+        ? `email = ${emailParam} OR split_part(email,'@',1) = ${aliasParam}`
+        : updatesEmail
+        ? `email = ${emailParam}`
+        : `split_part(email,'@',1) = ${aliasParam}`;
 
     sql = `
       select
@@ -700,7 +734,7 @@ app.get('/api/tickets', async (req, res) => {
       left join lateral (
         select code, note
         from progress_updates
-        where ticket_id = t.id and email = ${emailParam}
+        where ticket_id = t.id and (${lateralPred})
         order by at desc
         limit 1
       ) u on true
