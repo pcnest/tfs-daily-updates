@@ -76,9 +76,19 @@ function Save-LastSyncUtc([datetime]$whenUtc) {
 }
 
 $SinceUtc       = Get-LastSyncUtc
-$SinceUtcIso    = $SinceUtc.ToUniversalTime().ToString('o')          # for logs / strict filtering
-$SinceDateYmd   = $SinceUtc.ToUniversalTime().ToString('yyyy-MM-dd') # for WIQL (date-precision)
-Write-Log "[delta] LastSync: $SinceUtcIso (date-only $SinceDateYmd)"
+# If last_sync.json is somehow in the FUTURE, clamp it to now (prevents empty deltas)
+if ($SinceUtc -gt $NowUtc) {
+  Write-Log "[delta] LastSync is in the FUTURE ($($SinceUtc.ToString('o'))); clamping to now."
+  $SinceUtc = $NowUtc
+}
+
+$OverlapMinutes = 5   # <<< you can change to 2–10 mins if you like
+$EffSinceUtc    = $SinceUtc.AddMinutes(-$OverlapMinutes)
+
+$SinceUtcIso    = $EffSinceUtc.ToUniversalTime().ToString('o')           # for exact-time post-filter
+$SinceDateYmd   = $EffSinceUtc.ToUniversalTime().ToString('yyyy-MM-dd')  # date-precision for WIQL
+Write-Log "[delta] LastSync(base)=$($SinceUtc.ToString('o')); using effective since=$SinceUtcIso (window ${OverlapMinutes}m; date-only $SinceDateYmd)"
+
 
 # ---------- TFS helpers ----------
 if (-not $Pat) { throw "PAT not set (`$Pat). Provide a Personal Access Token." }
@@ -112,87 +122,178 @@ try {
   $iterResp = Invoke-RestMethod -Method Get -Uri $iterUrl -Headers $tfsHeaders
   if ($iterResp.value -and $iterResp.value.Count -gt 0) {
     $curr = $iterResp.value[0]
-    Write-Log "Team '$Team' current iteration: $($curr.name) ($($curr.attributes.startDate) → $($curr.attributes.endDate))"
+$currentIterName = [string]$curr.name
+$currentIterPath = [string]$curr.path  # <<< ADD THIS (full path like 'SupplyPro.Core\2025\Sprint 400')
+Write-Log ("Team '{0}' current iteration: {1} ({2} -> {3})" -f $Team, $currentIterName, $curr.attributes.startDate, $curr.attributes.endDate)
+
+
   } else {
-    Write-Log "Team '$Team' current iteration: NONE (check team settings)"
+    $currentIterName = ""
+    $currentIterPath = ""
+  Write-Log ("Team '{0}' current iteration: NONE (check team settings)" -f $Team)
   }
-} catch { Write-Log "Warning: Could not fetch team current iteration. $_" }
+} catch { $currentIterName = ""
+$currentIterPath = ""
+  Write-Log ("Warning: Could not fetch team current iteration. {0}" -f $_) }
 
-# ---------- Build WIQL (inject date-only delta) ----------
-if (!(Test-Path $WiqlFile)) { Write-Error "WIQL file not found: $WiqlFile"; exit 1 }
-$wiqlRaw = Get-Content $WiqlFile -Raw
+# ---------- Build + Execute WIQL (A + B) ----------
+# We will run two WIQLs and merge IDs:
+#  A) PBIs & Bugs in @CurrentIteration
+#  B) Parents of Tasks in @CurrentIteration
 
-# Accept either JSON {"query":"..."} or plain WIQL text
-$q = $null
-try { $maybeJson = $wiqlRaw | ConvertFrom-Json; if ($maybeJson.query) { $q = [string]$maybeJson.query } } catch {}
-if (-not $q) { $q = [string]$wiqlRaw }
+# Use TEAM-level WIQL route so @CurrentIteration resolves for the team
+$teamSeg = [uri]::EscapeDataString($Team)   # e.g., "Enterprise%20Software%20Team"
+$wiqlUrl = "$TfsUrl/$Collection/$Project/$teamSeg/_apis/wit/wiql?api-version=2.0"
 
-# Provide date-precision-safe placeholders
-$srcDelta = "`r`n    AND Source.[System.ChangedDate] >= '$SinceDateYmd'"
-$tgtDelta = "`r`n    AND Target.[System.ChangedDate] >= '$SinceDateYmd'"
 
-$q = $q.Replace('{{SOURCE_DELTA}}', $srcDelta).Replace('{{TARGET_DELTA}}', $tgtDelta)
+# Read the two WIQL files and substitute the delta timestamp (use your existing $SinceUtcIso)
+# NOTE: $WiqlFile already points to .\sample.wiql
+$qA = (Get-Content -Raw -Encoding UTF8 $WiqlFile) -replace '\{SINCE_ISO\}', $SinceDateYmd
+$qBPath = Join-Path $PSScriptRoot 'sample_links.wiql'
+if (!(Test-Path $qBPath)) { Write-Error "Missing WIQL file: $qBPath"; exit 1 }
+$qB = (Get-Content -Raw -Encoding UTF8 $qBPath) -replace '\{SINCE_ISO\}', $SinceDateYmd
 
-$wiqlBody = @{ query = $q } | ConvertTo-Json -Depth 3
-
-# Team/project WIQL URL
-$wiqlUrl = "$TfsUrl/$Collection/$Project" + ($(if ($Team -and $Team.Trim().Length -gt 0) { "/$Team" } else { "" })) + "/_apis/wit/wiql?api-version=2.0"
-Write-Log "Posting WIQL (delta since $SinceDateYmd) to $wiqlUrl ..."
-
-# ---------- Execute WIQL ----------
-$wiqlResponse = Invoke-RestMethod -Method Post -Uri $wiqlUrl -Headers $tfsHeaders -Body $wiqlBody -ContentType 'application/json'
-
-$ids = @()
-if ($wiqlResponse.workItems) {
-  $ids = $wiqlResponse.workItems | ForEach-Object { $_.id } | Select-Object -Unique
-} elseif ($wiqlResponse.workItemRelations) {
-  $ids = $wiqlResponse.workItemRelations |
-    Where-Object { $_.rel -eq 'System.LinkTypes.Hierarchy-Forward' -and $_.source } |
-    ForEach-Object { $_.source.id } |
-    Sort-Object -Unique
+# Helper: POST WIQL as UTF-8 JSON bytes; avoid duplicate Content-Type in headers
+function Invoke-Wiql([string]$wiqlText) {
+  $body  = @{ query = $wiqlText } | ConvertTo-Json -Depth 3
+  $bytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+  if ($tfsHeaders.ContainsKey('Content-Type')) { $tfsHeaders.Remove('Content-Type') }
+  return Invoke-RestMethod -Method Post -Uri $wiqlUrl -Headers $tfsHeaders `
+         -Body $bytes -ContentType 'application/json; charset=utf-8'
 }
 
+# Run Query A
+Write-Log "Posting WIQL A (PBIs/Bugs in @CurrentIteration, since $SinceUtcIso)..."
+$respA = Invoke-Wiql $qA
+$idsA  = @()
+if ($respA.workItems) { $idsA = $respA.workItems | ForEach-Object { $_.id } }
+Write-Log "WIQL A returned $($idsA.Count) id(s)."
+
+# Run Query B
+Write-Log "Posting WIQL B (Parents of Tasks in @CurrentIteration, since $SinceUtcIso)..."
+$respB = Invoke-Wiql $qB
+$idsB  = @()
+if ($respB.workItemRelations) {
+  $idsB = $respB.workItemRelations |
+          Where-Object { $_.source -and $_.target } |
+          ForEach-Object { $_.source.id } |
+          Select-Object -Unique
+}
+Write-Log "WIQL B returned $($idsB.Count) parent id(s)."
+
+# Merge & dedupe → put into $ids (so your next section can reuse it as-is)
+$ids = ($idsA + $idsB) | Sort-Object -Unique
 if (!$ids -or $ids.Count -eq 0) {
-  Write-Log "No work items returned by WIQL (delta)."
+  Write-Log "No work items returned by WIQL (A+B delta)."
   $ids = @()
 } else {
-  Write-Log "WIQL returned $($ids.Count) IDs (delta)"
+  Write-Log "Merged unique ids: $($ids.Count)."
+}
+# ---------- END (Build + Execute WIQL A+B) ----------
+
+# === POST current iteration (robust, ASCII-only) ===
+$iterUrl = ($PublicApiBase.TrimEnd('/')) + '/api/iteration/current'
+
+$iterHeaders = @{}
+if ($PublicApiKey -and $PublicApiKey.Trim()) { $iterHeaders['x-api-key'] = $PublicApiKey.Trim() }
+
+if ([string]::IsNullOrWhiteSpace($PublicApiBase) -or $iterUrl -notmatch '^https?://') {
+  Write-Warning ("[iter] Skipping POST - invalid PublicApiBase: '{0}'" -f $PublicApiBase)
+}
+elseif ([string]::IsNullOrWhiteSpace($currentIterName)) {
+  Write-Log '[iter] Skipping POST - no current iteration name resolved.'
+}
+else {
+  $iterPayload = [pscustomobject]@{
+    name = $currentIterName
+    team = $Team
+    at   = (Get-Date).ToString('o')
+  } | ConvertTo-Json -Depth 5 -Compress
+
+  try {
+    Write-Log ("[iter] POST {0} name='{1}'" -f $iterUrl, $currentIterName)
+    $iterResp = Invoke-RestMethod -Uri $iterUrl -Method Post -Headers $iterHeaders `
+                -Body $iterPayload -ContentType 'application/json' -TimeoutSec 20 -ErrorAction Stop
+    Write-Log '[iter] OK'
+  }
+  catch {
+  $msg    = $_.Exception.Message
+  $detail = $_.ErrorDetails.Message
+  $body   = ''
+
+  # Try to read the HTTP response body (useful if your API returns JSON error text)
+  if ($_.Exception -and $_.Exception.Response) {
+    try {
+      $sr = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())
+      $body = $sr.ReadToEnd()
+    } catch { }
+  }
+
+  $tail = ''
+  if ($detail) { $tail = ' - ' + $detail }
+  elseif ($body) { $tail = ' - ' + $body }
+
+  Write-Warning ("[iter] POST failed: {0}{1}" -f $msg, $tail)
+}
 }
 
-# ---------- Additional flat WIQL for items directly in current iteration (even without children) ----------
-# Build the iteration path (prefer server-provided path; fallback to Project\Name)
-$iterPath = $null
-try { $iterPath = if ($curr.path) { $curr.path } else { "$Project\$($curr.name)" } } catch { $iterPath = "$Project\$($curr.name)" }
+# ---- Build FULL presence scope (no date filter) ----
+# Re-read the WIQL files but strip the ChangedDate constraint by substituting a very old date.
+# Using '1900-01-01' effectively includes everything in the current iteration.
+$qA_full = (Get-Content -Raw -Encoding UTF8 $WiqlFile) -replace '\{SINCE_ISO\}', '1900-01-01'
+$qB_full = (Get-Content -Raw -Encoding UTF8 (Join-Path $PSScriptRoot 'sample_links.wiql')) -replace '\{SINCE_ISO\}', '1900-01-01'
 
-$flatWiql = @"
-SELECT [System.Id]
-FROM WorkItems
-WHERE
-  [System.TeamProject] = '$Project'
-  AND [System.State] <> 'Removed'
-  AND [System.IterationPath] UNDER '$iterPath'
-  AND [System.ChangedDate] >= '$SinceDateYmd'
-ORDER BY [System.ChangedDate] DESC
-"@
+Write-Log "Posting WIQL A (FULL scope, no date limit)..."
+$respA_full = Invoke-Wiql $qA_full
+$idsA_full  = if ($respA_full.workItems) { $respA_full.workItems | ForEach-Object { $_.id } } else { @() }
+Write-Log "WIQL A (FULL) returned $($idsA_full.Count) id(s)."
 
-$flatBody = @{ query = $flatWiql } | ConvertTo-Json -Depth 3
-Write-Log "Posting flat WIQL (iteration UNDER '$iterPath', since $SinceDateYmd) ..."
-$flatResp = Invoke-RestMethod -Method Post -Uri $wiqlUrl -Headers $tfsHeaders -Body $flatBody -ContentType 'application/json'
-
-$ids2 = @()
-if ($flatResp.workItems) {
-  $ids2 = $flatResp.workItems | ForEach-Object { $_.id } | Select-Object -Unique
+Write-Log "Posting WIQL B (FULL scope, no date limit)..."
+$respB_full = Invoke-Wiql $qB_full
+$idsB_full  = @()
+if ($respB_full.workItemRelations) {
+  $idsB_full = $respB_full.workItemRelations |
+               Where-Object { $_.source -and $_.target } |
+               ForEach-Object { $_.source.id } |
+               Select-Object -Unique
 }
-Write-Log "Flat WIQL returned $($ids2.Count) IDs (iteration direct)"
+Write-Log "WIQL B (FULL) returned $($idsB_full.Count) parent id(s)."
 
-# Merge IDs from link-based and flat queries
-if (-not $ids)  { $ids  = @() }
-if (-not $ids2) { $ids2 = @() }
+$idsFull = ($idsA_full + $idsB_full) | Sort-Object -Unique
+if ($idsFull -contains 191687) { Write-Log "Sanity: 191687 is in FULL scope TRUE" } else { Write-Log "Sanity: 191687 NOT in FULL scope FALSE" }
 
-$ids = @() + @($ids) + @($ids2)
-$ids = $ids | Select-Object -Unique
+Write-Log "FULL presence scope has $($idsFull.Count) id(s)."
 
-Write-Log "Total unique IDs after merge: $($ids.Count)"
+# ---- Fetch server live IDs for this sprint and compute "missing" ----
+try {
+  $iterNameEnc = [uri]::EscapeDataString($currentIterName)
+  $liveUrl     = "$PublicApiBase/api/iteration/$iterNameEnc/live-ids?types=default"
+  $liveResp    = Invoke-RestMethod -Method Get -Uri $liveUrl -Headers @{ 'x-api-key' = $PublicApiKey }
+  $serverLive  = @()
+  if ($liveResp -and $liveResp.ids) { $serverLive = @($liveResp.ids) }
+  $missingIds  = @()
+  foreach ($id in $idsFull) {
+    if ($serverLive -notcontains ([string]$id)) { $missingIds += $id }
+  }
+  Write-Log ("Backfill: {0} id(s) are missing on server" -f $missingIds.Count)
+} catch {
+  Write-Warning "Could not fetch live IDs from server: $($_.Exception.Message)"; $missingIds = @()
+}
+
+
+# ---- END build FULL presence scope ----
+
+# Choose which IDs to expand: delta if we have any, else full scope
+if ($ids.Count -gt 0) {
+  $expandIds = ($ids + $missingIds) | Sort-Object -Unique
+  $src = ('delta' + ($(if ($missingIds.Count -gt 0) { '+missing' } else { '' })))
+} else {
+  $expandIds = $idsFull
+  $src = 'full'
+}
+Write-Log ("Expanding details for {0} id(s) (source: {1})" -f $expandIds.Count, $src)
+
+
 
 
 # ---------- Expand details in batches ----------
@@ -200,9 +301,10 @@ function Get-WorkItems($idBatch) {
   if (!$idBatch -or $idBatch.Count -eq 0) { return @() }
   $idList = ($idBatch -join ",")
   $fields = @(
-    "System.Id","System.WorkItemType","System.Title","System.State","System.AssignedTo",
-    "System.AreaPath","System.IterationPath","System.ChangedDate","System.Tags"
-  ) -join ","
+  "System.Id","System.WorkItemType","System.Title","System.State","System.AssignedTo",
+  "System.AreaPath","System.IterationPath","System.ChangedDate","System.CreatedDate","System.Tags"
+) -join ","
+
   $url = "$TfsUrl/$Collection/_apis/wit/workitems?ids=$idList&fields=$fields&api-version=2.0"
   Write-Log "Fetching details for IDs: $idList"
   $resp = Invoke-RestMethod -Method Get -Uri $url -Headers $tfsHeaders
@@ -211,8 +313,8 @@ function Get-WorkItems($idBatch) {
 
 $tickets   = @()
 $batchSize = 180
-for ($i = 0; $i -lt $ids.Count; $i += $batchSize) {
-  $batch = $ids[$i..([Math]::Min($i+$batchSize-1, $ids.Count-1))]
+for ($i = 0; $i -lt $expandIds.Count; $i += $batchSize) {
+  $batch = $expandIds[$i..([Math]::Min($i+$batchSize-1, $expandIds.Count-1))]
   $items = Get-WorkItems $batch
   foreach ($it in $items) {
     $f = $it.fields
@@ -233,27 +335,49 @@ for ($i = 0; $i -lt $ids.Count; $i += $batchSize) {
     }
 
     $tickets += [PSCustomObject]@{
-      id            = $f."System.Id"
-      type          = $f."System.WorkItemType"
-      title         = $f."System.Title"
-      state         = $f."System.State"
-      assignedTo    = (Sanitize $assigned)
-      areaPath      = $f."System.AreaPath"
-      iterationPath = $f."System.IterationPath"
-      changedDate   = $f."System.ChangedDate"
-      tags          = $f."System.Tags"
-    }
+  id            = $f."System.Id"
+  type          = $f."System.WorkItemType"
+  title         = $f."System.Title"
+  state         = $f."System.State"
+  assignedTo    = (Sanitize $assigned)
+  areaPath      = $f."System.AreaPath"
+  iterationPath = $f."System.IterationPath"
+  changedDate   = $f."System.ChangedDate"
+  createdDate   = $f."System.CreatedDate"
+  tags          = $f."System.Tags"
+}
+
   }
   $types = $tickets | Select-Object -ExpandProperty type -Unique
   Write-Log ("Types seen: " + ($types -join ", "))
 }
 
 # ---------- Exact-time delta filter (post-expand) ----------
-$exactDelta = $tickets | Where-Object {
-  $dt = $null
-  try { $dt = [datetime]$_.changedDate } catch { $dt = $null }
-  $dt -and $dt.ToUniversalTime() -gt $SinceUtc
+# Items to push this run:
+#  1) changed/created after effective since, OR
+#  2) not present on server yet (missing backfill)
+# safer parsing for ISO timestamps (handles Z and offsets cleanly)
+function AsUtc([object]$v) {
+  if (-not $v) { return $null }
+  try { return ([datetimeoffset]::Parse([string]$v)).UtcDateTime } catch { return $null }
 }
+
+$idsSet = @{}; foreach ($z in $ids) { $idsSet[[string]$z] = $true }  # “in current WIQL delta” set
+
+$exactDelta = $tickets | Where-Object {
+  $idStr = [string]$_.id
+  $isMissing = $missingIds -and ($missingIds.Count -gt 0) -and ($missingIds -contains $idStr)
+  $inDelta  = $idsSet.ContainsKey($idStr)  # always refresh items that WIQL said were touched
+
+  $mdUtc = AsUtc $_.changedDate
+  $cdUtc = AsUtc $_.createdDate
+  $effUtc = if ($mdUtc) { $mdUtc } elseif ($cdUtc) { $cdUtc } else { $null }
+
+  $isMissing -or $inDelta -or ($effUtc -and $effUtc -ge $EffSinceUtc)
+}
+
+
+
 
 # ---------- Push to Public API ----------
 $pushUrl = "$PublicApiBase/api/sync/tickets"
@@ -305,21 +429,51 @@ for ($i = 0; $i -lt $exactDelta.Count; $i += $pushBatchSize) {
 
 Write-Log "All chunks pushed. Total tickets sent: $($exactDelta.Count) (from $($tickets.Count) fetched)"
 
-# ---------- Advance watermark ----------
-$maxChangedUtc = $null
-foreach ($it in $tickets) {
-  $cUtc = $null
-  try { $cUtc = ([datetime]$it.changedDate).ToUniversalTime() } catch { $cUtc = $null }
-  if ($cUtc -and (-not $maxChangedUtc -or $cUtc -gt $maxChangedUtc)) { $maxChangedUtc = $cUtc }
+
+
+
+# ---- Presence sweep: tell the API what is currently in-scope so it can tombstone the rest
+try {
+  $presenceUrl = "$PublicApiBase/api/sync/tickets"
+  $presenceObj = @{
+    source            = 'tfs-agent'
+    tickets           = @()  # no upserts in this call
+    pushedAt          = (Get-Date).ToUniversalTime().ToString('o')
+    presentIds        = ($idsFull | ForEach-Object { [string]$_ })   # <<< use FULL scope here
+    presentIteration  = $currentIterName                              # e.g., "Sprint 2025-400"
+    presentIterationPath  = $currentIterPath   # <<< NEW
+  }
+  $presenceJson  = $presenceObj | ConvertTo-Json -Depth 6
+  $presenceBytes = [Text.Encoding]::UTF8.GetBytes($presenceJson)
+  Write-Log "Posting presence list ($($idsFull.Count) ids) to $presenceUrl ..."
+  $null = Invoke-RestMethod -Method Post -Uri $presenceUrl `
+           -Headers @{ 'x-api-key' = $PublicApiKey; 'Content-Type' = 'application/json; charset=utf-8' } `
+           -Body $presenceBytes
+  Write-Log "Presence sweep: OK"
+} catch {
+  Write-Warning "Presence sweep failed: $($_.Exception.Message)"
 }
 
-if ($maxChangedUtc) {
-  $safeMark = $maxChangedUtc.AddMinutes(-2)
-  if ($safeMark -lt $SinceUtc) { $safeMark = $SinceUtc }
-  Save-LastSyncUtc $safeMark
-  Write-Log "[delta] advanced LastSyncUtc → $($safeMark.ToString('o')) (from newest ChangedDate)"
-} else {
-  # No items came back — still advance to now to avoid re-query loops
-  Save-LastSyncUtc $NowUtc
-  Write-Log "[delta] no items changed; watermark set to now ($($NowUtc.ToString('o')))"
+
+# ---------- Advance watermark ----------
+$maxEffUtc = $null
+foreach ($it in $tickets) {
+  $md = $null; $cd = $null
+  try { $md = ([datetime]$it.changedDate).ToUniversalTime() } catch { $md = $null }
+  try { $cd = ([datetime]$it.createdDate).ToUniversalTime() } catch { $cd = $null }
+  $eff = if ($md) { $md } elseif ($cd) { $cd } else { $null }
+  if ($eff -and (-not $maxEffUtc -or $eff -gt $maxEffUtc)) { $maxEffUtc = $eff }
 }
+
+if ($maxEffUtc) {
+  $safeMark = $maxEffUtc.AddMinutes(-2)
+  if ($safeMark -lt $SinceUtc) { $safeMark = $SinceUtc }
+  if ($safeMark -gt $NowUtc) { $safeMark = $NowUtc }
+
+  Save-LastSyncUtc $safeMark
+  Write-Log "[delta] advanced LastSyncUtc - $($safeMark.ToString('o')) (from newest Changed/Created)"
+} else {
+  # No items came back — keep the previous watermark to avoid missing near-boundary creations
+  Write-Log "[delta] no items changed; watermark UNCHANGED ($($SinceUtc.ToString('o')))"
+}
+
