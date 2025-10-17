@@ -374,7 +374,7 @@ app.post('/api/sync/tickets', async (req, res) => {
 
       // Now mark missing rows (same iteration) as deleted.
       // If idsText is empty, this marks ALL rows in that iteration as deleted.
-      // Prefer exact full path if provided; fall back to name substring
+      // Prefer exact full path if provided; fallback to name substring
       const presentIterationPath = (
         req.body?.presentIterationPath || ''
       ).trim();
@@ -385,7 +385,7 @@ app.post('/api/sync/tickets', async (req, res) => {
         ? `%${presentIteration}%`
         : null;
 
-      // Un-delete all present ids (refresh last_seen_at)
+      // Un-delete present ids
       if (idsText.length > 0) {
         await client.query(
           `UPDATE tickets
@@ -395,7 +395,7 @@ app.post('/api/sync/tickets', async (req, res) => {
         );
       }
 
-      // Mark missing rows as deleted, scoped by path if possible, else name, else skip
+      // Mark missing as deleted within the scoped iteration
       if (scopeByPath || scopeByName) {
         await client.query(
           `
