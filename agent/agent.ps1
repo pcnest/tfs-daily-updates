@@ -364,17 +364,25 @@ function AsUtc([object]$v) {
 
 $idsSet = @{}; foreach ($z in $ids) { $idsSet[[string]$z] = $true }  # “in current WIQL delta” set
 
-$exactDelta = $tickets | Where-Object {
-  $idStr = [string]$_.id
-  $isMissing = $missingIds -and ($missingIds.Count -gt 0) -and ($missingIds -contains $idStr)
-  $inDelta  = $idsSet.ContainsKey($idStr)  # always refresh items that WIQL said were touched
+# If we’re in FULL scope (i.e., no WIQL delta), push everything to keep DB fields (like state) fresh.
+if ($src -eq 'full') {
+  $exactDelta = $tickets
+} else {
+  $exactDelta = $tickets | Where-Object {
+    $idStr = [string]$_.id
+    $isMissing = $false
+    if ($missingIds -and $missingIds.Count -gt 0) { $isMissing = ($missingIds -contains $idStr) }
 
-  $mdUtc = AsUtc $_.changedDate
-  $cdUtc = AsUtc $_.createdDate
-  $effUtc = if ($mdUtc) { $mdUtc } elseif ($cdUtc) { $cdUtc } else { $null }
+    $md = $null; $cd = $null
+    try { $md = [datetime]$_.changedDate } catch { $md = $null }
+    try { $cd = [datetime]$_.createdDate } catch { $cd = $null }
+    $eff = if ($md) { $md } elseif ($cd) { $cd } else { $null }
 
-  $isMissing -or $inDelta -or ($effUtc -and $effUtc -ge $EffSinceUtc)
+    # Use >= to avoid boundary losses
+    $isMissing -or ($eff -and $eff.ToUniversalTime() -ge $EffSinceUtc)
+  }
 }
+
 
 
 
