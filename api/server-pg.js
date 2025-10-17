@@ -308,6 +308,11 @@ app.post('/api/sync/tickets', async (req, res) => {
     presentIds = [],
     presentIteration = '',
   } = req.body || {};
+  // Require API key
+  const key = req.header('x-api-key') || '';
+  if (!key || key !== API_KEY) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
 
   const client = await pool.connect();
   try {
@@ -369,13 +374,48 @@ app.post('/api/sync/tickets', async (req, res) => {
 
       // Now mark missing rows (same iteration) as deleted.
       // If idsText is empty, this marks ALL rows in that iteration as deleted.
-      await client.query(
-        `UPDATE tickets
+      // Prefer exact full path if provided; fall back to name substring
+      const presentIterationPath = (
+        req.body?.presentIterationPath || ''
+      ).trim();
+      const scopeByPath = presentIterationPath
+        ? `%${presentIterationPath}%`
+        : null;
+      const scopeByName = (presentIteration || '').trim()
+        ? `%${presentIteration}%`
+        : null;
+
+      // Un-delete all present ids (refresh last_seen_at)
+      if (idsText.length > 0) {
+        await client.query(
+          `UPDATE tickets
+       SET deleted = false, last_seen_at = now()
+     WHERE id = ANY($1::text[])`,
+          [idsText]
+        );
+      }
+
+      // Mark missing rows as deleted, scoped by path if possible, else name, else skip
+      if (scopeByPath || scopeByName) {
+        await client.query(
+          `
+    UPDATE tickets
        SET deleted = true
-     WHERE lower(iteration_path) LIKE lower($1)
-       AND ($2::text[] IS NULL OR array_length($2::text[],1) IS NULL OR NOT (id = ANY($2::text[])))`,
-        ['%' + presentIteration + '%', idsText.length ? idsText : null]
-      );
+     WHERE
+       (
+         ($1::text IS NOT NULL AND COALESCE(iteration_path,'') ILIKE $1)
+         OR
+         ($1::text IS NULL AND $2::text IS NOT NULL AND COALESCE(iteration_path,'') ILIKE $2)
+       )
+       AND (
+         $3::text[] IS NULL
+         OR array_length($3::text[],1) IS NULL
+         OR NOT (id = ANY($3::text[]))
+       )
+    `,
+          [scopeByPath, scopeByName, idsText.length ? idsText : null]
+        );
+      }
     }
     // ---- end presence sweep ----
 
@@ -507,48 +547,6 @@ app.get('/api/iteration/:name/live-ids', async (req, res) => {
   const sql = `select id from tickets ${where}`;
   const r = await pool.query(sql, params);
   res.json({ ids: r.rows.map((r) => String(r.id)), count: r.rowCount });
-});
-
-// --- agent pushes tickets
-app.post('/api/sync/tickets', async (req, res) => {
-  const key = req.header('x-api-key');
-  if (!key || key !== API_KEY)
-    return res.status(401).json({ error: 'Unauthorized' });
-  const { tickets, pushedAt } = req.body || {};
-  if (!Array.isArray(tickets))
-    return res.status(400).json({ error: 'tickets must be an array' });
-  const client = await pool.connect();
-  try {
-    await client.query('begin');
-    for (const t of tickets) {
-      await client.query(
-        `insert into tickets(id,type,title,state,assigned_to,area_path,iteration_path,changed_date,tags)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-         on conflict (id) do update set
-           type=excluded.type, title=excluded.title, state=excluded.state, assigned_to=excluded.assigned_to,
-           area_path=excluded.area_path, iteration_path=excluded.iteration_path,
-           changed_date=excluded.changed_date, tags=excluded.tags`,
-        [
-          String(t.id),
-          t.type || '',
-          t.title || '',
-          t.state || '',
-          t.assignedTo || '',
-          t.areaPath || '',
-          t.iterationPath || '',
-          t.changedDate || null,
-          t.tags || '',
-        ]
-      );
-    }
-    await client.query('commit');
-    res.json({ status: 'ok', count: tickets.length, pushedAt });
-  } catch (e) {
-    await client.query('rollback');
-    res.status(500).json({ error: e.message });
-  } finally {
-    client.release();
-  }
 });
 
 // --- tickets query (same filters as before)
@@ -826,10 +824,10 @@ app.get('/api/exports/status', async (req, res) => {
     const stats = await pool.query(
       `
       with pu as (
-        select
-          (updated_at at time zone 'Asia/Singapore')::date as d
-        from progress_updates
-      )
+  select (at at time zone 'Asia/Singapore')::date as d
+  from progress_updates
+)
+
       select
         min(d) as first_day,
         max(d) as last_day,
