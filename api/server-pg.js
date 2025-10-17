@@ -567,6 +567,7 @@ app.get('/api/tickets', async (req, res) => {
     q,
     types,
     includeDeleted,
+    updatesBy,
   } = req.query;
   const clauses = [];
   const params = [];
@@ -620,10 +621,54 @@ app.get('/api/tickets', async (req, res) => {
   const where = clauses.length ? `where ${clauses.join(' and ')}` : '';
 
   // if caller is authenticated, include their latest code/note via LATERAL join
-  const me = await tryGetAuthEmail(req);
+  // Decide whose updates to surface (email):
+  // - PM can pass ?updatesBy=<alias or email>
+  // - otherwise fall back to the requester (if authenticated)
+  const requester = await tryGetAuthEmail(req);
+  let updatesEmail = null;
+
+  if (requester) {
+    // If a target is provided, try to resolve it to an email
+    if (updatesBy && String(updatesBy).trim()) {
+      const ub = String(updatesBy).trim().toLowerCase();
+      if (ub.includes('@')) {
+        // treat as email; optionally validate against tfs_users
+        const chk = await pool.query(
+          `select lower(email) as email from tfs_users
+            where active=true and lower(email)=$1 limit 1`,
+          [ub]
+        );
+        updatesEmail = chk.rowCount ? chk.rows[0].email : ub;
+      } else {
+        // treat as alias (DOMAIN\alias or alias)
+        const aliasOnly = normId(ub);
+        const map = await pool.query(
+          `select lower(email) as email from tfs_users
+             where active=true
+               and lower(regexp_replace(alias,'^.*\\\\','')) = $1
+             limit 1`,
+          [aliasOnly]
+        );
+        if (map.rowCount) updatesEmail = map.rows[0].email;
+      }
+    }
+
+    // PMs may view others; non-PMs are limited to themselves
+    if (updatesEmail && updatesEmail !== requester) {
+      const roleRow = await pool.query(
+        'select role from users where email=$1 limit 1',
+        [requester]
+      );
+      const isPM = roleRow.rows[0]?.role === 'pm';
+      if (!isPM) updatesEmail = requester;
+    }
+
+    if (!updatesEmail) updatesEmail = requester;
+  }
+
   let sql, rows;
-  if (me) {
-    params.push(me); // $i for email in the lateral
+  if (updatesEmail) {
+    params.push(updatesEmail); // $i for email in the lateral
     const emailParam = `$${i++}`;
 
     sql = `
