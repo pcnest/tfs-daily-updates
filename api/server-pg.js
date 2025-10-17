@@ -649,7 +649,19 @@ app.get('/api/tickets', async (req, res) => {
              limit 1`,
           [aliasOnly]
         );
-        if (map.rowCount) updatesEmail = map.rows[0].email;
+        if (map.rowCount && map.rows[0].email) {
+          updatesEmail = map.rows[0].email;
+        } else {
+          // fallback: find a signed-up user whose email local-part matches the alias
+          const u2 = await pool.query(
+            `select lower(email) as email
+              from users
+             where lower(split_part(email,'@',1)) = $1
+             limit 1`,
+            [aliasOnly]
+          );
+          if (u2.rowCount) updatesEmail = u2.rows[0].email;
+        }
       }
     }
 

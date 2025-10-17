@@ -1012,7 +1012,8 @@
               var opt = document.createElement('option');
               // value = alias; label = Display Name (alias) <email>
               opt.value = (m.alias || '').trim();
-              if (m.email) opt.setAttribute('data-email', String(m.email).trim().toLowerCase());
+              // if (m.email) opt.setAttribute('data-email', String(m.email).trim().toLowerCase());
+              if (m.email) opt.setAttribute('data-email', (m.email || '').toLowerCase());
               var label = m.display_name ? m.display_name : (m.alias || '');
               var extra = [];
               if (m.alias) extra.push(m.alias);
@@ -1048,16 +1049,25 @@
           tbody.appendChild(tr);
         }
         var url = new URL((API || location.origin) + "/api/tickets");
-        if (assigned && assigned.value.trim()) url.searchParams.set("assignedTo", assigned.value.trim());
-        if (q && q.value.trim()) url.searchParams.set("q", q.value.trim());
+        // if (assigned && assigned.value.trim()) url.searchParams.set("assignedTo", assigned.value.trim());
+        if (assigned && assigned.value.trim()) {
+          url.searchParams.set("assignedTo", assigned.value.trim());
+          // PM view: also ask the API for THIS dev’s latest code/note per ticket
+          if (window.__role === 'pm') {
+            var opt = assigned.options[assigned.selectedIndex];
+            var em = opt && opt.getAttribute('data-email');
+            var by = (em || assigned.value.trim()); // fallback to alias
+            if (by) url.searchParams.set('updatesBy', by);
+          }
+        }
 
         // PMs: also tell the API whose updates (code/note) to surface
-        if (window.__role === 'pm' && assigned && assigned.tagName &&
-          assigned.tagName.toLowerCase() === 'select' && assigned.value.trim()) {
-          var selOpt = assigned.options[assigned.selectedIndex];
-          var email = selOpt ? (selOpt.getAttribute('data-email') || '') : '';
-          if (email) url.searchParams.set('updatesBy', email);
-        }
+        // if (window.__role === 'pm' && assigned && assigned.tagName &&
+        //   assigned.tagName.toLowerCase() === 'select' && assigned.value.trim()) {
+        //   var selOpt = assigned.options[assigned.selectedIndex];
+        //   var email = selOpt ? (selOpt.getAttribute('data-email') || '') : '';
+        //   if (email) url.searchParams.set('updatesBy', email);
+        // }
 
         var hdrs = {};
         var tkn = localStorage.getItem("pocToken");
