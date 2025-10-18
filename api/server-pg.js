@@ -26,8 +26,19 @@ const pool = new Pool({
 const EXPORT_DIR = path.join(process.cwd(), 'exports');
 if (!fs.existsSync(EXPORT_DIR)) fs.mkdirSync(EXPORT_DIR, { recursive: true });
 
+// Time zone for "today" calculations (IANA zone, e.g., America/Los_Angeles)
+const APP_TZ = process.env.APP_TZ || 'UTC';
+
 // helpers
 const todayISO = () => new Date().toISOString().slice(0, 10);
+async function todayLocal(pool) {
+  // Returns 'YYYY-MM-DD' based on APP_TZ (DST-safe)
+  const { rows } = await pool.query(
+    `select to_char(timezone($1, now())::date, 'YYYY-MM-DD') as d`,
+    [APP_TZ]
+  );
+  return rows[0].d;
+}
 
 const noteRequiredPrefixes = ['600_', '700_', '800_'];
 async function isNoteRequired(pool, code) {
@@ -41,7 +52,9 @@ async function isNoteRequired(pool, code) {
   return noteRequiredPrefixes.some((p) => String(code).startsWith(p));
 }
 
-const HARD_LOCK = process.env.HARD_LOCK === '1';
+// Not used for enforcement anymore, but keep for feature-flagging UI or future use.
+const HARD_LOCK = (process.env.HARD_LOCK ?? '1') === '1';
+
 const blockerKeywords = (
   process.env.BLOCKER_KEYWORDS ||
   'blocker,blocked,access,credential,env,qa,review pending,dependency,waiting,stuck,timeout,failed,crash'
@@ -104,7 +117,8 @@ function requireSyncKey(req, res, next) {
 
 // Auto-export TSV at day end
 async function exportTodayTSVIfReady() {
-  const date = new Date().toISOString().slice(0, 10);
+  const date = await todayLocal(pool);
+
   const countAll = (
     await pool.query(
       'select count(*)::int c from (select distinct email from progress_updates where date=$1) s',
@@ -767,13 +781,15 @@ app.post('/api/progress', requireAuth, async (req, res) => {
   if (!ticketId || !code)
     return res.status(400).json({ error: 'ticketId and code are required' });
 
-  const date = todayISO();
+  const date = await todayLocal(pool);
+
   const locked = await pool.query(
     'select 1 from progress_locks where email=$1 and date=$2',
     [req.userEmail, date]
   );
-  if (HARD_LOCK && locked.rowCount)
-    return res.status(403).json({ error: 'day already submitted (locked)' });
+  // Always block changes after locking, regardless of env flags.
+  if (locked.rowCount)
+    return res.status(403).json({ error: 'update already submitted (locked)' });
 
   if (await isNoteRequired(pool, code)) {
     if (!note || !String(note).trim())
@@ -813,7 +829,8 @@ async function tryGetAuthEmail(req) {
 
 // --- lock / unlock / lock status
 app.post('/api/updates/lock', requireAuth, async (req, res) => {
-  const date = todayISO();
+  const date = await todayLocal(pool);
+
   await pool.query(
     `insert into progress_locks(email,date,at) values ($1,$2,now())
      on conflict (email,date) do nothing`,
@@ -829,7 +846,8 @@ app.post('/api/updates/unlock', requireAuth, async (req, res) => {
   if (me.rows[0]?.role !== 'pm')
     return res.status(403).json({ error: 'pm only' });
 
-  const date = todayISO();
+  const date = await todayLocal(pool);
+
   const target = (req.body?.email || '').trim().toLowerCase();
   if (!target) return res.status(400).json({ error: 'target email required' });
 
@@ -841,7 +859,8 @@ app.post('/api/updates/unlock', requireAuth, async (req, res) => {
 });
 
 app.get('/api/updates/lock', requireAuth, async (req, res) => {
-  const date = todayISO();
+  const date = await todayLocal(pool);
+
   const r = await pool.query(
     `select 1 from progress_locks where email=$1 and date=$2`,
     [req.userEmail, date]
@@ -851,7 +870,8 @@ app.get('/api/updates/lock', requireAuth, async (req, res) => {
 
 // --- collation (enriched)
 app.get('/api/updates/today', async (_req, res) => {
-  const date = todayISO();
+  const date = await todayLocal(pool);
+
   const updates = await pool.query(
     `select u.ticket_id as "ticketId", u.email, u.code, u.note, u.risk_level as "riskLevel",
             u.impact_area as "impactArea", u.at,
@@ -915,18 +935,19 @@ app.get('/api/exports/status', async (req, res) => {
     const stats = await pool.query(
       `
       with pu as (
-  select (at at time zone 'Asia/Singapore')::date as d
+  select timezone($1, at)::date as d
   from progress_updates
 )
 
       select
-        min(d) as first_day,
-        max(d) as last_day,
-        count(*) filter (where d = (now() at time zone 'Asia/Singapore')::date) as today_count,
-        count(*) filter (where d >= ((now() at time zone 'Asia/Singapore')::date - 6)) as last7_count,
-        count(*) as rows_total
-      from pu
-      `
+  min(d) as first_day,
+  max(d) as last_day,
+  count(*) filter (where d = timezone($1, now())::date) as today_count,
+  count(*) filter (where d >= (timezone($1, now())::date - 6)) as last7_count,
+  count(*) as rows_total
+from pu
+      `,
+      [APP_TZ]
     );
 
     const lastSync = syncRow.rows[0]?.last_sync || null;
@@ -969,18 +990,22 @@ app.get('/api/exports/status', async (req, res) => {
 });
 
 // serve the saved TSV if it's been exported already
-app.get('/api/exports/today', (_req, res) => {
-  const date = todayISO();
-  const file = path.join(EXPORT_DIR, `updates-${date}.tsv`);
-  if (!fs.existsSync(file)) {
-    return res.status(404).json({ error: 'not ready' });
+app.get('/api/exports/today', async (_req, res) => {
+  try {
+    const date = await todayLocal(pool); // <- needs async + pool
+    const file = path.join(EXPORT_DIR, `updates-${date}.tsv`);
+    if (!fs.existsSync(file)) {
+      return res.status(404).json({ error: 'not ready' });
+    }
+    res.setHeader('Content-Type', 'text/tab-separated-values; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="updates-${date}.tsv"`
+    );
+    res.send(fs.readFileSync(file));
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
-  res.setHeader('Content-Type', 'text/tab-separated-values; charset=utf-8');
-  res.setHeader(
-    'Content-Disposition',
-    `attachment; filename="updates-${date}.tsv"`
-  );
-  res.send(fs.readFileSync(file));
 });
 
 // “No updates yet today” (PM signal)
@@ -1039,10 +1064,11 @@ app.get('/api/updates/range', async (req, res) => {
       u.note
     FROM progress_updates u
     JOIN tickets t ON t.id = u.ticket_id
-    WHERE u.at::date BETWEEN $1 AND $2
+    WHERE timezone($3, u.at)::date BETWEEN $1 AND $2
+
     ORDER BY u.at::date DESC, t.assigned_to NULLS LAST, u.ticket_id
   `,
-    [from, to]
+    [from, to, APP_TZ]
   );
 
   res.json({ from, to, items: r.rows, count: r.rowCount });
@@ -1066,10 +1092,10 @@ app.get('/api/updates/range.tsv', async (req, res) => {
       u.note
     FROM progress_updates u
     JOIN tickets t ON t.id = u.ticket_id
-    WHERE u.at::date BETWEEN $1 AND $2
+    WHERE timezone($3, u.at)::date BETWEEN $1 AND $2
     ORDER BY u.at::date DESC, t.assigned_to NULLS LAST, u.ticket_id
   `,
-    [from, to]
+    [from, to, APP_TZ]
   );
 
   function cell(x) {
@@ -1132,7 +1158,8 @@ app.get('/api/updates/blockers', async (_req, res) => {
 
 // --- TSV export
 app.get('/api/updates/today.tsv', async (_req, res) => {
-  const date = todayISO();
+  const date = await todayLocal(pool);
+
   const r = await pool.query(
     `select u.email, u.ticket_id as "ticketId", u.code, u.note,
             t.title, t.state, t.iteration_path as "iterationPath", t.assigned_to as "assignedTo",
