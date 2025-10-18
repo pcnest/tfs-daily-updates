@@ -788,6 +788,26 @@
       // ES5-compatible script (no arrow fns, no optional chaining, no template strings)
       var API = "";
       var tokenKey = "pocToken";
+      // Global lock flag for today
+      window.__lockedToday = false;
+
+      function checkLockStatus() {
+        var tkn = localStorage.getItem('pocToken') || '';
+        if (!tkn) return Promise.resolve(false);
+        return fetch((API || location.origin) + '/api/updates/lock', {
+          headers: { 'Authorization': 'Bearer ' + tkn }
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            window.__lockedToday = !!(js && js.locked);
+            // Hide the Submit section and disable select buttons when locked
+            var sc = byId('submitCard');
+            if (sc) sc.classList.toggle('hidden', window.__lockedToday);
+            if (window.__lockedToday) setSelectButtonsDisabled(true);
+            return window.__lockedToday;
+          })
+          .catch(function () { return false; });
+      }
 
       function byId(id) { return document.getElementById(id); }
 
@@ -872,6 +892,9 @@
         if (ticketsCard) ticketsCard.classList.remove('hidden');
         // if (submitCard) submitCard.classList.remove('hidden');
         if (submitCard) submitCard.classList.toggle('hidden', isPM); // hide for PMs
+        // If dev, fetch lock state and adjust UI
+        if (!isPM) { checkLockStatus(); }
+
         if (pmBox) pmBox.classList.toggle('hidden', !isPM);
 
         if (pmBox) {
@@ -1093,9 +1116,10 @@
                 '<td>' + esc(t.state) + '</td>' +
                 '<td>' + esc(code || '—') + '</td>' +
                 '<td>' + esc(note || '—') + '</td>' +
-                '<td>' + (window.__role === 'pm'
+                '<td>' + ((window.__role === 'pm' || window.__lockedToday)
                   ? ''
                   : '<button class="secondary" onclick="openSPModal(' + Number(t.id) + ')" aria-label="Select ticket ' + esc(t.id) + '">Select</button>') + '</td>';
+
 
 
               tbody.appendChild(tr2);
@@ -1114,7 +1138,12 @@
 
       function openSPModal(id) {
         if (window.__role === 'pm') return; // PMs don’t submit progress
+        if (window.__lockedToday) {
+          setStatus('submitStatus', 'Day is locked. Ask a PM to unlock to change updates.', false);
+          return;
+        }
         var m = byId('spModal'), b = byId('spBackdrop');
+
         if (id != null) byId('tId').value = String(id);
         // ensure note-required hint is correct (HTMX may have just populated options)
         if (window.syncNoteRequirement) syncNoteRequirement();
@@ -1145,6 +1174,8 @@
       function submitProgress() {
         var tkn = token();
         if (!tkn) { setStatus("submitStatus", "Please login first.", false); return; }
+        if (window.__lockedToday) { setStatus("submitStatus", "Update is locked. Ask a PM to unlock.", false); return; }
+
         var ticket = byId("tId").value.trim();
         var code = byId("code").value;
         var note = byId("note").value.trim();
@@ -1184,7 +1215,16 @@
           .then(function (js) {
             if (js.error) setStatus("lockStatus", js.error, false);
             else setStatus("lockStatus", js.locked ? "Update submitted (locked)" : "Not locked", !!js.locked);
-            if (js.locked) { setSelectButtonsDisabled(true); var badgeEl = byId("me").querySelector('.badge'); var txt = badgeEl ? badgeEl.textContent : ''; if (txt === 'PM') { loadToday(); loadBlockers(); loadMissing(); } }
+            if (js.locked) {
+              window.__lockedToday = true;
+              setSelectButtonsDisabled(true);
+              var sc = byId('submitCard'); if (sc) sc.classList.add('hidden');
+              var badgeEl = byId("me").querySelector('.badge');
+              var txt = badgeEl ? badgeEl.textContent : '';
+              if (txt === 'PM') { loadToday(); loadBlockers(); loadMissing(); }
+            }
+
+
           })
           .catch(function () { setStatus("lockStatus", "Network error", false); });
       }
@@ -1608,6 +1648,8 @@
               setRoleUI(js.role || 'dev');
               refreshIterationBadge();
               setStatus("loginStatus", "Logged in.");
+              // Ensure we reflect today’s lock state on initial load
+              checkLockStatus();
             })
             .catch(function () { localStorage.removeItem(tokenKey); });
         }
