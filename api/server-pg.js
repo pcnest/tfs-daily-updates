@@ -6,6 +6,7 @@ import crypto from 'crypto';
 import { Pool } from 'pg';
 import fs from 'fs';
 import path from 'path';
+import OpenAI from 'openai';
 
 dotenv.config();
 
@@ -15,6 +16,215 @@ app.use(cors());
 
 const API_KEY = process.env.API_KEY || 'CHANGE_ME_API_KEY';
 const PORT = process.env.PORT || 8080;
+
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const openai = process.env.OPENAI_API_KEY
+  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
+  : null;
+
+function parseOpenAIJson(resp) {
+  try {
+    if (
+      resp &&
+      typeof resp.output_text === 'string' &&
+      resp.output_text.trim()
+    ) {
+      return JSON.parse(resp.output_text);
+    }
+    const parts = resp?.output?.[0]?.content || [];
+    for (const p of parts) {
+      if (p?.type === 'output_text' && p?.text) return JSON.parse(p.text);
+      if (p?.type === 'json' && p?.json && typeof p.json === 'object')
+        return p.json;
+    }
+  } catch (_) {}
+  return null;
+}
+
+// Strict JSON schema for suggestions
+const TriageSchema = {
+  name: 'TriageList',
+  strict: false, // IMPORTANT: keeps optional fields optional (prevents “Missing 'slipRisk'”)
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      suggestions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string' },
+            risk: { type: 'integer', minimum: 1, maximum: 5 },
+            slipRisk: { type: 'string', enum: ['low', 'medium', 'high'] },
+            reason: { type: 'string' },
+            next_steps: {
+              type: 'array',
+              items: { type: 'string' },
+              minItems: 1,
+            },
+            chase_message: { type: 'string' },
+            suggest_code: { type: 'string' },
+            owner_hint: { type: 'string' },
+          },
+          required: ['id', 'risk', 'next_steps'],
+        },
+      },
+    },
+    required: ['suggestions'],
+  },
+};
+
+async function aiTriage(items) {
+  if (!openai)
+    throw Object.assign(new Error('AI not configured'), { status: 501 });
+
+  // Keep payload tight; cap at 10 for latency/cost
+  const now = Date.now();
+
+  function daysSince(dt) {
+    const t = dt ? Date.parse(dt) : NaN;
+    return Number.isFinite(t)
+      ? Math.max(0, Math.round((now - t) / 86400000))
+      : null;
+  }
+
+  function sevScore(s) {
+    const m = String(s || '').toLowerCase();
+    return m === 'critical'
+      ? 4
+      : m === 'high'
+      ? 3
+      : m === 'medium'
+      ? 2
+      : m === 'low'
+      ? 1
+      : 0; // unknown/blank
+  }
+
+  // pull (first) x.y.z pattern as our releaseTag hint
+  function releaseFromTags(tags) {
+    const m = String(tags || '').match(/\b\d+\.\d+\.\d+\b/);
+    return m ? m[0] : null;
+  }
+
+  const trimmed = (items || []).slice(0, 10).map((r) => {
+    const created = r.createdDate || null;
+    const stateChanged = r.stateChangeDate || null;
+
+    const ageDays = daysSince(created);
+    const timeInStateDays = daysSince(stateChanged);
+
+    const priority = Number.isFinite(+r.priority) ? +r.priority : null;
+    const priorityBucket =
+      priority === 1
+        ? 'P1'
+        : priority === 2
+        ? 'P2'
+        : priority === 3
+        ? 'P3'
+        : priority === 4
+        ? 'P4'
+        : 'unknown';
+
+    const severity = r.severity || null;
+    const severityScore = sevScore(severity);
+
+    const relatedLinkCount = Number.isFinite(+r.relatedLinkCount)
+      ? +r.relatedLinkCount
+      : 0;
+
+    return {
+      // identity + basic context
+      id: String(r.ticketId || r.id || ''),
+      title: String(r.title || ''),
+      type: String(r.type || ''),
+      state: String(r.state || ''),
+
+      // blocker context from progress row
+      code: String(r.code || ''),
+      note: String(r.note || ''),
+
+      // assignment + project context
+      assignedTo: String(r.assignedTo || ''),
+      iterationPath: String(r.iterationPath || ''),
+      areaPath: String(r.areaPath || ''),
+      tags: String(r.tags || ''),
+
+      // richer raw fields (nullable)
+      priority,
+      severity,
+      createdDate: created,
+      changedDate: r.changedDate || null,
+      stateChangeDate: stateChanged,
+      foundInBuild: r.foundInBuild || null,
+      integratedInBuild: r.integratedInBuild || null,
+      relatedLinkCount,
+      effort: r.effort != null && r.effort !== '' ? String(r.effort) : null,
+
+      // derived
+      ageDays,
+      timeInStateDays,
+      priorityBucket,
+      severityScore,
+      releaseTag: releaseFromTags(r.tags),
+    };
+  });
+
+  const system = `You are a senior triage PM/SE embedded in a TFS stand-up tool.
+You receive per-ticket context including raw fields (priority 1–4, severity, createdDate, stateChangeDate,
+relatedLinkCount, effort, tags, foundInBuild, integratedInBuild) and derived fields
+(ageDays, timeInStateDays, priorityBucket, severityScore, releaseTag).
+Return concrete, small next steps to UNBLOCK items.
+
+Heuristics:
+- Older items (ageDays) and long timeInStateDays increase slip risk.
+- Higher priorityBucket (P1/P2) and severityScore deserve faster escalation.
+- relatedLinkCount > 0 hints dependency/coordination risk: consider nudging owners of linked tickets.
+- If releaseTag or found/integrated build data is present, mention that context in the recommendation.
+- Keep outputs brief, practical, copy-paste ready, using team's progress codes when clear:
+  300_04 (collaborating with QA), 500_01 (ready for QA), 700_xx (investigation), 800_03 (waiting on X / dependency).`;
+
+  const user = `Analyze these blockers and produce suggestions:
+${JSON.stringify(trimmed)}`;
+  if (process.env.OPENAI_DEBUG === '1') {
+    console.log(
+      '[ai/triage] request.args',
+      JSON.stringify({
+        model: OPENAI_MODEL,
+        inputRoleCount: 2,
+        textFormatKeys: Object.keys({
+          name: TriageSchema.name,
+          schema: TriageSchema.schema,
+          strict: !!TriageSchema.strict,
+        }),
+      })
+    );
+  }
+
+  const resp = await openai.responses.create({
+    model: OPENAI_MODEL,
+    input: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    text: {
+      format: {
+        // ✅ ALL FOUR KEYS:
+        type: 'json_schema', // <— REQUIRED
+        name: TriageSchema.name, // 'TriageList'
+        schema: TriageSchema.schema, // your JSON Schema object
+        strict: !!TriageSchema.strict, // false
+      },
+    },
+    max_output_tokens: 1200,
+  });
+
+  const js = parseOpenAIJson(resp);
+  if (!js || !Array.isArray(js.suggestions)) throw new Error('bad_ai_response');
+  return js.suggestions;
+}
 
 // DB pool
 const pool = new Pool({
@@ -337,33 +547,70 @@ app.post('/api/sync/tickets', async (req, res) => {
       const seenAt = pushedAt || new Date().toISOString();
       await client.query(
         `
-        INSERT INTO tickets (
-          id, type, title, state, assigned_to, area_path, iteration_path,
-          changed_date, tags, last_seen_at, deleted
-        )
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false)
-        ON CONFLICT (id) DO UPDATE SET
-          type           = EXCLUDED.type,
-          title          = EXCLUDED.title,
-          state          = EXCLUDED.state,
-          assigned_to    = EXCLUDED.assigned_to,
-          area_path      = EXCLUDED.area_path,
-          iteration_path = EXCLUDED.iteration_path,
-          changed_date   = EXCLUDED.changed_date,
-          tags           = EXCLUDED.tags,
-          last_seen_at   = EXCLUDED.last_seen_at,
-          deleted        = false
-        `,
+  INSERT INTO tickets (
+    id, type, title, state, reason,
+    priority, severity,
+    assigned_to, area_path, iteration_path,
+    created_date, changed_date, state_change_date,
+    tags, found_in_build, integrated_in_build,
+    related_link_count, effort,
+    last_seen_at, deleted
+  )
+  VALUES (
+    $1,$2,$3,$4,$5,
+    $6,$7,
+    $8,$9,$10,
+    $11,$12,$13,
+    $14,$15,$16,
+    $17,$18,
+    $19,false
+  )
+  ON CONFLICT (id) DO UPDATE SET
+    type                = EXCLUDED.type,
+    title               = EXCLUDED.title,
+    state               = EXCLUDED.state,
+    reason              = EXCLUDED.reason,
+    priority            = EXCLUDED.priority,
+    severity            = EXCLUDED.severity,
+    assigned_to         = EXCLUDED.assigned_to,
+    area_path           = EXCLUDED.area_path,
+    iteration_path      = EXCLUDED.iteration_path,
+    created_date        = EXCLUDED.created_date,
+    changed_date        = EXCLUDED.changed_date,
+    state_change_date   = EXCLUDED.state_change_date,
+    tags                = EXCLUDED.tags,
+    found_in_build      = EXCLUDED.found_in_build,
+    integrated_in_build = EXCLUDED.integrated_in_build,
+    related_link_count  = EXCLUDED.related_link_count,
+    effort              = EXCLUDED.effort,
+    last_seen_at        = EXCLUDED.last_seen_at,
+    deleted             = false
+  `,
         [
           String(t.id),
           t.type || '',
           t.title || '',
           t.state || '',
+          t.reason || '', // NEW
+
+          Number.isFinite(+t.priority) ? +t.priority : null, // NEW
+          t.severity || null, // NEW
+
           t.assignedTo || '',
           t.areaPath || '',
           t.iterationPath || '',
+
+          t.createdDate || null, // NEW
           t.changedDate || null,
+          t.stateChangeDate || null, // NEW
+
           t.tags || '',
+          t.foundInBuild || null, // NEW
+          t.integratedInBuild || null, // NEW
+
+          Number.isFinite(+t.relatedLinkCount) ? +t.relatedLinkCount : 0, // NEW
+          t.effort != null && t.effort !== '' ? String(t.effort) : null, // NEW
+
           seenAt,
         ]
       );
@@ -1251,6 +1498,80 @@ app.get('/api/ui/progress-codes/options', async (_req, res) => {
       html += `</optgroup>`;
     });
   res.send(html);
+});
+
+// --- AI triage for blockers (per-row or bulk). PM section already gated in UI, but require auth.
+app.post('/api/ai/triage', requireAuth, async (req, res) => {
+  try {
+    if (!openai) return res.status(501).json({ error: 'ai_not_configured' });
+
+    // Accept either an explicit list of items (preferred)
+    // or, if none provided, fall back to "today blockers" like /api/updates/blockers.
+    let items = Array.isArray(req.body?.items) ? req.body.items : null;
+
+    if (!items) {
+      const date = todayISO();
+      const r = await pool.query(
+        `select u.ticket_id as "ticketId", u.code, u.note, u.at,
+       t.title, t.state, t.type,
+       t.assigned_to         as "assignedTo",
+       t.iteration_path      as "iterationPath",
+       t.area_path           as "areaPath",
+       t.tags,
+       t.priority,
+       t.severity,
+       t.created_date        as "createdDate",
+       t.changed_date        as "changedDate",
+       t.state_change_date   as "stateChangeDate",
+       t.found_in_build      as "foundInBuild",
+       t.integrated_in_build as "integratedInBuild",
+       t.related_link_count  as "relatedLinkCount",
+       t.effort
+  from progress_updates u
+  left join tickets t on t.id = u.ticket_id
+ where u.date = $1
+`,
+        [date]
+      );
+      const isBlockerCode = (c) => c && /^(600|700|800)_/.test(String(c));
+      const hits = [];
+      for (const x of r.rows) {
+        const txt = `${x.code} ${x.note || ''}`.toLowerCase();
+        const kw = blockerKeywords.find((k) => k && txt.includes(k));
+        if (isBlockerCode(x.code) || kw)
+          hits.push({
+            ...x,
+            keyword: isBlockerCode(x.code) ? 'code' : kw || '',
+          });
+      }
+      const byTicket = new Map();
+      for (const h of hits) {
+        const prev = byTicket.get(String(h.ticketId));
+        if (!prev || h.at > prev.at) byTicket.set(String(h.ticketId), h);
+      }
+      items = Array.from(byTicket.values());
+    }
+
+    const suggestions = await aiTriage(items);
+    res.json({ status: 'ok', count: suggestions.length, suggestions });
+  } catch (e) {
+    const http = e?.status || e?.response?.status || 500;
+
+    console.error('[ai/triage] OpenAI error:', {
+      status: http,
+      code: e?.code,
+      message: e?.message,
+      data: e?.response?.data,
+      raw: e?.error || null,
+    });
+
+    return res.status(http).json({
+      status: 'error',
+      error: e?.message || 'server_error',
+      code: e?.code || null,
+      openai: e?.response?.data || e?.error || null,
+    });
+  }
 });
 
 // static web

@@ -14,6 +14,7 @@ $Team          = "Enterprise Software Team"
 $Pat           = "x34cxkcnvd7zuxw6egqyg2yyf6frsbw3vjjnmh37xgar2aopxwqa"   # Read-only PAT is recommended
 $WiqlFile      = ".\sample.wiql"            # WIQL file path (relative to this script)
 $PublicApiBase = "https://tfs-daily-api.onrender.com"
+# $PublicApiBase = "http://localhost:8080"
 $PublicApiKey  = "3bded27a3b75ee54e2ae2da4293687c26172d3f551e3584e343c71d399e4054f"
 # --------------------------------------------
 
@@ -300,12 +301,30 @@ Write-Log ("Expanding details for {0} id(s) (source: {1})" -f $expandIds.Count, 
 function Get-WorkItems($idBatch) {
   if (!$idBatch -or $idBatch.Count -eq 0) { return @() }
   $idList = ($idBatch -join ",")
-  $fields = @(
-  "System.Id","System.WorkItemType","System.Title","System.State","System.AssignedTo",
-  "System.AreaPath","System.IterationPath","System.ChangedDate","System.CreatedDate","System.Tags"
-) -join ","
+    $fields = @(
+    "System.Id",
+    "System.WorkItemType",
+    "System.Title",
+    "System.State",
+    "System.Reason",
+    "Microsoft.VSTS.Common.Priority",
+    "Microsoft.VSTS.Common.Severity",
+    "System.AssignedTo",
+    "System.AreaPath",
+    "System.IterationPath",
+    "System.CreatedDate",
+    "System.ChangedDate",
+    "Microsoft.VSTS.Common.StateChangeDate",
+    "System.Tags",
+    "Microsoft.VSTS.Build.FoundIn",
+    "Microsoft.VSTS.Build.IntegrationBuild",
+    "Microsoft.VSTS.Scheduling.Effort"
+  ) -join ","
 
-  $url = "$TfsUrl/$Collection/_apis/wit/workitems?ids=$idList&fields=$fields&api-version=2.0"
+  # Fetch ALL fields + relations (TFS 2017 forbids fields= with $expand=Relations)
+$url = "$TfsUrl/$Collection/_apis/wit/workitems?ids=$idList&api-version=2.0&`$expand=Relations"
+
+
   Write-Log "Fetching details for IDs: $idList"
   $resp = Invoke-RestMethod -Method Get -Uri $url -Headers $tfsHeaders
   return $resp.value
@@ -317,37 +336,55 @@ for ($i = 0; $i -lt $expandIds.Count; $i += $batchSize) {
   $batch = $expandIds[$i..([Math]::Min($i+$batchSize-1, $expandIds.Count-1))]
   $items = Get-WorkItems $batch
   foreach ($it in $items) {
-    $f = $it.fields
-    $assigned = ""
-    $ass = $f.'System.AssignedTo'
-    if ($null -ne $ass) {
-      if ($ass -is [string]) { $assigned = $ass }
-      elseif ($ass -is [hashtable]) {
-        if ($ass['uniqueName'])      { $assigned = [string]$ass['uniqueName'] }
-        elseif ($ass['displayName']) { $assigned = [string]$ass['displayName'] }
-        elseif ($ass['name'])        { $assigned = [string]$ass['name'] }
-      } else {
-        if ($ass.PSObject.Properties['uniqueName'])      { $assigned = [string]$ass.uniqueName }
-        elseif ($ass.PSObject.Properties['displayName']) { $assigned = [string]$ass.displayName }
-        elseif ($ass.PSObject.Properties['name'])        { $assigned = [string]$ass.name }
-        else { $assigned = [string]$ass }
-      }
-    }
+  $f = $it.fields
 
-    $tickets += [PSCustomObject]@{
-  id            = $f."System.Id"
-  type          = $f."System.WorkItemType"
-  title         = $f."System.Title"
-  state         = $f."System.State"
-  assignedTo    = (Sanitize $assigned)
-  areaPath      = $f."System.AreaPath"
-  iterationPath = $f."System.IterationPath"
-  changedDate   = $f."System.ChangedDate"
-  createdDate   = $f."System.CreatedDate"
-  tags          = $f."System.Tags"
+  # --- assignedTo normalization (keep your existing logic) ---
+  $assigned = ""
+  $ass = $f.'System.AssignedTo'
+  if ($null -ne $ass) {
+    if ($ass -is [string]) { $assigned = $ass }
+    elseif ($ass -is [hashtable]) {
+      if ($ass['uniqueName'])      { $assigned = [string]$ass['uniqueName'] }
+      elseif ($ass['displayName']) { $assigned = [string]$ass['displayName'] }
+      elseif ($ass['name'])        { $assigned = [string]$ass['name'] }
+    } else {
+      if ($ass.PSObject.Properties['uniqueName'])      { $assigned = [string]$ass.uniqueName }
+      elseif ($ass.PSObject.Properties['displayName']) { $assigned = [string]$ass.displayName }
+      elseif ($ass.PSObject.Properties['name'])        { $assigned = [string]$ass.name }
+      else { $assigned = [string]$ass }
+    }
+  }
+
+  # --- relations → relatedLinkCount (exclude Hierarchy) ---
+  $rels = @($it.relations)
+  $related = $rels | Where-Object {
+    $_.rel -like 'System.LinkTypes.*' -and $_.rel -notmatch 'Hierarchy'
+  }
+  $relatedLinkCount = @($related).Count
+
+  # --- capture all finalized raw fields ---
+  $tickets += [PSCustomObject]@{
+    id                 = $f."System.Id"
+    type               = $f."System.WorkItemType"
+    title              = $f."System.Title"
+    state              = $f."System.State"
+    reason             = $f."System.Reason"
+    priority           = $f."Microsoft.VSTS.Common.Priority"
+    severity           = $f."Microsoft.VSTS.Common.Severity"         # Bugs only
+    assignedTo         = (Sanitize $assigned)
+    areaPath           = $f."System.AreaPath"
+    iterationPath      = $f."System.IterationPath"
+    createdDate        = $f."System.CreatedDate"
+    changedDate        = $f."System.ChangedDate"
+    stateChangeDate    = $f."Microsoft.VSTS.Common.StateChangeDate"
+    tags               = $f."System.Tags"
+    foundInBuild       = $f."Microsoft.VSTS.Build.FoundIn"
+    integratedInBuild  = $f."Microsoft.VSTS.Build.IntegrationBuild"
+    relatedLinkCount   = $relatedLinkCount
+    effort             = $f."Microsoft.VSTS.Scheduling.Effort"       # PBIs only
+  }
 }
 
-  }
   $types = $tickets | Select-Object -ExpandProperty type -Unique
   Write-Log ("Types seen: " + ($types -join ", "))
 }
@@ -392,24 +429,37 @@ $pushUrl = "$PublicApiBase/api/sync/tickets"
 $headers = @{ 'x-api-key' = $PublicApiKey; 'Content-Type' = 'application/json; charset=utf-8' }
 $pushBatchSize = 200
 
+function ToIso([object]$v) {
+  if (-not $v) { return $null }
+  try { return (Get-Date $v).ToUniversalTime().ToString("o") } catch { return $null }
+}
+
+
 for ($i = 0; $i -lt $exactDelta.Count; $i += $pushBatchSize) {
   $end   = [Math]::Min($i + $pushBatchSize - 1, $exactDelta.Count - 1)
   $chunk = $exactDelta[$i..$end]
 
-  $payloadTickets = @()
-  foreach ($t in $chunk) {
-    $payloadTickets += [PSCustomObject]@{
-      id            = [string]$t.id
-      type          = Sanitize $t.type
-      title         = Sanitize $t.title
-      state         = Sanitize $t.state
-      assignedTo    = Sanitize $t.assignedTo
-      areaPath      = Sanitize $t.areaPath
-      iterationPath = Sanitize $t.iterationPath
-      changedDate   = (Get-Date $t.changedDate).ToUniversalTime().ToString("o")
-      tags          = Sanitize $t.tags
-    }
-  }
+  $payloadTickets += [PSCustomObject]@{
+  id                 = [string]$t.id
+  type               = Sanitize $t.type
+  title              = Sanitize $t.title
+  state              = Sanitize $t.state
+  reason             = Sanitize $t.reason
+  priority           = $t.priority
+  severity           = Sanitize $t.severity
+  assignedTo         = Sanitize $t.assignedTo
+  areaPath           = Sanitize $t.areaPath
+  iterationPath      = Sanitize $t.iterationPath
+  createdDate        = ToIso $t.createdDate
+  changedDate        = ToIso $t.changedDate
+  stateChangeDate    = ToIso $t.stateChangeDate
+  tags               = Sanitize $t.tags
+  foundInBuild       = Sanitize $t.foundInBuild
+  integratedInBuild  = Sanitize $t.integratedInBuild
+  relatedLinkCount   = $t.relatedLinkCount
+  effort             = $t.effort
+}
+
 
   $obj = @{ source = 'tfs-agent'; tickets = $payloadTickets; pushedAt = (Get-Date).ToUniversalTime().ToString('o') }
   $json  = $obj | ConvertTo-Json -Depth 8
