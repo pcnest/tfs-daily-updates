@@ -5,12 +5,14 @@
   "type": "module",
   "main": "server.js",
   "scripts": {
-    "start": "node server-pg.js"
+    "start": "node server-pg.js",
+    "test:triage": "node --test ai/triage.test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "openai": "^6.6.0",
     "pg": "^8.16.3"
   }
 }
