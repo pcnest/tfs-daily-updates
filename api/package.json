@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server-pg.js",
-    "test:triage": "node --test ai/triage.test.js"
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "dependencies": {
     "cors": "^2.8.5",
