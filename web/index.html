@@ -110,6 +110,12 @@
       color: var(--fg);
     }
 
+    button.small {
+      padding: 4px 8px;
+      font-size: 12px;
+    }
+
+
     button[disabled],
     a[disabled] {
       opacity: .6;
@@ -238,12 +244,54 @@
       flex-wrap: wrap;
     }
 
+    /* Keep the snapshots controls on one row and let the select expand */
+    .row>.snapshots-toolbar {
+      width: 100%;
+      /* make the flex container fill the grid cell */
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: nowrap;
+      /* single row */
+    }
+
+    #snapDev {
+      flex: 1 1 0%;
+      /* grow + shrink; 0% basis makes it actually expand */
+      width: 100%;
+      /* fill the grown flex item */
+      min-width: 260px;
+      /* your floor */
+      max-width: 100%;
+    }
+
+    .snapshots-toolbar>button {
+      flex: 0 0 auto;
+      /* buttons keep natural size */
+      white-space: nowrap;
+    }
+
+    /* Optional: allow wrapping on very small screens */
+    @media (max-width: 640px) {
+      .row>.snapshots-toolbar {
+        flex-wrap: wrap;
+      }
+
+      #snapDev {
+        flex-basis: 100%;
+      }
+    }
+
+
+    /* override global select { width:100% } */
+
     /* PM sections grid */
     .section-grid {
       display: grid;
       grid-template-columns: 1fr;
       gap: 16px;
     }
+
 
 
     .card.thin {
@@ -275,7 +323,6 @@
     }
 
     .modal-card {
-      /* width: min(720px, 96vw); */
       width: min(50vw, 96vw);
       background: var(--card);
       border: 1px solid var(--border);
@@ -320,7 +367,6 @@
       font-weight: 600;
       background: #e5e7eb;
       color: #111827;
-      /* neutral gray */
       vertical-align: baseline;
     }
 
@@ -329,19 +375,15 @@
       color: #ffffff;
     }
 
-    /* green */
     .badge.muted {
       background: #9ca3af;
       color: #111827;
     }
 
-    /* gray */
     .badge.off {
       background: #ef4444;
       color: #ffffff;
     }
-
-    /* red (DB offline) */
 
     /* Code family badges */
     .badge.code-100,
@@ -357,25 +399,20 @@
       color: #ffffff;
     }
 
-    /* done */
     .badge.code-600 {
       background: #f59e0b;
       color: #111827;
     }
 
-    /* challenge */
     .badge.code-700 {
       background: #eab308;
       color: #111827;
     }
 
-    /* investigation */
     .badge.code-800 {
       background: #ef4444;
       color: #ffffff;
     }
-
-    /* delay */
 
     /* Desktop: PM grid in 2 columns */
     @media (min-width: 1024px) {
@@ -391,12 +428,10 @@
       z-index: 1;
     }
 
-    /* PM: two-column split inside a card */
     /* PM: two equal-width columns */
     .pm-2col {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      /* equal widths */
       gap: 16px;
       align-items: start;
     }
@@ -405,22 +440,16 @@
       min-width: 0;
     }
 
-    /* prevent overflow/scrolling */
-
     @media (max-width: 900px) {
       .pm-2col {
         grid-template-columns: 1fr;
       }
-
-      /* stack on small screens */
     }
 
-    /* align toolbar content to the right inside its grid cell */
     .toolbar.right {
       justify-content: flex-end;
     }
 
-    /* Two equal-width fields inside the right cell */
     .grid-2 {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -428,10 +457,6 @@
       align-items: center;
     }
 
-    /* .field label {
-      display: block;
-      margin-bottom: 4px;
-    } */
     .field {
       display: flex;
       align-items: center;
@@ -448,7 +473,6 @@
       }
     }
 
-    /* Pre-Meeting Updates: compact cards per user, 2-up on wide screens */
     .pre-list {
       display: grid;
       gap: 14px;
@@ -527,6 +551,47 @@
       border-radius: 999px;
       border: 1px solid var(--border);
       background: var(--card);
+    }
+
+    /* --- NEW: AI risk chips --- */
+    .badge.risk-1 {
+      background: #d1fae5;
+      color: #065f46;
+    }
+
+    .badge.risk-2 {
+      background: #bfdbfe;
+      color: #1e3a8a;
+    }
+
+    .badge.risk-3 {
+      background: #fde68a;
+      color: #78350f;
+    }
+
+    .badge.risk-4 {
+      background: #fca5a5;
+      color: #7f1d1d;
+    }
+
+    .badge.risk-5 {
+      background: #ef4444;
+      color: #ffffff;
+    }
+
+    .badge.slip-high {
+      background: #ef4444;
+      color: #ffffff;
+    }
+
+    .badge.slip-medium {
+      background: #f59e0b;
+      color: #111827;
+    }
+
+    .badge.slip-low {
+      background: #10b981;
+      color: #ffffff;
     }
   </style>
 </head>
@@ -610,12 +675,7 @@
 
         </div>
       </section>
-
-
-
     </section>
-
-
 
     <section id="pm" class="card hidden" data-role="pm-only" aria-labelledby="pmHeader">
       <div class="section-grid">
@@ -627,39 +687,12 @@
 
         <!-- (2) Who hasn't updated yet -->
         <section class="card thin" aria-labelledby="missingHeader">
-          <div class="pm-2col">
-            <!-- LEFT: Who hasn't updated -->
-            <div>
-
-              <h3 id="missingHeader">Who hasn't updated yet</h3>
-
-
-
-              <div id="missing"></div>
-              <div class="toolbar">
-                <button onclick="loadMissing()">Refresh</button>
-              </div>
-            </div>
-
-            <!-- RIGHT: Unlock a user -->
-            <div>
-              <h3 id="unlockHeader">Unlock a user</h3>
-              <div class="row">
-                <label for="unlockEmail">User email</label>
-                <input id="unlockEmail" placeholder="dev@company.com" />
-              </div>
-              <div class="row">
-                <div></div>
-                <div class="toolbar">
-                  <button onclick="pmUnlock()">Unlock</button>
-                  <span id="unlockStatus" class="status" role="status" aria-live="polite"></span>
-                </div>
-              </div>
-            </div>
+          <h3 id="missingHeader">Who hasn't updated yet</h3>
+          <div id="missing"></div>
+          <div class="toolbar">
+            <button onclick="loadMissing()">Refresh</button>
           </div>
         </section>
-
-
 
 
         <!-- Report -->
@@ -674,9 +707,6 @@
             </div>
           </div>
 
-          <!-- From/To side-by-side -->
-
-
           <div class="grid-2">
             <div class="field">
               <label for="repFrom">From</label>
@@ -685,6 +715,20 @@
             <div class="field">
               <label for="repTo">To</label>
               <input id="repTo" type="date" />
+            </div>
+          </div>
+
+          <!-- Developer Snapshots -->
+          <div class="row" style="margin-top:10px;">
+            <label for="snapDev">Assigned to</label>
+            <div class="toolbar snapshots-toolbar">
+              <select id="snapDev">
+                <option value="all">— Select developer —</option>
+              </select>
+              <button class="secondary" onclick="reloadSnapshotDevList()">Reload</button> <!-- NEW -->
+              <button type="button" onclick="openSnapshots('html')">Preview (HTML)</button>
+              <button type="button" onclick="openSnapshots('pdf')">Download PDF</button>
+              <button type="button" onclick="emailSnapshots()">Email Snapshot</button>
             </div>
           </div>
 
@@ -707,20 +751,8 @@
             </table>
           </div>
 
-          <h4 id="downloadHeader">Pre-Meeting Downloads</h4>
-          <div class="row">
-            <div></div>
-            <div class="toolbar">
-              <a id="tsvLive" href="/api/updates/today.tsv" target="_blank">Download Live TSV</a>
-              <span>·</span>
-              <a id="tsvFinal" href="/api/exports/today" target="_blank">Download Final TSV</a>
-              <span id="exportStatus" class="status" role="status" aria-live="polite"></span>
-            </div>
-          </div>
+
         </section>
-
-
-
 
         <!-- (5) Blockers radar -->
         <section class="card thin" aria-labelledby="blockersHeader">
@@ -728,6 +760,7 @@
             <h3 id="blockersHeader" style="margin:0">Blockers Radar</h3>
             <div class="toolbar right">
               <button onclick="loadBlockers()">Refresh</button>
+              <span id="aiStatus" class="status" role="status" aria-live="polite"></span>
             </div>
           </div>
 
@@ -742,15 +775,19 @@
                   <th style="width:100px">Code</th>
                   <th>Note</th>
                   <th style="width:180px">Iteration</th>
+                  <th style="width:110px">AI</th>
                 </tr>
               </thead>
               <tbody></tbody>
             </table>
+            <div id="triagePanel" class="card thin hidden" aria-labelledby="triageHeader" style="margin-top:12px;">
+              <h3 id="triageHeader" style="margin:0">AI Triage — prioritized next steps</h3>
+              <ol id="triage-list" style="margin-top:10px;"></ol>
+            </div>
           </div>
         </section>
 
       </div>
-
     </section>
 
     <!-- Submit Progress Modal -->
@@ -771,15 +808,28 @@
               placeholder="short, concrete update"></textarea></div>
           <div class="row"><label>&nbsp;</label><small id="noteHint" class="help">A note may be required for some
               codes.</small></div>
+          <!-- AI assist panel (suggested code + results) -->
+          <div class="row">
+            <label>AI Assist</label>
+            <div id="assistPanel">
+              <div id="assistSuggest" class="help">No suggestion yet.</div>
+              <div id="assistResult" style="margin-top:8px;"></div>
+            </div>
+          </div>
+
         </div>
         <div class="modal-foot">
+          <button id="draftChaseBtn" class="secondary" onclick="devAssistFromModal('chase')" disabled>Draft
+            Chase</button>
+          <button id="whatsNextBtn" class="secondary" onclick="devAssistFromModal('next')" disabled>What’s
+            Next?</button>
+
           <button class="secondary" onclick="closeSPModal()">Cancel</button>
           <button id="submitBtn" onclick="submitProgress()">Submit</button>
           <span id="submitStatus" class="status" role="status" aria-live="polite"></span>
         </div>
       </div>
     </div>
-
 
   </div>
 
@@ -823,6 +873,24 @@
       }
 
 
+      function setSnapBusy(on, label) {
+        var btns = Array.prototype.slice.call(
+          document.querySelectorAll('button[onclick^="openSnapshots"]')
+        );
+        btns.forEach(function (b) {
+          if (on) {
+            if (!b.dataset.old) b.dataset.old = b.textContent;
+            b.disabled = true;
+            b.textContent = label || 'Opening…';
+          } else {
+            b.disabled = false;
+            if (b.dataset.old) { b.textContent = b.dataset.old; delete b.dataset.old; }
+          }
+        });
+      }
+
+
+
       function token() { return localStorage.getItem(tokenKey) || ""; }
 
       function esc(s) {
@@ -831,6 +899,130 @@
         return s.replace(/[&<>"']/g, function (c) { return map[c]; });
       }
 
+      // --- report inputs persistence ---
+      function saveReportInputs() {
+        try {
+          var f = (byId('repFrom') && byId('repFrom').value) || '';
+          var t = (byId('repTo') && byId('repTo').value) || '';
+          var d = (byId('snapDev') && byId('snapDev').value) || 'all';
+          localStorage.setItem('pocRepFrom', f);
+          localStorage.setItem('pocRepTo', t);
+          localStorage.setItem('pocSnapDev', d);
+        } catch (_) { }
+      }
+      function restoreReportInputs() {
+        try {
+          var f = localStorage.getItem('pocRepFrom');
+          var t = localStorage.getItem('pocRepTo');
+          if (f && byId('repFrom')) byId('repFrom').value = f;
+          if (t && byId('repTo')) byId('repTo').value = t;
+          // snapDev is restored after options load in ensureSnapshotDevDropdown()
+        } catch (_) { }
+      }
+      function reloadSnapshotDevList() {
+        var sel = document.getElementById('snapDev');
+        if (!sel) return;
+        sel.removeAttribute('data-loaded');   // force reload
+        // keep the first "all" option; clear the rest
+        while (sel.options.length > 1) sel.remove(1);
+        ensureSnapshotDevDropdown();
+      }
+
+      function updateEmailBtnDisabled() {
+        var sel = document.getElementById('snapDev');
+        var btn = document.querySelector('button[onclick="emailSnapshots()"]');
+        if (!sel || !btn) return;
+        var v = (sel.value || '').trim().toLowerCase();
+        btn.disabled = !v || v === 'all';
+      }
+      // call once after dropdown is filled and on change:
+      document.addEventListener('DOMContentLoaded', updateEmailBtnDisabled);
+      (function () { var _sd = document.getElementById('snapDev'); if (_sd) _sd.addEventListener('change', updateEmailBtnDisabled); })();
+
+
+
+      async function emailSnapshots() {
+        var devSel = document.getElementById('snapDev');
+        var fEl = document.getElementById('repFrom');
+        var tEl = document.getElementById('repTo');
+        var btn = document.querySelector('button[onclick="emailSnapshots()"]');
+
+        if (!devSel || !devSel.value || devSel.value === 'all') {
+          alert('Pick a specific developer first.');
+          return;
+        }
+
+        var developer = String(devSel.value || '').trim();               // alias OR whatever your value is
+        var developerLabel = (function () {
+          if (!devSel || !devSel.options || devSel.selectedIndex < 0) return '';
+          var opt = devSel.options[devSel.selectedIndex];
+          return String((opt && opt.textContent) || '').trim();
+        })();
+
+        var fromDate = (fEl && fEl.value) ? fEl.value : new Date().toISOString().slice(0, 10);
+        var toDate = (tEl && tEl.value) ? tEl.value : fromDate;
+
+        var token = localStorage.getItem('pocToken') || '';
+        if (!token) { alert('Please log in first.'); return; }
+
+        var oldTxt = btn ? btn.textContent : '';
+        if (btn) { btn.disabled = true; btn.textContent = 'Sending…'; }
+
+        try {
+          const r = await fetch('/api/reports/snapshots/email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+            body: JSON.stringify({ developer, developerLabel, fromDate, toDate, ai: '1' })
+          });
+          const js = await r.json().catch(() => ({}));
+          if (!r.ok) throw new Error((js && js.error) ? js.error : ('HTTP ' + r.status));
+
+          // collect recipient emails only (no names/aliases)
+          function onlyEmail(s) {
+            s = String(s || '');
+            var m = s.match(/<([^>]+)>/);                       // "Name <a@b.com>"
+            if (m) return m[1].trim();
+            var m2 = s.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i); // any a@b
+            return m2 ? m2[0] : '';
+          }
+
+          var emails = [];
+          if (js && Array.isArray(js.accepted) && js.accepted.length) {
+            emails = js.accepted.slice();
+          } else if (js && js.envelope && Array.isArray(js.envelope.to)) {
+            emails = js.envelope.to.slice();
+          } else if (js && (js.to || js.cc)) {
+            var raw = [];
+            if (Array.isArray(js.to)) raw = raw.concat(js.to);
+            else if (js.to) raw.push(js.to);
+            if (Array.isArray(js.cc)) raw = raw.concat(js.cc);
+            else if (js.cc) raw.push(js.cc);
+            emails = raw.map(onlyEmail).filter(Boolean);
+          }
+
+          // fallback: selected option value (should be an email when available)
+          if (!emails.length) {
+            var opt = devSel && devSel.options && devSel.options[devSel.selectedIndex];
+            var v = (opt && opt.value) ? opt.value : developer;
+            var e = onlyEmail(v) || v;
+            emails = [e];
+          }
+
+          // dedupe + show
+          var seen = {};
+          emails = emails.filter(function (e) { if (seen[e]) return false; seen[e] = true; return true; });
+
+          alert('Email sent to: ' + emails.join(', '));
+
+
+        } catch (e) {
+          alert('Send failed: ' + ((e && e.message) ? e.message : e));
+        } finally {
+          if (btn) { btn.disabled = false; btn.textContent = oldTxt; }
+        }
+      }
+
+
       function requiresNote(code) {
         var sel = document.getElementById('code');
         if (!sel) return false;
@@ -838,9 +1030,8 @@
         return !!(opt && opt.getAttribute('data-requirenote') === 'true');
       }
 
-
       function clearForNewSession() {
-        var ids = ['loginStatus', 'loadStatus', 'submitStatus', 'lockStatus', 'exportStatus', 'unlockStatus'];
+        var ids = ['loginStatus', 'loadStatus', 'submitStatus', 'lockStatus', 'exportStatus'];
         for (var i = 0; i < ids.length; i++) { var el = byId(ids[i]); if (el) el.textContent = ''; }
         var le = byId('loginEmail'); if (le) le.value = '';
         var lp = byId('loginPw'); if (lp) lp.value = '';
@@ -860,7 +1051,6 @@
         var btns = document.querySelectorAll('#ticketsTbl tbody button');
         for (var i = 0; i < btns.length; i++) btns[i].disabled = !!on;
       }
-
 
       function setMe(email, name) {
         var assigned = byId("assigned");
@@ -890,9 +1080,7 @@
 
         if (loginCard) loginCard.classList.add('hidden');
         if (ticketsCard) ticketsCard.classList.remove('hidden');
-        // if (submitCard) submitCard.classList.remove('hidden');
         if (submitCard) submitCard.classList.toggle('hidden', isPM); // hide for PMs
-        // If dev, fetch lock state and adjust UI
         if (!isPM) { checkLockStatus(); }
 
         if (pmBox) pmBox.classList.toggle('hidden', !isPM);
@@ -919,14 +1107,16 @@
         var filters = byId('findFilters');
         if (isPM) {
           ensureAssignedDropdownForPM();
+          ensureSnapshotDevDropdown();
+
           if (filters) filters.style.display = '';
-          loadToday(); loadBlockers(); loadMissing(); loadExportStatus();
+          loadToday(); loadBlockers(); loadMissing();
 
           presetReportThisWeek(false);
           if (!window.__exportTimer) {
             window.__exportTimer = setInterval(function () {
               var pmEl = byId('pm');
-              if (pmEl && !pmEl.classList.contains('hidden')) { loadExportStatus(); }
+              if (pmEl && !pmEl.classList.contains('hidden')) { }
             }, 60000);
           }
         } else {
@@ -943,7 +1133,11 @@
         note.required = !!need;
         hint.style.fontWeight = need ? '600' : '400';
         hint.style.opacity = need ? '1' : '.7';
+
+        // NEW: toggle AI buttons availability based on selected code
+        updateAssistAvailability();
       }
+
 
       function req(method, url, body, headers) {
         var opts = { method: method, headers: headers || {} };
@@ -996,61 +1190,272 @@
         } else { done(); }
       }
 
+
+      // --- Shared team-members dropdown helpers -----------------------------------
+      var __teamMembersCache = null;
+
+      function getTeamMembers() {
+        if (__teamMembersCache) return Promise.resolve(__teamMembersCache);
+        var tkn = localStorage.getItem('pocToken') || '';
+        return fetch((API || location.origin) + '/api/team-members', {
+          headers: { 'Authorization': 'Bearer ' + tkn }
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            var items = (js && js.items) || [];
+            __teamMembersCache = items;
+            return items;
+          })
+          .catch(function () { return []; });
+      }
+
+      /**
+       * populateTeamSelect(selectEl, cfg)
+       * cfg:
+       *  - keepFirst: keep the first existing <option> (e.g., “All”) and clear the rest
+       *  - includeBlank: insert a blank-all option at top
+       *  - blankLabel: label for blank option
+       *  - restoreKey: localStorage key whose value should be restored as .value
+       *  - setDataEmail: set data-email attribute when member has email
+       *  - getValue(member): returns value string for <option>
+       *  - getLabel(member): returns label string for <option> (defaults to display_name/alias/email)
+       *  - onAfter(selectEl): callback after population (e.g., toggle buttons)
+       */
+      function populateTeamSelect(sel, cfg) {
+        cfg = cfg || {};
+        if (!sel) return Promise.resolve();
+
+        // Clear options
+        if (cfg.keepFirst) {
+          while (sel.options.length > 1) sel.remove(1);
+        } else {
+          sel.innerHTML = '';
+        }
+
+        if (cfg.includeBlank) {
+          var blank = document.createElement('option');
+          blank.value = '';
+          blank.textContent = cfg.blankLabel || '— All —';
+          sel.appendChild(blank);
+        }
+
+        var saved = cfg.restoreKey ? (localStorage.getItem(cfg.restoreKey) || '') : '';
+
+        return getTeamMembers().then(function (items) {
+          for (var i = 0; i < items.length; i++) {
+            var m = items[i];
+            var opt = document.createElement('option');
+
+            var val = cfg.getValue
+              ? cfg.getValue(m)
+              : ((m.email && m.email.trim()) ? m.email.toLowerCase() : (m.alias || '').toLowerCase());
+            opt.value = String(val || '').trim();
+
+            if (cfg.setDataEmail && m.email) opt.setAttribute('data-email', m.email.toLowerCase());
+
+            var label = cfg.getLabel
+              ? cfg.getLabel(m)
+              : (m.display_name || m.alias || m.email || '').trim();
+
+            // If the fallback is an email, show only the username part (before @)
+            if (/@/.test(label)) {
+              label = label.split('@')[0];
+            }
+
+            // Show ONLY the clean label — no alias/email appended
+            opt.textContent = label;
+
+            // (optional) keep details in data-* for internal use
+            if (m.alias) opt.dataset.alias = String(m.alias).toLowerCase();
+            if (m.email) opt.dataset.email = String(m.email).toLowerCase();
+
+
+            sel.appendChild(opt);
+          }
+
+          // Restore previously saved value if any
+          if (saved) {
+            var want = saved.toLowerCase();
+            var ok = Array.prototype.some.call(sel.options, function (o) {
+              return (String(o.value || '').toLowerCase() === want);
+            });
+            if (ok) sel.value = saved;
+          }
+
+          sel.setAttribute('data-loaded', '1');
+          if (typeof cfg.onAfter === 'function') cfg.onAfter(sel);
+        });
+      }
+
       function ensureAssignedDropdownForPM() {
         var isPM = (window.__role === 'pm');
         if (!isPM) return;
 
         var original = byId('assigned');
         if (!original) return;
-
-        // If we already replaced it, skip
         if (original.tagName && original.tagName.toLowerCase() === 'select') return;
 
-        // Create a <select> with the same id
+        // Turn the existing input into a <select>
         var sel = document.createElement('select');
         sel.id = 'assigned';
         sel.setAttribute('aria-label', 'Assigned to');
         sel.style.minWidth = '220px';
-
-        // Put a placeholder option
-        var blank = document.createElement('option');
-        blank.value = '';
-        blank.textContent = '— All / Anyone —';
-        sel.appendChild(blank);
-
-        // Replace the input with the select in-place
         original.parentNode.replaceChild(sel, original);
 
-        // Load team-members
+        // Populate using shared function (value = alias; attach data-email)
+        populateTeamSelect(sel, {
+          includeBlank: true,
+          blankLabel: '— All / Anyone —',
+          setDataEmail: true,
+          getValue: function (m) { return (m.alias || '').trim(); },
+          getLabel: function (m) { return (m.display_name || m.alias || m.email || '').trim(); }
+        }).then(function () {
+          sel.addEventListener('change', function () {
+            var loadBtn = byId('loadBtn');
+            if (loadBtn) loadBtn.click();
+          });
+        });
+      }
+
+      function ensureSnapshotDevDropdown() {
+        var sel = document.getElementById('snapDev');
+        if (!sel) return;
+
+        if (sel.getAttribute('data-loaded') === '1') {
+          var want = (localStorage.getItem('pocSnapDev') || '').toLowerCase();
+          if (want && sel.value.toLowerCase() !== want) sel.value = want;
+          updateEmailBtnDisabled();
+          return;
+        }
+
+        populateTeamSelect(sel, {
+          keepFirst: true,
+          restoreKey: 'pocSnapDev',
+          setDataEmail: true,
+          getValue: function (m) {
+            return (m.email && m.email.trim())
+              ? m.email.toLowerCase()
+              : (m.alias || '').toLowerCase();
+          },
+          getLabel: function (m) { return (m.display_name || m.alias || m.email || '').trim(); },
+          onAfter: function (selectEl) {
+            updateEmailBtnDisabled();
+            selectEl.addEventListener('change', saveReportInputs);
+          }
+        });
+
+      }
+
+
+
+
+
+
+
+
+      function openSnapshots(fmt) {
+        var fEl = document.getElementById('repFrom');
+        var tEl = document.getElementById('repTo');
+        var dEl = document.getElementById('snapDev');
+
+        var f = (fEl && fEl.value) ? fEl.value : new Date().toISOString().slice(0, 10);
+        var t = (tEl && tEl.value) ? tEl.value : f;
+        var dev = (dEl && typeof dEl.value === 'string') ? dEl.value.trim().toLowerCase() : 'all';
+        if (!dev) dev = 'all';
+
+        try {
+          localStorage.setItem('pocRepFrom', f);
+          localStorage.setItem('pocRepTo', t);
+          localStorage.setItem('pocSnapDev', dev);
+        } catch (_) { }
+
+        var url = (window.API || location.origin) + '/api/reports/snapshots'
+          + '?from=' + encodeURIComponent(f)
+          + '&to=' + encodeURIComponent(t)
+          + '&developer=' + encodeURIComponent(dev)
+          + '&ai=1';
+
         var tkn = localStorage.getItem('pocToken') || '';
-        fetch((API || location.origin) + '/api/team-members', {
-          headers: { 'Authorization': 'Bearer ' + tkn }
+        var wantHtml = (fmt || 'pdf') === 'html';
+
+        var headers = {
+          'Accept': wantHtml ? 'text/html' : 'application/pdf'
+        };
+        if (tkn) headers['Authorization'] = 'Bearer ' + tkn;
+
+        setSnapBusy(true, 'Opening…');
+
+        fetch(url + (wantHtml ? '&format=html' : '&format=pdf'), {
+          headers: headers,
+          redirect: 'follow'
         })
-          .then(function (r) { return r.json(); })
-          .then(function (js) {
-            if (!js || js.error) return;
-            var items = js.items || [];
+          .then(async function (r) {
+            // Handle HTTP errors first
+            if (!r.ok) {
+              var body = await r.text().catch(function () { return ''; });
+              throw new Error('HTTP ' + r.status + (body ? (' — ' + body.slice(0, 200)) : ''));
+            }
 
-            items.forEach(function (m) {
-              var opt = document.createElement('option');
-              // value = alias; label = Display Name (alias) <email>
-              opt.value = (m.alias || '').trim();
-              // if (m.email) opt.setAttribute('data-email', String(m.email).trim().toLowerCase());
-              if (m.email) opt.setAttribute('data-email', (m.email || '').toLowerCase());
-              var label = m.display_name ? m.display_name : (m.alias || '');
-              var extra = [];
-              if (m.alias) extra.push(m.alias);
-              if (m.email) extra.push(m.email);
-              opt.textContent = label + (extra.length ? (' — ' + extra.join(' · ')) : '');
-              sel.appendChild(opt);
-            });
+            // Redirects that land on HTML (login pages, etc.)
+            if (r.redirected) {
+              // Even if 200, this usually means we followed to HTML, not a PDF
+              var ct = (r.headers.get('content-type') || '').toLowerCase();
+              if (!wantHtml && ct.indexOf('application/pdf') === -1) {
+                var s = await r.text().catch(function () { return ''; });
+                throw new Error('Request redirected (likely to a login page). ' + (s ? s.slice(0, 200) : ''));
+              }
+            }
+
+            if (wantHtml) return r.text();
+
+            // When we expect a PDF:
+            var ct = (r.headers.get('content-type') || '').toLowerCase();
+
+            // If server wraps the PDF as JSON base64
+            if (ct.indexOf('application/json') > -1) {
+              var js = await r.json();
+              var b64 = js && (js.pdf_base64 || js.pdf || js.data);
+              if (!b64) throw new Error('Expected PDF but got JSON without a base64 field.');
+              var bin = atob(String(b64));
+              var bytes = new Uint8Array(bin.length);
+              for (var i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+              return new Blob([bytes], { type: 'application/pdf' });
+            }
+
+            // Must be a real PDF; otherwise surface the HTML/text so you can see the error
+            if (ct.indexOf('application/pdf') === -1) {
+              var msg = await r.text().catch(function () { return ''; });
+              throw new Error('Expected a PDF but received ' + (ct || 'unknown type') + (msg ? (' — ' + msg.slice(0, 200)) : ''));
+            }
+
+            return r.blob();
           })
-          .catch(function () { /* ignore network errors silently */ });
+          .then(function (payload) {
+            if (wantHtml) {
+              var w = window.open('about:blank', '_blank');
+              if (!w) return alert('Popup blocked. Allow popups for this site.');
+              w.document.open(); w.document.write(payload); w.document.close();
+            } else {
+              var href = URL.createObjectURL(payload);
+              var a = document.createElement('a');
+              a.href = href;
+              a.download = 'Developer-Snapshots_' + f + '_to_' + t + '.pdf';
+              document.body.appendChild(a); a.click(); a.remove();
+              setTimeout(function () { URL.revokeObjectURL(href); }, 1200);
+            }
+          })
+          .catch(function (err) {
+            alert('Failed to open snapshots: ' + (err && err.message ? err.message : err));
+          })
+          .finally(function () { setSnapBusy(false); });
+      }
 
-        // When changed, auto-run the ticket search (handy for PMs on My Tickets)
-        sel.addEventListener('change', function () {
-          var loadBtn = byId('loadBtn');
-          if (loadBtn) loadBtn.click();
+      async function blobToDataURL(blob) {
+        return new Promise((resolve, reject) => {
+          const fr = new FileReader();
+          fr.onload = () => resolve(fr.result); // "data:application/pdf;base64,...."
+          fr.onerror = reject;
+          fr.readAsDataURL(blob);
         });
       }
 
@@ -1068,29 +1473,18 @@
         for (var i = 0; i < 5; i++) {
           var tr = document.createElement('tr'); tr.className = 'skeleton';
           tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
-
           tbody.appendChild(tr);
         }
         var url = new URL((API || location.origin) + "/api/tickets");
-        // if (assigned && assigned.value.trim()) url.searchParams.set("assignedTo", assigned.value.trim());
         if (assigned && assigned.value.trim()) {
           url.searchParams.set("assignedTo", assigned.value.trim());
-          // PM view: also ask the API for THIS dev’s latest code/note per ticket
           if (window.__role === 'pm') {
             var opt = assigned.options[assigned.selectedIndex];
             var em = opt && opt.getAttribute('data-email');
-            var by = (em || assigned.value.trim()); // fallback to alias
+            var by = (em || assigned.value.trim());
             if (by) url.searchParams.set('updatesBy', by);
           }
         }
-
-        // PMs: also tell the API whose updates (code/note) to surface
-        // if (window.__role === 'pm' && assigned && assigned.tagName &&
-        //   assigned.tagName.toLowerCase() === 'select' && assigned.value.trim()) {
-        //   var selOpt = assigned.options[assigned.selectedIndex];
-        //   var email = selOpt ? (selOpt.getAttribute('data-email') || '') : '';
-        //   if (email) url.searchParams.set('updatesBy', email);
-        // }
 
         var hdrs = {};
         var tkn = localStorage.getItem("pocToken");
@@ -1109,6 +1503,10 @@
               var code = t.lastCode || t.progressCode || t.code || '';
               var note = t.lastNote || t.progressNote || t.note || '';
               var typ = t.type || t.workItemType || t.itemType || t.kind || '';
+              // Keep a simple cache by ID so dev-assist can read tags if present
+              window.__lastTickets = window.__lastTickets || {};
+              window.__lastTickets[String(t.id)] = t;
+
               tr2.innerHTML =
                 '<td>' + esc(t.id) + '</td>' +
                 '<td>' + esc(typ || '—') + '</td>' +
@@ -1116,16 +1514,26 @@
                 '<td>' + esc(t.state) + '</td>' +
                 '<td>' + esc(code || '—') + '</td>' +
                 '<td>' + esc(note || '—') + '</td>' +
-                '<td>' + ((window.__role === 'pm' || window.__lockedToday)
-                  ? ''
-                  : '<button class="secondary" onclick="openSPModal(' + Number(t.id) + ')" aria-label="Select ticket ' + esc(t.id) + '">Select</button>') + '</td>';
+                '<td>' + (
+                  (window.__role !== 'dev' || window.__lockedToday)
+                    ? ''
+                    : (
+                      '<div class="toolbar" role="group">'
+
+                      + '<button class="secondary" onclick="openSPModal(' + Number(t.id) + ')" aria-label="Select ticket ' + esc(t.id) + '">Select</button>'
+                      + '</div>'
+                    )
+                ) + '</td>';
+
+
+
+
 
 
 
               tbody.appendChild(tr2);
               var cells = tr2.getElementsByTagName('td');
               renderCodeBadge(cells[4], code);
-
             }
           })
           .catch(function () {
@@ -1137,34 +1545,134 @@
       }
 
       function openSPModal(id) {
-        if (window.__role === 'pm') return; // PMs don’t submit progress
+        if (window.__role === 'pm') return;
         if (window.__lockedToday) {
           setStatus('submitStatus', 'Day is locked. Ask a PM to unlock to change updates.', false);
           return;
         }
         var m = byId('spModal'), b = byId('spBackdrop');
-
         if (id != null) byId('tId').value = String(id);
-        // ensure note-required hint is correct (HTMX may have just populated options)
+
         if (window.syncNoteRequirement) syncNoteRequirement();
+
+        // now only resets panel + wires listeners; no network yet
+        prepareDevAssistUI(String(id || byId('tId').value || ''));
+
         m.classList.add('open'); b.classList.add('open');
-        // focus first field
         setTimeout(function () { var t = byId('tId'); if (t) t.focus(); }, 0);
       }
+
+
 
       function closeSPModal() {
         var m = byId('spModal'), b = byId('spBackdrop');
         m.classList.remove('open'); b.classList.remove('open');
       }
 
-      // ESC to close
+      // --- AI Assist (modal) ------------------------------------------------------
+      var __assistTicketId = null;
+      var __assistDebounceTimer = 0;
+
+      function prepareDevAssistUI(ticketId) {
+        __assistTicketId = String(ticketId || '');
+        var sug = byId('assistSuggest'); if (sug) sug.textContent = 'Select a code and add a note to see suggestions.';
+        var res = byId('assistResult'); if (res) res.innerHTML = '';
+        var chaseBtn = byId('draftChaseBtn'); if (chaseBtn) chaseBtn.disabled = true;
+        var nextBtn = byId('whatsNextBtn'); if (nextBtn) nextBtn.disabled = true;
+
+        // (re)wire listeners so we can trigger suggestions when both fields are ready
+        var sel = byId('code');
+        var note = byId('note');
+        if (sel) sel.onchange = function () {
+          if (typeof syncNoteRequirement === 'function') syncNoteRequirement();
+          maybeSuggestForModal();
+        };
+        if (note) {
+          note.oninput = function () { maybeSuggestForModal(); };
+          note.onchange = function () { maybeSuggestForModal(); };
+        }
+      }
+
+      // Debounced trigger
+      function maybeSuggestForModal() {
+        clearTimeout(__assistDebounceTimer);
+        __assistDebounceTimer = setTimeout(runSuggestIfReady, 300);
+      }
+
+      function runSuggestIfReady() {
+        var sug = byId('assistSuggest');
+        var sel = byId('code');
+        var note = byId('note');
+
+        var code = sel && sel.value ? sel.value.trim() : '';
+        var txt = note && note.value ? note.value.trim() : '';
+
+        // enable/disable assist buttons strictly based on code (you already call updateAssistAvailability inside syncNoteRequirement)
+        if (typeof updateAssistAvailability === 'function') updateAssistAvailability();
+
+        if (!code || !txt) {
+          if (sug) sug.textContent = 'Select a code and add a note to see suggestions.';
+          return;
+        }
+
+        // we have both → call triage once for suggest_code
+        if (sug) sug.textContent = 'Thinking…';
+
+        var t = (window.__lastTickets || {})[String(__assistTicketId)] || null;
+        if (!t) { if (sug) sug.textContent = 'No local context available.'; return; }
+
+        var item = {
+          ticketId: t.id,
+          title: t.title || '',
+          state: t.state || '',
+          type: t.type || '',
+          assignedTo: t.assignedTo || '',
+          iterationPath: t.iterationPath || '',
+          tags: t.tags || '',
+          code: code,      // current selection
+          note: txt        // user note
+        };
+
+        fetch((window.API || location.origin) + '/api/ai/triage', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '')
+          },
+          body: JSON.stringify({ items: [item] })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            var s = js && js.suggestions && js.suggestions[0];
+            if (!s) { if (sug) sug.textContent = 'No suggestion.'; return; }
+
+            var sc = s.suggest_code || '';
+            if (sc && byId('assistSuggest')) {
+              byId('assistSuggest').innerHTML =
+                '<span class="badge">Suggested code: ' + esc(sc) + '</span> ' +
+                '<button class="secondary" onclick="applySuggestedCodeToModal(\'' +
+                esc(sc).replace(/'/g, "\\'") + '\')">Apply</button>';
+            } else {
+              if (sug) sug.textContent = 'No code suggestion.';
+            }
+          })
+          .catch(function () {
+            if (sug) sug.textContent = 'AI suggest failed.';
+          });
+      }
+
+
+      function applySuggestedCodeToModal(code) {
+        var sel = byId('code');
+        if (!sel) return;
+        sel.value = String(code || '');
+        if (typeof syncNoteRequirement === 'function') syncNoteRequirement();
+      }
+
+
       document.addEventListener('keydown', function (ev) {
         if (ev.key === 'Escape') { closeSPModal(); }
       });
-
-      // after a successful submit, we already update the row inline;
-      // also close the modal there:
-
 
       function prefill(id) {
         byId("tId").value = id;
@@ -1189,18 +1697,14 @@
               setStatus("submitStatus", "Saved!");
               byId("note").value = "";
               closeSPModal();
-              // Optimistically update the row in My Tickets
               var row = document.querySelector('#ticketsTbl tbody tr[data-id="' + ticket + '"]');
               if (row) {
                 var cells = row.getElementsByTagName('td');
-                // columns: [0]=ID, [1]=Title, [2]=State, [3]=Code, [4]=Note, [5]=Action
                 if (cells[4]) renderCodeBadge(cells[4], code || '');
                 if (cells[5]) cells[5].textContent = note || '—';
               } else {
-                // if the table isn't loaded yet or row not found, just refresh
                 if (typeof loadTickets === 'function') { loadTickets(); }
               }
-
             }
           })
           .catch(function () { setStatus("submitStatus", "Network error", false); })
@@ -1223,12 +1727,9 @@
               var txt = badgeEl ? badgeEl.textContent : '';
               if (txt === 'PM') { loadToday(); loadBlockers(); loadMissing(); }
             }
-
-
           })
           .catch(function () { setStatus("lockStatus", "Network error", false); });
       }
-
 
       function initials(s) {
         s = String(s || '').trim();
@@ -1238,13 +1739,14 @@
         var b = (parts.length > 1 ? (parts[parts.length - 1] || '')[0] : '') || '';
         return (a + b).toUpperCase();
       }
+
       function loadToday() {
         var box = document.getElementById("today");
         fetch((window.API || location.origin) + "/api/updates/today")
           .then(function (res) { return res.json(); })
           .then(function (js) {
             var out = [];
-            out.push('<div class="pre-list">'); // grid of user cards
+            out.push('<div class="pre-list">');
 
             var users = js.users || [];
             for (var u = 0; u < users.length; u++) {
@@ -1254,7 +1756,6 @@
               var tickets = user.tickets || [];
               var total = tickets.length;
 
-              // Card head
               out.push('<div class="pre-user">');
               out.push('<div class="pre-head">');
               out.push('<div class="pre-ident">');
@@ -1265,16 +1766,26 @@
               out.push('</div>');
               out.push('</div>');
 
-              // badge + total count
               out.push('<span class="pill">');
               out.push('<span class="pre-meta">' + total + ' item(s)</span>');
               out.push('<span class="badge ' + (user.locked ? 'ok' : 'muted') + '">' + (user.locked ? 'Locked' : 'Open') + '</span>');
 
+              // NEW: show per-dev Unlock beside the status for PM role
+              if (window.__role === 'pm' && user.locked && user.email) {
+                out.push(
+                  '<button class="secondary small unlock-btn" ' +
+                  'data-email="' + esc(user.email) + '" ' +
+                  'onclick="pmUnlockUser(this)">' +
+                  'Unlock' +
+                  '</button>'
+                );
+              }
+
               out.push('</span>');
 
-              out.push('</div>'); // /pre-head
 
-              // group by assignedTo
+              out.push('</div>');
+
               var groups = {};
               for (var t = 0; t < tickets.length; t++) {
                 var it = tickets[t];
@@ -1290,9 +1801,6 @@
                 for (var k = 0; k < keys.length; k++) {
                   var gk = keys[k];
                   var arr = groups[gk];
-
-                  // REMOVED the subgroup line with count per your request
-                  // out.push('<div class="subgroup">' + esc(gk) + ' · ' + arr.length + ' item(s)</div>');
 
                   out.push('<table class="today-grid"><thead><tr>');
                   out.push('<th style="width:75px">ID</th>');
@@ -1325,14 +1833,13 @@
                 }
               }
 
-              out.push('</div>'); // /pre-user
+              out.push('</div>');
             }
 
-            out.push('</div>'); // /pre-list
+            out.push('</div>');
             box.innerHTML = '<p><span class="badge">' + esc(js.date || "") + '</span></p>' + out.join('');
           });
       }
-
 
       function ymd(d) { return d.toISOString().slice(0, 10); }
 
@@ -1342,17 +1849,18 @@
         var from = (fromEl && fromEl.value) ? fromEl.value : ymd(new Date());
         var to = (toEl && toEl.value) ? toEl.value : from;
 
+        var devSel = document.getElementById('snapDev');
+        var dev = (devSel && devSel.value) ? devSel.value : 'all';
+        var devQ = (dev && dev !== 'all') ? ('&developer=' + encodeURIComponent(dev)) : '';
 
-        // update the TSV download link
         var dl = document.getElementById('dlRange');
-        if (dl) dl.href = '/api/updates/range.tsv?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
+        if (dl) dl.href = '/api/updates/range.tsv?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) + devQ;
 
-        // auth header optional; PM view likely has a token
         var hdrs = {};
         var tkn = localStorage.getItem('pocToken');
         if (tkn) hdrs['Authorization'] = 'Bearer ' + tkn;
 
-        fetch('/api/updates/range?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to), { headers: hdrs })
+        fetch('/api/updates/range?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) + devQ, { headers: hdrs })
           .then(function (r) { return r.json(); })
           .then(function (js) {
             var tb = document.querySelector('#reportTbl tbody');
@@ -1361,13 +1869,10 @@
             var html = '';
             for (var i = 0; i < items.length; i++) {
               var it = items[i];
-              var d = (it.date || '').slice(0, 10); // YYYY-MM-DD
+              var d = (it.date || '').slice(0, 10);
               var who = it.assignedTo || '';
-
-              // keep name only if it looks like "Name <DOMAIN\alias>"
               var lt = who.indexOf('<');
               if (lt > -1) { who = who.slice(0, lt).trim(); }
-              // otherwise, if it's a raw "DOMAIN\alias", drop the DOMAIN\
               var bs = who.indexOf('\\');
               if (bs > -1 && lt === -1) { who = who.slice(bs + 1).trim(); }
               var typ3 = it.type || it.workItemType || it.itemType || it.kind || '';
@@ -1381,7 +1886,6 @@
                 '<td>' + esc(it.code || '') + '</td>' +
                 '<td>' + esc(it.note || '') + '</td>' +
                 '</tr>';
-
             }
             tb.innerHTML = html || '<tr><td colspan="8"><em>No rows for the selected range.</em></td></tr>';
           })
@@ -1391,32 +1895,11 @@
           });
       }
 
-      // optional: prefill dates to "this week" when PM page opens
-      function presetReportThisWeek() {
-        var now = new Date();
-        var day = now.getDay();            // 0..6 (Sun..Sat)
-        var diffToMon = (day + 6) % 7;         // days since Monday
-        var monday = new Date(now); monday.setDate(now.getDate() - diffToMon);
-        var sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
-        var f = document.getElementById('repFrom');
-        var t = document.getElementById('repTo');
-        if (f) f.value = ymd(monday);
-        if (t) t.value = ymd(sunday);
-      }
 
-      function setReportRange(fromDate, toDate, autoLoad) {
-        var f = document.getElementById('repFrom');
-        var t = document.getElementById('repTo');
-        if (f) f.value = ymd(fromDate);
-        if (t) t.value = ymd(toDate);
-        if (autoLoad) loadReportRange();
-      }
-
-      // Monday–Sunday of the current week
       function presetReportThisWeek(autoLoad) {
         var now = new Date();
-        var day = now.getDay();                  // 0..6 (Sun..Sat)
-        var diffToMon = (day + 6) % 7;           // days since Monday
+        var day = now.getDay();
+        var diffToMon = (day + 6) % 7;
         var monday = new Date(now); monday.setDate(now.getDate() - diffToMon);
         monday.setHours(0, 0, 0, 0);
         var sunday = new Date(monday); sunday.setDate(monday.getDate() + 6);
@@ -1424,7 +1907,16 @@
         setReportRange(monday, sunday, !!autoLoad);
       }
 
-      // First–last day of the current month
+      function setReportRange(fromDate, toDate, autoLoad) {
+        var f = document.getElementById('repFrom');
+        var t = document.getElementById('repTo');
+        if (f) f.value = ymd(fromDate);
+        if (t) t.value = ymd(toDate);
+        saveReportInputs();
+
+        if (autoLoad) loadReportRange();
+      }
+
       function presetReportThisMonth(autoLoad) {
         var now = new Date();
         var first = new Date(now.getFullYear(), now.getMonth(), 1);
@@ -1432,15 +1924,13 @@
         setReportRange(first, last, !!autoLoad);
       }
 
-      // Render a colored chip for a progress code (e.g., "300_01")
       function renderCodeBadge(cell, code) {
         if (!cell) return;
         if (!code) { cell.textContent = '—'; return; }
-        var fam = String(code).slice(0, 3); // "100".."800"
+        var fam = String(code).slice(0, 3);
         cell.innerHTML = '<span class="badge code-' + fam + '">' + esc(code) + '</span>';
       }
 
-      // Keyboard shortcuts: /, L, N, Ctrl+Enter (modal submit)
       function initShortcuts() {
         document.addEventListener('keydown', function (e) {
           var tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
@@ -1457,7 +1947,6 @@
         });
       }
 
-      // Set/clear the "current iteration" badge
       function setIterationLabel(name) {
         var el = byId('iterLabel');
         if (!el) return;
@@ -1465,38 +1954,30 @@
         if (name) { el.textContent = name; el.classList.remove('muted'); }
         else { el.textContent = '—'; el.classList.add('muted'); }
       }
-      // Get last segment of a TFS Iteration Path (e.g., "Project\2025\Sprint 400" -> "Sprint 400")
-      function lastIterSegment(path) {
-        if (!path) return '';
-        var p = String(path).split('\\');
-        return (p[p.length - 1] || '').trim();
-      }
+
       function refreshIterationBadge() {
         fetch((API || location.origin) + "/api/iteration/current")
           .then(function (r) { return r.json(); })
           .then(function (js) {
             var name = (js && js.name) ? String(js.name) : '';
-            // optional: shorten to last path segment (Project\2025\Sprint 400 -> Sprint 400)
             if (name.indexOf('\\') > -1) {
               var parts = name.split('\\');
               name = (parts[parts.length - 1] || '').trim();
             }
             setIterationLabel(name);
           })
-          .catch(function () { /* keep badge muted on network errors */ });
+          .catch(function () { });
       }
-
 
       function loadBlockers() {
         var tbody = document.querySelector('#blockersTbl tbody');
         if (!tbody) return;
 
-        // skeleton rows for a quick visual while loading
         tbody.innerHTML = '';
         for (var i = 0; i < 4; i++) {
           var tr = document.createElement('tr');
           tr.className = 'skeleton';
-          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
+          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
           tbody.appendChild(tr);
         }
 
@@ -1504,11 +1985,15 @@
           .then(function (res) { return res.json(); })
           .then(function (js) {
             var items = js.items || [];
+            window.__blockersMap = {};
+            for (var i = 0; i < items.length; i++) {
+              var it = items[i];
+              window.__blockersMap[String(it.ticketId)] = it;
+            }
 
-            // sort by severity (600 > 700 > 800), then by assignedTo, then by most recent
             function sev(c) {
               if (!c) return 9;
-              if (String(c).indexOf('600_') === 0) return 0; // most severe/urgent
+              if (String(c).indexOf('600_') === 0) return 0;
               if (String(c).indexOf('700_') === 0) return 1;
               if (String(c).indexOf('800_') === 0) return 2;
               return 3;
@@ -1520,15 +2005,15 @@
             });
 
             if (!items.length) {
-              tbody.innerHTML = '<tr><td colspan="7"><em>No blockers detected today.</em></td></tr>';
+              tbody.innerHTML = '<tr><td colspan="8"><em>No blockers detected today.</em></td></tr>';
               return;
             }
 
             var html = '';
-            for (var i = 0; i < items.length; i++) {
-              var h = items[i];
-              // type may be absent unless added on the API (see server patch below)
+            for (var j = 0; j < items.length; j++) {
+              var h = items[j];
               var typ = h.type || h.workItemType || h.itemType || h.kind || '';
+              // inside the loop that builds each row (loadBlockers)
               html += ''
                 + '<tr data-id="' + esc(h.ticketId) + '">'
                 + '<td>' + esc(h.ticketId) + '</td>'
@@ -1538,11 +2023,12 @@
                 + '<td>' + esc(h.code || '—') + '</td>'
                 + '<td>' + esc(h.note || '') + '</td>'
                 + '<td>' + esc(h.iterationPath || '') + '</td>'
+                + '<td><button class="secondary assist-btn" onclick="aiAssistRow(this)">Assist</button></td>'
                 + '</tr>';
+
             }
             tbody.innerHTML = html;
 
-            // turn Code text into colored badges
             var rows = tbody.querySelectorAll('tr');
             for (var r = 0; r < rows.length; r++) {
               var cells = rows[r].getElementsByTagName('td');
@@ -1557,7 +2043,89 @@
           });
       }
 
+      function runTriage() {
+        var st = document.getElementById('triageStatus');
+        if (st) { st.textContent = 'Thinking...'; st.classList.remove('ok', 'err'); }
+        fetch((window.API || location.origin) + '/api/ai/triage', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '')
+          },
+          body: JSON.stringify({})
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            if (js && js.error) { if (st) { st.textContent = js.error; st.classList.add('err'); } return; }
+            var suggestions = js && js.suggestions ? js.suggestions : [];
+            if (st) { st.textContent = 'Ready'; st.classList.add('ok'); }
+            renderTriage(suggestions);
+          })
+          .catch(function () {
+            if (st) { st.textContent = 'Network error'; st.classList.add('err'); }
+          });
+      }
 
+      function renderTriage(suggestions) {
+        var panel = document.getElementById('triagePanel');
+        var list = document.getElementById('triage-list');
+        if (!list) return;
+
+        if (!suggestions || !suggestions.length) {
+          if (panel) panel.classList.add('hidden');
+          list.innerHTML = '';
+          return;
+        }
+
+        // keep a simple priority list (highest risk first for ordering only)
+        suggestions = suggestions.slice().sort(function (a, b) { return (b.risk || 0) - (a.risk || 0); });
+
+        var isPM = (window.__role === 'pm');
+        var html = '';
+        for (var i = 0; i < suggestions.length; i++) {
+          var s = suggestions[i];
+
+          // optional quick-apply for devs if model suggests a progress code
+          var applyBtn = (!isPM && s.suggest_code)
+            ? (' <button class="secondary" onclick="applySuggestedCode(\'' +
+              String(s.id).replace(/"/g, '&quot;') + '\', \'' +
+              String(s.suggest_code).replace(/"/g, '&quot;') + '\')">Apply ' +
+              esc(s.suggest_code) + '</button>')
+            : '';
+
+          html += ''
+            + '<li style="margin-bottom:12px;">'
+            + '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+            + '<strong>#' + esc(s.id) + '</strong>' + applyBtn +
+            '</div>'
+            + (s.reason ? ('<div style="margin-top:6px;"><b>Why:</b> ' + esc(s.reason) + '</div>') : '')
+            + (Array.isArray(s.next_steps) && s.next_steps.length
+              ? ('<ol style="margin:6px 0 0 18px;">' + s.next_steps.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ol>')
+              : '<div style="margin-top:6px;"><em>No steps suggested.</em></div>')
+            + (s.owner_hint ? ('<div style="margin-top:6px;"><b>Owner hint:</b> ' + esc(s.owner_hint) + '</div>') : '')
+            + '</li>';
+        }
+        list.innerHTML = html;
+        if (panel) panel.classList.remove('hidden');
+      }
+
+
+      function applySuggestedCode(id, code) {
+        if (window.__role === 'pm') return;
+        if (window.__lockedToday) {
+          var st = document.getElementById('submitStatus');
+          if (st) { st.textContent = 'Day is locked. Ask a PM to unlock to change updates.'; st.classList.add('err'); }
+          return;
+        }
+        openSPModal(id);
+        var codeSel = document.getElementById('code');
+        if (codeSel) {
+          codeSel.value = code;
+          if (typeof syncNoteRequirement === 'function') syncNoteRequirement();
+        }
+        var t = document.getElementById('tId'); if (t) t.value = String(id || '');
+        var note = document.getElementById('note'); if (note) note.focus();
+      }
 
       function loadMissing() {
         var box = byId("missing");
@@ -1573,68 +2141,67 @@
           });
       }
 
-      function pmUnlock() {
-        var email = byId("unlockEmail").value.trim();
-        var tkn = localStorage.getItem("pocToken") || "";
-        if (!tkn) { setStatus("unlockStatus", "Please login", false); return; }
-        setStatus("unlockStatus", "Unlocking...");
-        req('POST', (API || location.origin) + "/api/updates/unlock", JSON.stringify({ email: email }), { "Content-Type": "application/json", "Authorization": "Bearer " + tkn })
-          .then(function (js) { if (js.error) setStatus("unlockStatus", js.error, false); else setStatus("unlockStatus", 'Unlocked ' + js.target, true); })
-          .catch(function () { setStatus("unlockStatus", "Network error", false); });
-      }
 
-      function loadExportStatus() {
-        var tkn = localStorage.getItem("pocToken") || "";
-        if (!tkn) return;
+      function pmUnlockUser(btn) {
+        try {
+          var email = (btn && btn.getAttribute('data-email')) || '';
+          var tkn = localStorage.getItem('pocToken') || '';
 
-        fetch((API || location.origin) + "/api/exports/status", {
-          headers: { "Authorization": "Bearer " + tkn }
-        })
-          .then(function (res) { return res.json(); })
-          .then(function (js) {
-            var box = byId("exportStatus");
-            if (!box || js.error) { if (box) box.textContent = ""; return; }
+          if (!tkn) { alert('Please login first.'); return; }
+          if (!email) { alert('Missing user email.'); return; }
 
-            // derive state
-            var dbUp = !!js.db_up;
-            var has7 = js.counts && Number(js.counts.last7 || 0) > 0;
-            var todayC = Number((js.counts && js.counts.today) || 0);
-            var last7C = Number((js.counts && js.counts.last7) || 0);
+          var old = btn.textContent;
+          btn.disabled = true;
+          btn.textContent = 'Unlocking…';
 
-            // badge label
-            var badgeTxt = (dbUp && has7) ? 'Data ready' : (dbUp ? 'No recent data' : 'DB offline');
-
-            // NEW: choose color class
-            var badgeClass = (dbUp && has7) ? 'ok' : (dbUp ? 'muted' : 'off');
-
-            // human-ish last sync
-            var lastSync = js.last_sync_tfs_users ? new Date(js.last_sync_tfs_users).toLocaleString() : '—';
-
-            // paint tiny status line
-            box.innerHTML =
-              '<span class="badge ' + badgeClass + '" aria-label="' + esc(badgeTxt) + '">' +
-              esc(badgeTxt) +
-              '</span> ' +
-              'Last sync: ' + esc(lastSync) + ' · ' +
-              'Today: ' + todayC + ' · 7d: ' + last7C;
-
-            // optional: update the “Final TSV” link with suggested range
-            var tsvFinal = byId('tsvFinal');
-            if (tsvFinal && js.urls && js.urls.tsv_range) {
-              tsvFinal.href = js.urls.tsv_range;
-            }
+          fetch((window.API || location.origin) + '/api/updates/unlock', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ' + tkn
+            },
+            body: JSON.stringify({ email: email })
           })
-          .catch(function () {
-            var box = byId("exportStatus");
-            if (box) {
-              box.innerHTML = '<span class="badge">Network error</span>';
-            }
-          });
+            .then(function (r) { return r.json(); })
+            .then(function (js) {
+              if (js && js.error) throw new Error(js.error);
+
+              // Refresh the Pre-Meeting list so the badge flips to "Open"
+              if (typeof loadToday === 'function') loadToday();
+              // Also refresh "Who hasn't updated yet" (useful if you show lock status there later)
+              if (typeof loadMissing === 'function') loadMissing();
+            })
+            .catch(function (e) {
+              alert('Unlock failed: ' + (e && e.message ? e.message : e));
+            })
+            .finally(function () {
+              // slight delay so refresh doesn’t fight the immediate re-enable
+              setTimeout(function () {
+                try { btn.disabled = false; btn.textContent = old; } catch (_) { }
+              }, 250);
+            });
+        } catch (e) {
+          try { console.error(e); } catch (_) { }
+        }
       }
+
 
 
       document.addEventListener('DOMContentLoaded', function () {
+        restoreReportInputs();
+        updateEmailBtnDisabled();
+
+        // if snapDev exists already, persist on change (covers devs who become PMs mid-session)
+        var sd = byId('snapDev'); if (sd) sd.addEventListener('change', saveReportInputs);
+
+
         var codeSel = byId('code');
+        ['repFrom', 'repTo', 'snapDev'].forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el) el.addEventListener('change', saveReportInputs);
+        });
+
+
         if (codeSel) codeSel.addEventListener('change', syncNoteRequirement);
         syncNoteRequirement();
 
@@ -1648,19 +2215,18 @@
               setRoleUI(js.role || 'dev');
               refreshIterationBadge();
               setStatus("loginStatus", "Logged in.");
-              // Ensure we reflect today’s lock state on initial load
               checkLockStatus();
             })
             .catch(function () { localStorage.removeItem(tokenKey); });
         }
       });
+
       initShortcuts();
+
       var tryLogin = function (e) { if (e.key === 'Enter') login(); };
       var lem = byId('loginEmail'); if (lem) lem.addEventListener('keydown', tryLogin);
       var lpw = byId('loginPw'); if (lpw) lpw.addEventListener('keydown', tryLogin);
 
-
-      // Re-run requirement hint after <select id="code"> is populated by HTMX
       document.body.addEventListener('htmx:afterSwap', function (ev) {
         var tgt = ev.target || (ev.detail && ev.detail.target);
         if (tgt && tgt.id === 'code' && typeof syncNoteRequirement === 'function') {
@@ -1668,7 +2234,506 @@
         }
       });
 
-      // expose globals for inline handlers
+      function aiAssistRow(btn) {
+        var tr = btn && btn.closest ? btn.closest('tr') : null;
+        if (!tr) return;
+
+        // If an AI row already exists under this ticket, just disable the button and bail
+        var next = tr.nextElementSibling;
+        if (next && next.classList && next.classList.contains('ai-row')) {
+          btn.disabled = true;
+          btn.textContent = 'Assisted';
+          return;
+        }
+
+        var id = tr.getAttribute('data-id');
+        var item = (window.__blockersMap || {})[String(id)];
+        if (!item) return;
+
+        var st = document.getElementById('aiStatus');
+        if (st) { st.textContent = 'Thinking...'; st.classList.remove('err', 'ok'); }
+
+        fetch((window.API || location.origin) + '/api/ai/triage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') },
+          body: JSON.stringify({ items: [item] })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            if (js && js.error) { if (st) { st.textContent = js.error; st.classList.add('err'); } return; }
+            var s = (js && js.suggestions && js.suggestions[0]) ? js.suggestions[0] : null;
+            if (!s) { if (st) { st.textContent = 'No suggestion'; st.classList.add('err'); } return; }
+            if (st) { st.textContent = 'Ready'; st.classList.add('ok'); }
+
+            renderAiSuggestionRow(tr, s);
+
+            // Disable the Assist button for this row
+            btn.disabled = true;
+            btn.textContent = 'Assisted';
+          })
+          .catch(function () {
+            if (st) { st.textContent = 'Network error'; st.classList.add('err'); }
+          });
+      }
+
+      function renderAiSuggestionRow(tr, s) {
+        // If AI row already exists, do nothing (no toggle)
+        var next = tr.nextElementSibling;
+        if (next && next.classList && next.classList.contains('ai-row')) return;
+
+        var tdCount = tr.children.length;
+        var row = document.createElement('tr');
+        row.className = 'ai-row';
+        var td = document.createElement('td');
+        td.colSpan = tdCount;
+        td.style.background = 'var(--table-head)';
+        td.innerHTML =
+          '<div style="display:flex; gap:12px; align-items:flex-start; flex-wrap:wrap;">' +
+          (s.risk ? ('<div class="badge">Risk: ' + esc(String(s.risk)) + '</div>') : '') +
+          (s.slipRisk ? ('<div class="badge">' + esc(s.slipRisk) + ' slip risk</div>') : '') +
+          (s.suggest_code ? ('<div class="badge">Suggest code: ' + esc(s.suggest_code) + '</div>') : '') +
+          '</div>' +
+          (s.reason ? ('<p style="margin:8px 0;"><b>Why:</b> ' + esc(s.reason) + '</p>') : '') +
+          (Array.isArray(s.next_steps) && s.next_steps.length
+            ? ('<ol style="margin:8px 0 0 20px;">' + s.next_steps.map(function (x) { return '<li>' + esc(x) + '</li>'; }).join('') + '</ol>')
+            : '<p><em>No steps suggested.</em></p>') +
+          (s.chase_message
+            ? ('<div class="copy-chase-wrap" style="margin-top:8px;"><b>Chase:</b> '
+              + '<code style="white-space:pre-wrap;">' + esc(s.chase_message) + '</code> '
+              + '<button class="secondary" onclick="copyChaseFromButton(this)">Copy</button>'
+              + '</div>')
+            : '') +
+          (s.owner_hint ? ('<p style="margin-top:8px;"><b>Owner hint:</b> ' + esc(s.owner_hint) + '</p>') : '');
+        row.appendChild(td);
+        tr.parentNode.insertBefore(row, tr.nextSibling);
+      }
+
+      // --- Dev Assist: "Draft Chase" / "What's Next?" -----------------------------
+
+      function devAssistFromRow(btn, mode) {
+        var tr = btn && btn.closest ? btn.closest('tr') : null;
+        if (!tr) return;
+        var id = tr.getAttribute('data-id');
+        if (!id) return;
+
+        // prevent duplicates: if an AI row already exists, just disable the clicked button
+        var next = tr.nextElementSibling;
+        if (next && next.classList && next.classList.contains('ai-row')) {
+          btn.disabled = true; btn.textContent = 'Assisted'; return;
+        }
+
+        var tkn = token();
+        if (!tkn) { alert('Please login first.'); return; }
+
+        // Pull light context from the row (and from server-provided fields in the table JSON)
+        var cells = tr.getElementsByTagName('td');
+        var type = cells[1] ? cells[1].textContent.trim() : '';
+        var title = cells[2] ? cells[2].textContent.trim() : '';
+        var state = cells[3] ? cells[3].textContent.trim() : '';
+        var lastCode = cells[4] ? cells[4].textContent.trim() : '';
+        var lastNote = cells[5] ? cells[5].textContent.trim() : '';
+
+        // Optional: try to attach tags if present (your /api/tickets already returns t.tags)
+        // We stashed the last loaded items in a weak map for convenience (fallback safe)
+        var tags = '';
+        try {
+          if (window.__lastTickets && window.__lastTickets[String(id)]) {
+            tags = String(window.__lastTickets[String(id)].tags || '');
+          }
+        } catch (_) { }
+
+        // Insert an AI "thinking…" skeleton row
+        var tdCount = tr.children.length;
+        var row = document.createElement('tr');
+        row.className = 'ai-row';
+        var td = document.createElement('td');
+        td.colSpan = tdCount;
+        td.style.background = 'var(--table-head)';
+        td.innerHTML = '<div class="muted">🤖 Thinking…</div>';
+        row.appendChild(td);
+        tr.parentNode.insertBefore(row, tr.nextSibling);
+
+        // Disable clicked button while we wait
+        var old = btn.textContent; btn.disabled = true; btn.textContent = 'Thinking…';
+
+        fetch((window.API || location.origin) + '/api/ai/dev-assist', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ' + tkn
+          },
+          body: JSON.stringify({
+            mode: mode,
+            ticket: { id: id, title: title, state: state },
+            context: { lastNote: lastNote, currentNote: lastNote, tags: tags }
+          })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            if (!js || js.status !== 'ok') throw new Error(js && js.error || 'AI error');
+            renderDevAssistRow(tr, mode, js.result);
+            btn.textContent = 'Assisted'; // keep disabled to prevent spamming
+          })
+          .catch(function (e) {
+            // show error inside the AI row
+            try { td.innerHTML = '<div class="muted err">AI failed: ' + esc(String(e.message || e)) + '</div>'; } catch (_) { }
+            btn.textContent = old; btn.disabled = false;
+          });
+      }
+
+      function renderDevAssistRow(tr, mode, result) {
+        // If the placeholder row exists (inserted in devAssistFromRow), reuse it; else create one
+        var next = tr.nextElementSibling, row, td;
+        if (next && next.classList && next.classList.contains('ai-row')) {
+          row = next; td = row.firstElementChild;
+          td.innerHTML = ''; // clear the "thinking" content
+        } else {
+          var tdCount = tr.children.length;
+          row = document.createElement('tr'); row.className = 'ai-row';
+          td = document.createElement('td'); td.colSpan = tdCount; td.style.background = 'var(--table-head)';
+          row.appendChild(td); tr.parentNode.insertBefore(row, tr.nextSibling);
+        }
+
+        if (mode === 'chase') {
+          var who = result.who ? '<p>👥 Suggested ping: <b>' + esc(result.who) + '</b></p>' : '';
+          var text = String(result.chase_text || '').trim();
+
+          td.innerHTML =
+            '<div class="badge danger">Blocker Assist</div>' +
+            who +
+            (text
+              ? '<div class="copy-chase-wrap" style="margin-top:8px;">'
+              + '<b>Chase:</b> <code style="white-space:pre-wrap;">' + esc(text) + '</code> '
+              + '<button class="secondary" onclick="copyChaseFromButton(this)">Copy</button>'
+              + '</div>'
+              : '<p><em>No chase text returned.</em></p>');
+        } else {
+          // mode === 'next'
+          var steps = Array.isArray(result.next_steps) ? result.next_steps : [];
+          var list = steps.length
+            ? ('<ol style="margin:8px 0 0 20px;">'
+              + steps.map(function (x) { return '<li>' + esc(String(x)) + '</li>'; }).join('')
+              + '</ol>')
+            : '<p><em>No steps suggested.</em></p>';
+
+          var flat = steps.join('; ');
+          td.innerHTML =
+            '<div class="badge accent">Next Steps</div>' +
+            list +
+            '<div class="row" style="margin-top:8px;">'
+            + '<button class="primary" onclick="insertIntoNote(\'' + esc(flat).replace(/'/g, "\'") + '\')">Insert to Note</button>'
+            + '</div>';
+        }
+      }
+
+      // --- Dev Assist: modal actions (Draft Chase / What's Next) ------------------
+      function devAssistFromModal(mode) {
+        var tkn = token();
+        if (!tkn) { alert('Please login first.'); return; }
+
+        var id = byId('tId') ? byId('tId').value.trim() : '';
+        var code = byId('code') ? byId('code').value.trim() : '';
+        var note = byId('note') ? byId('note').value.trim() : '';
+        var t = (window.__lastTickets || {})[String(id)] || {};
+        var title = t && t.title ? t.title : '';
+        var state = t && t.state ? t.state : '';
+        var tags = t && t.tags ? t.tags : '';
+
+        var panel = byId('assistResult');
+        if (panel) panel.innerHTML = '<div class="muted">🤖 Thinking…</div>';
+
+        fetch((window.API || location.origin) + '/api/ai/dev-assist', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tkn },
+          body: JSON.stringify({
+            mode: mode,
+            ticket: { id: id, title: title, state: state },
+            context: { currentNote: note, lastNote: note, tags: tags, selectedCode: code }
+          })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            if (!js || js.status !== 'ok') throw new Error(js && js.error || 'AI error');
+            renderDevAssistInModal(mode, js.result);
+          })
+          .catch(function (e) {
+            if (panel) panel.innerHTML = '<div class="muted err">AI failed: ' + esc(String(e.message || e)) + '</div>';
+          });
+      }
+
+      function renderDevAssistInModal(mode, result) {
+        var panel = byId('assistResult');
+        if (!panel) return;
+
+        if (mode === 'chase') {
+          var who = result.who ? '<p>👥 Suggested ping: <b>' + esc(result.who) + '</b></p>' : '';
+          var text = String(result.chase_text || '').trim();
+          panel.innerHTML =
+            '<div class="badge danger">Blocker Assist</div>' +
+            who +
+            (text
+              ? '<div class="copy-chase-wrap" style="margin-top:8px;">'
+              + '<b>Chase:</b> <code style="white-space:pre-wrap;">' + esc(text) + '</code> '
+              + '<button class="secondary" onclick="copyChaseFromButton(this)">Copy</button>'
+              + '</div>'
+              : '<p><em>No chase text returned.</em></p>');
+        } else {
+          // mode === 'next'
+          var steps = Array.isArray(result.next_steps) ? result.next_steps : [];
+          var list = steps.length
+            ? ('<ol style="margin:8px 0 0 20px;">' + steps.map(function (x) { return '<li>' + esc(String(x)) + '</li>'; }).join('') + '</ol>')
+            : '<p><em>No steps suggested.</em></p>';
+
+          var flat = steps.join('; ');
+
+          // render button with an id, then bind click in JS (avoids escaping headaches)
+          panel.innerHTML =
+            '<div class="badge accent">Next Steps</div>' +
+            list +
+            '<div class="row" style="margin-top:8px;">' +
+            '<button id="insertNextBtn" class="primary">Insert to Note</button>' +
+            '</div>';
+
+          var btn = document.getElementById('insertNextBtn');
+          if (btn) btn.onclick = function () { insertIntoNote(flat); };
+        }
+
+      }
+
+
+      // Helper: append AI text into the Submit form's Note (keeps existing content)
+      function insertIntoNote(text) {
+        try {
+          var note = document.getElementById('note');
+          if (!note) { openSPModal(document.getElementById('tId').value || ''); note = document.getElementById('note'); }
+          if (!note) return;
+          var cur = String(note.value || '').trim();
+          note.value = (cur ? cur + '\\n' : '') + String(text || '');
+          note.focus();
+        } catch (_) { }
+      }
+      function updateAssistAvailability() {
+        var codeSel = byId('code');
+        var hasCode = !!(codeSel && codeSel.value && codeSel.value.trim());
+        var fam = hasCode ? String(codeSel.value).slice(0, 3) : '';
+
+        var chaseBtn = byId('draftChaseBtn');
+        var nextBtn = byId('whatsNextBtn');
+
+        if (nextBtn) nextBtn.disabled = !hasCode;
+        // “Chase” is most useful for 600/700/800 families; keep it disabled otherwise
+        if (chaseBtn) chaseBtn.disabled = !(hasCode && /^(600|700|800)$/.test(fam));
+      }
+
+
+
+      function copyText(txt) {
+        try { navigator.clipboard.writeText(String(txt || '')); } catch (_) { }
+      }
+      function copyChaseFromButton(btn) {
+        try {
+          // Find the wrapper (span.copy-chase-wrap OR any ancestor that has one)
+          var wrap = null;
+
+          if (btn && btn.closest) {
+            wrap = btn.closest('.copy-chase-wrap') || btn.closest('div');
+          }
+
+          // Fallback: walk up until we hit .copy-chase-wrap or the body
+          if (!wrap) {
+            var p = btn && btn.parentNode;
+            while (p && p !== document.body && !wrap) {
+              if (p.classList && p.classList.contains('copy-chase-wrap')) wrap = p;
+              else p = p.parentNode;
+            }
+          }
+
+          // Locate the <code> with the raw chase text
+          var codeEl = (wrap && wrap.querySelector && wrap.querySelector('code')) || btn.previousElementSibling;
+          var raw = codeEl ? codeEl.textContent : '';
+
+          if (!raw) {
+            // Nothing to copy
+            var old0 = btn.textContent;
+            btn.textContent = 'No text';
+            btn.disabled = true;
+            setTimeout(function () { btn.textContent = old0; btn.disabled = false; }, 900);
+            return;
+          }
+
+          // Try modern clipboard, fallback to legacy
+          var notify = function (ok) {
+            var old = btn.textContent;
+            btn.textContent = ok ? 'Copied!' : 'Copy failed';
+            btn.disabled = true;
+            setTimeout(function () { btn.textContent = old; btn.disabled = false; }, 900);
+          };
+
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(raw).then(function () { notify(true); }).catch(function () {
+              legacyCopy(raw) ? notify(true) : notify(false);
+            });
+          } else {
+            legacyCopy(raw) ? notify(true) : notify(false);
+          }
+        } catch (e) {
+          try { console.error(e); } catch (_) { }
+        }
+      }
+
+      function legacyCopy(text) {
+        try {
+          var ta = document.createElement('textarea');
+          ta.value = String(text || '');
+          ta.style.position = 'fixed';
+          ta.style.top = '-1000px';
+          ta.style.opacity = '0';
+          document.body.appendChild(ta);
+          ta.focus();
+          ta.select();
+          var ok = false;
+          try { ok = document.execCommand('copy'); } catch (_) { ok = false; }
+          document.body.removeChild(ta);
+          return ok;
+        } catch (_) { return false; }
+      }
+
+      // --- NEW: AI triage cache + annotation + sorting ---
+
+      var __triageCache = { ts: 0, map: {} };
+
+      function cacheTriage(suggestions) {
+        var m = {};
+        for (var i = 0; i < suggestions.length; i++) {
+          var s = suggestions[i];
+          m[String(s.id)] = s;
+        }
+        __triageCache = { ts: Date.now(), map: m };
+      }
+
+      function getCachedTriage() {
+        if (!__triageCache.ts) return null;
+        if (Date.now() - __triageCache.ts > 5 * 60 * 1000) return null;
+        return __triageCache.map;
+      }
+
+      function annotateBlockersWithAI(suggestions) {
+        if (!suggestions || !suggestions.length) return;
+
+        // cache for 5 minutes
+        cacheTriage(suggestions);
+
+        var byId = {};
+        for (var i = 0; i < suggestions.length; i++) {
+          var s = suggestions[i];
+          byId[String(s.id)] = s;
+        }
+
+        var tbody = document.querySelector('#blockersTbl tbody');
+        if (!tbody) return;
+        var rows = tbody.querySelectorAll('tr');
+
+        for (var r = 0; r < rows.length; r++) {
+          var tr = rows[r];
+          var id = tr.getAttribute('data-id');
+          var s2 = byId[String(id)];
+          if (!s2) { tr.removeAttribute('data-risk'); continue; }
+
+          tr.setAttribute('data-risk', String(s2.risk || 0));
+          tr.setAttribute('data-slips', (s2.slipRisk || '').toLowerCase());
+
+          var tds = tr.getElementsByTagName('td');
+          var cell = tds[tds.length - 1];
+
+          var slip = (s2.slipRisk || '').toLowerCase();
+          var slipClass = slip ? (' slip-' + slip) : '';
+
+          var applyBtn = (window.__role !== 'pm' && s2.suggest_code)
+            ? (' <button class="secondary" onclick="applySuggestedCode(\'' + String(id).replace(/"/g, '&quot;') + '\', \'' + String(s2.suggest_code).replace(/"/g, '&quot;') + '\')">Apply ' + esc(s2.suggest_code) + '</button>')
+            : '';
+
+          var chaseBtn = s2.chase_message
+            ? (' <span class="copy-chase-wrap" style="display:inline-flex;gap:6px;align-items:center;">'
+              + '<code style="display:none;">' + esc(s2.chase_message) + '</code>'
+              + '<button class="secondary" onclick="copyChaseFromButton(this)">Copy chase</button>'
+              + '</span>')
+            : '';
+
+
+          cell.innerHTML =
+            '<span class="badge risk-' + String(s2.risk || 0) + '">Risk ' + esc(String(s2.risk || '')) + '</span> ' +
+            (slip ? '<span class="badge' + slipClass + '">' + esc(s2.slipRisk) + ' slip</span> ' : '') +
+            (s2.suggest_code ? '<span class="badge">' + esc(s2.suggest_code) + '</span> ' : '') +
+            applyBtn + chaseBtn;
+        }
+
+        // enable the "Order by risk" button once we have some annotation
+        var ob = document.getElementById('orderByRiskBtn');
+        if (ob) ob.disabled = false;
+      }
+
+      function orderBlockersByAIRisk() {
+        var tbody = document.querySelector('#blockersTbl tbody');
+        if (!tbody) return;
+
+        var tri = getCachedTriage();
+        if (!tri) {
+          var btn = document.getElementById('triageAllBtn');
+          if (btn) btn.click();
+        }
+
+        var rows = Array.prototype.slice.call(tbody.querySelectorAll('tr'));
+        if (!rows.length) return;
+
+        function slipRank(slip) {
+          var s = (slip || '').toLowerCase();
+          return s === 'high' ? 3 : s === 'medium' ? 2 : s === 'low' ? 1 : 0;
+        }
+
+        rows.sort(function (a, b) {
+          var ra = +(a.getAttribute('data-risk') || 0);
+          var rb = +(b.getAttribute('data-risk') || 0);
+          if (rb !== ra) return rb - ra;
+          var sa = slipRank(a.getAttribute('data-slips'));
+          var sb = slipRank(b.getAttribute('data-slips'));
+          if (sb !== sa) return sb - sa;
+          return 0;
+        });
+
+        for (var i = 0; i < rows.length; i++) tbody.appendChild(rows[i]);
+      }
+
+      // Override "Triage all" to also annotate table + enable sorting
+      (function wrapRunTriage() {
+        var orig = runTriage;
+        window.runTriage = function () {
+          var st = document.getElementById('triageStatus');
+          if (st) { st.textContent = 'Thinking...'; st.classList.remove('ok', 'err'); }
+
+          fetch((window.API || location.origin) + '/api/ai/triage', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '')
+            },
+            body: JSON.stringify({})
+          })
+            .then(function (r) { return r.json(); })
+            .then(function (js) {
+              if (js && js.error) { if (st) { st.textContent = js.error; st.classList.add('err'); } return; }
+              var suggestions = (js && js.suggestions) ? js.suggestions : [];
+              if (st) { st.textContent = 'Ready'; st.classList.add('ok'); }
+              annotateBlockersWithAI(suggestions);
+              renderTriage(suggestions);
+            })
+            .catch(function () {
+              if (st) { st.textContent = 'Network error'; st.classList.add('err'); }
+            });
+        };
+      })();
+
+      // expose
+      window.aiAssistRow = aiAssistRow;
       window.signup = signup;
       window.login = login;
       window.logout = logout;
@@ -1677,7 +2742,8 @@
       window.submitProgress = submitProgress;
       window.lockDay = lockDay;
       window.loadMissing = loadMissing;
-      window.pmUnlock = pmUnlock;
+
+      window.pmUnlockUser = pmUnlockUser;
       window.loadBlockers = loadBlockers;
       window.loadToday = loadToday;
       window.openSPModal = openSPModal;
@@ -1685,6 +2751,17 @@
       window.loadReportRange = loadReportRange;
       window.presetReportThisWeek = presetReportThisWeek;
       window.presetReportThisMonth = presetReportThisMonth;
+      window.runTriage = runTriage;
+      window.applySuggestedCode = applySuggestedCode;
+      window.copyChaseFromButton = copyChaseFromButton;
+      window.orderBlockersByAIRisk = orderBlockersByAIRisk;
+      window.annotateBlockersWithAI = annotateBlockersWithAI;
+      window.prepareDevAssistUI = prepareDevAssistUI;
+      window.applySuggestedCodeToModal = applySuggestedCodeToModal;
+      window.devAssistFromModal = devAssistFromModal;
+      window.renderDevAssistInModal = renderDevAssistInModal;
+      window.openSnapshots = openSnapshots;
+      window.emailSnapshots = emailSnapshots;
 
 
     })();

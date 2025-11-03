@@ -7,6 +7,7 @@ import { Pool } from 'pg';
 import fs from 'fs';
 import path from 'path';
 import OpenAI from 'openai';
+import nodemailer from 'nodemailer';
 
 dotenv.config();
 
@@ -39,6 +40,221 @@ function parseOpenAIJson(resp) {
     }
   } catch (_) {}
   return null;
+}
+
+// --- Mail (Office 365-friendly defaults)
+const MAIL_MODE = process.env.MAIL_MODE || 'smtp'; // 'smtp' | 'file' (dev no-send)
+const SMTP_HOST = process.env.SMTP_HOST || 'smtp.office365.com';
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_SECURE =
+  String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true';
+const SMTP_REQUIRE_TLS =
+  String(process.env.SMTP_REQUIRE_TLS || 'true').toLowerCase() === 'true';
+const SMTP_USER = process.env.SMTP_USER || '';
+const SMTP_PASS = process.env.SMTP_PASS || '';
+const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER; // must usually match SMTP_USER
+const TEST_RECIPIENT = process.env.TEST_RECIPIENT || ''; // handy for local testing
+
+function buildMailTransport() {
+  if (MAIL_MODE === 'file') {
+    // writes .eml to memory; we'll save it below for preview
+    return nodemailer.createTransport({
+      streamTransport: true,
+      buffer: true,
+      newline: 'unix',
+    });
+  }
+  if (!SMTP_USER || !SMTP_PASS) throw new Error('mail_not_configured');
+  return nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_SECURE,
+    requireTLS: SMTP_REQUIRE_TLS,
+    auth: { user: SMTP_USER, pass: SMTP_PASS },
+    // logger: true, debug: true, // uncomment while debugging
+  });
+}
+
+// Small helper: normalize a comma/space separated list
+function normalizeEmails(value) {
+  if (!value) return [];
+  if (Array.isArray(value))
+    return value
+      .map(String)
+      .map((s) => s.trim())
+      .filter(Boolean);
+  return String(value)
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+// [PATCH-1] safe filename helper
+function fileSafeSlug(s, max = 80) {
+  return String(s || '')
+    .replace(/[^A-Za-z0-9._-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, max);
+}
+// Robust resolver: accepts alias, email, or a "Display — alias · email" label.
+async function resolveRecipientEmail(pool, developer, developerLabel) {
+  const str = String(developer || '').trim();
+  const label = String(developerLabel || '').trim();
+
+  // 1) If `developer` already looks like an email, use it
+  if (/@.+\./.test(str)) return str.toLowerCase();
+
+  // 2) Try to extract email from the label, if present
+  const emailFromLabel = (label.match(
+    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i
+  ) || [])[0];
+  if (emailFromLabel) return emailFromLabel.toLowerCase();
+
+  // 3) Derive a candidate alias (supports "domain\alias" or simple alias)
+  let alias = str.toLowerCase();
+  const bs = alias.indexOf('\\');
+  if (bs > -1) alias = alias.slice(bs + 1);
+  alias = alias.replace(/["'`]/g, '').trim();
+
+  // If label contains " — alias " style, capture alias token
+  const aliasFromLabel = (label.match(/—\s*([A-Za-z0-9._-]+)\b/) || [])[1];
+  if (!alias && aliasFromLabel) alias = aliasFromLabel.toLowerCase();
+
+  // replaced the tryQueries array so we never reference users.alias
+  const tryQueries = [
+    // Prefer TFS directory: alias match (strip DOMAIN\ if ever stored that way)
+    {
+      sql: `
+        select email
+          from tfs_users
+         where email is not null
+           and lower(regexp_replace(alias, '^.*\\\\', '')) = $1
+         limit 1
+      `,
+      args: [alias],
+    },
+    // Name match in TFS (when label was provided from your UI)
+    {
+      sql: `
+        select email
+          from tfs_users
+         where email is not null
+           and lower(display_name) = $1
+         limit 1
+      `,
+      args: [label.toLowerCase()],
+    },
+    // Fall back to your app users: match by email local-part (alias-like)
+    {
+      sql: `
+        select email
+          from users
+         where split_part(lower(email),'@',1) = $1
+         limit 1
+      `,
+      args: [alias],
+    },
+    // Final fallback: match by saved display name in users table
+    {
+      sql: `
+        select email
+          from users
+         where lower(name) = $1
+         limit 1
+      `,
+      args: [label.toLowerCase()],
+    },
+  ];
+
+  for (const q of tryQueries) {
+    if (!q.args[0]) continue;
+    const r = await pool.query(q.sql, q.args);
+    if (r.rows.length && r.rows[0].email)
+      return String(r.rows[0].email).toLowerCase();
+  }
+
+  return null; // not found
+}
+
+// --- Email font normalization (Gmail + Outlook/Word) -------------------------
+const EMAIL_FONT_STACK =
+  'Segoe UI, Arial, Helvetica, Noto Sans, Roboto, sans-serif';
+
+function normalizeEmailHTMLFonts(html) {
+  if (!html) return html || '';
+
+  const headBits = `
+<meta name="x-apple-disable-message-reformatting">
+<meta http-equiv="x-ua-compatible" content="IE=edge">
+<!--[if mso]>
+  <xml>
+    <o:OfficeDocumentSettings>
+      <o:AllowPNG/>
+      <o:PixelsPerInch>96</o:PixelsPerInch>
+    </o:OfficeDocumentSettings>
+  </xml>
+  <style>
+    /* Outlook desktop: force family + size for body text and lists */
+    body, p, li, div, span, a, h1, h2, h3 {
+      font-family: Arial, Helvetica, sans-serif !important;
+      font-size: 14px !important;
+      line-height: 21px !important;
+      mso-line-height-rule: exactly;
+    }
+    table, td, th {
+      font-family: Arial, Helvetica, sans-serif !important;
+      mso-table-lspace:0pt; mso-table-rspace:0pt;
+    }
+  </style>
+<![endif]-->
+<style>
+  /* Cross-client base (does not touch table cell font-size) */
+  body, p, li, div, span, a, h1, h2, h3 {
+    font-family: ${EMAIL_FONT_STACK} !important;
+    font-size: 14px !important;
+    line-height: 1.5 !important;
+    -ms-text-size-adjust: 100%;
+    -webkit-text-size-adjust: 100%;
+  }
+  table, td, th { font-family: ${EMAIL_FONT_STACK} !important; }
+  ul, ol { margin: 0 0 0 22px; padding: 0; }
+  table { border-collapse: collapse; mso-table-lspace:0pt; mso-table-rspace:0pt; }
+</style>`;
+
+  let out = String(html);
+
+  // Ensure <head> has the resets
+  if (/<head[^>]*>/i.test(out)) {
+    out = out.replace(/<head[^>]*>/i, (m) => m + headBits);
+  } else {
+    out = `<!doctype html><html><head>${headBits}</head><body>${out}</body></html>`;
+  }
+
+  // Add an inline family on <body> if missing (helps some webmail)
+  out = out.replace(/<body([^>]*)>/i, (m, attrs = '') => {
+    if (/font-family\s*:/i.test(attrs)) return m;
+    const sep = attrs.trim().length ? ' ' : '';
+    return `<body${sep}${attrs} style="font-family:${EMAIL_FONT_STACK};">`;
+  });
+
+  return out;
+}
+
+// --- HTML -> PDF helper (used by snapshots/email) ---
+async function htmlToPdfBuffer(html) {
+  const puppeteer = (await import('puppeteer')).default;
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+  });
+  const page = await browser.newPage();
+  await page.setContent(html, { waitUntil: 'networkidle0' });
+  const pdf = await page.pdf({
+    format: 'A4',
+    printBackground: true,
+    margin: { top: '14mm', right: '12mm', bottom: '16mm', left: '12mm' },
+  });
+  await browser.close();
+  return pdf;
 }
 
 // Strict JSON schema for suggestions
@@ -173,7 +389,7 @@ async function aiTriage(items) {
   });
 
   const system = `You are a senior triage PM/SE embedded in a TFS stand-up tool.
-You receive per-ticket context including raw fields (priority 1–4, severity, createdDate, stateChangeDate,
+You receive per-ticket context including raw fields (priority 1-4, severity, createdDate, stateChangeDate,
 relatedLinkCount, effort, tags, foundInBuild, integratedInBuild) and derived fields
 (ageDays, timeInStateDays, priorityBucket, severityScore, releaseTag).
 Return concrete, small next steps to UNBLOCK items.
@@ -211,7 +427,7 @@ ${JSON.stringify(trimmed)}`;
     ],
     text: {
       format: {
-        // ✅ ALL FOUR KEYS:
+        // ALL FOUR KEYS:
         type: 'json_schema', // <— REQUIRED
         name: TriageSchema.name, // 'TriageList'
         schema: TriageSchema.schema, // your JSON Schema object
@@ -240,6 +456,21 @@ if (!fs.existsSync(EXPORT_DIR)) fs.mkdirSync(EXPORT_DIR, { recursive: true });
 const APP_TZ = process.env.APP_TZ || 'UTC';
 
 // helpers
+const SECRET_PATTERNS = [
+  /\bpat\.[a-z0-9_\-]{20,}\b/gi, // generic PAT-like tokens
+  /https?:\/\/[^ \n]*@[^ \n]*/gi, // basic auth in URLs
+  /apikey[=:]\s*[a-z0-9_\-]{10,}/gi,
+];
+const scrub = (s) =>
+  String(s || '')
+    .replace(SECRET_PATTERNS[0], '[REDACTED_PAT]')
+    .replace(SECRET_PATTERNS[1], 'https://[REDACTED]')
+    .replace(SECRET_PATTERNS[2], 'apiKey=[REDACTED]');
+
+// safe string normalize: handles null/undefined and non-strings
+const S = (v) =>
+  (typeof v === 'string' ? v : v == null ? '' : String(v)).trim();
+
 const todayISO = () => new Date().toISOString().slice(0, 10);
 async function todayLocal(pool) {
   // Returns 'YYYY-MM-DD' based on APP_TZ (DST-safe)
@@ -248,6 +479,12 @@ async function todayLocal(pool) {
     [APP_TZ]
   );
   return rows[0].d;
+}
+
+// Chase gate: only allow 600_/700_/800_ families
+const BLOCKER_CODE_REGEX = /^(600|700|800)_/;
+function isBlockerCode(code) {
+  return BLOCKER_CODE_REGEX.test(String(code || ''));
 }
 
 const noteRequiredPrefixes = ['600_', '700_', '800_'];
@@ -267,7 +504,7 @@ const HARD_LOCK = (process.env.HARD_LOCK ?? '1') === '1';
 
 const blockerKeywords = (
   process.env.BLOCKER_KEYWORDS ||
-  'blocker,blocked,access,credential,env,qa,review pending,dependency,waiting,stuck,timeout,failed,crash'
+  'blocker,blocked,access,credential,env,feedback,awaiting,dependency,waiting,stuck,timeout,failed,crash'
 )
   .split(',')
   .map((s) => s.trim())
@@ -298,7 +535,7 @@ const newToken = () => crypto.randomBytes(24).toString('hex');
 
 function emailDomainOk(email) {
   // optional domain allowlist as a second guard
-  const allow = (process.env.ALLOWED_EMAIL_DOMAINS || '')
+  const allow = (process.env.ALLOWED_DOMAIN || '')
     .split(',')
     .map((s) => s.trim().toLowerCase())
     .filter(Boolean);
@@ -325,69 +562,142 @@ function requireSyncKey(req, res, next) {
   next();
 }
 
-// Auto-export TSV at day end
-async function exportTodayTSVIfReady() {
-  const date = await todayLocal(pool);
+// --- mail helpers ------------------------------------------------------------
+function parseEmailList(v) {
+  // Accepts string ("a@x.com, b@x.com") or array; returns deduped array
+  const arr = Array.isArray(v) ? v : String(v || '').split(/[,;]+/);
+  const seen = new Set();
+  const out = [];
+  for (const raw of arr.map((s) => s.trim()).filter(Boolean)) {
+    const m = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+    if (m) {
+      const e = m[0].toLowerCase();
+      if (!seen.has(e)) {
+        seen.add(e);
+        out.push(e);
+      }
+    }
+  }
+  return out;
+}
 
-  const countAll = (
-    await pool.query(
-      'select count(*)::int c from (select distinct email from progress_updates where date=$1) s',
-      [date]
-    )
-  ).rows[0].c;
-  if (countAll === 0) return; // nothing today
+// --- Snapshot email builders (reuses your existing HTML/PDF + mail helpers) ---
+async function buildSnapshotEmail(req, range, { ai = false } = {}) {
+  // Reuse your own HTML renderer by calling /api/reports/snapshots?format=html
+  const base = buildBaseUrl(req);
+  const qs = new URLSearchParams({
+    from: range.from,
+    to: range.to,
+    developer: String(range.developer || 'all'),
+    groupBy: 'month',
+    format: 'html',
+  });
+  if (ai) qs.set('ai', '1');
 
-  const countLocked = (
-    await pool.query(
-      'select count(*)::int c from (select distinct email from progress_locks where date=$1) s',
-      [date]
-    )
-  ).rows[0].c;
-  if (countLocked < countAll) return; // not everyone locked yet
+  const url = `${base}/api/reports/snapshots?${qs.toString()}`;
+  const auth = req.header('Authorization') || '';
+  const _fetch = globalThis.fetch || (await import('node-fetch')).default;
+  const resp = await _fetch(url, {
+    headers: auth ? { Authorization: auth } : {},
+  });
+  const htmlRaw = await resp.text();
 
-  const r = await pool.query(
-    `
-    select u.email, u.ticket_id as "ticketId", u.code, u.note,
-           t.title, t.state, t.iteration_path as "iterationPath", t.assigned_to as "assignedTo",
-           u.at
-    from progress_updates u
-    left join tickets t on t.id=u.ticket_id
-    where u.date=$1
-  `,
-    [date]
-  );
+  // Normalize fonts for Outlook/Gmail; attach a PDF version too
+  const html = normalizeEmailHTMLFonts(htmlRaw);
+  const pdfBuffer = await htmlToPdfBuffer(html);
 
-  // latest per (email,ticket)
-  const map = new Map();
-  for (const x of r.rows) {
-    const k = `${x.email}:${x.ticketId}`;
-    const prev = map.get(k);
-    if (!prev || x.at > prev.at) map.set(k, x);
+  const devSlug = fileSafeSlug(range.developer || 'all');
+  const subject = `Developer Snapshot • ${range.developer || 'all'} • ${
+    range.from
+  } → ${range.to}`;
+
+  return {
+    subject,
+    html,
+    attachments: [
+      {
+        filename: `Developer-Snapshot_${devSlug}_${range.from}_to_${range.to}.pdf`,
+        content: pdfBuffer,
+        contentType: 'application/pdf',
+      },
+    ],
+  };
+}
+
+async function sendEmail({ to, cc, subject, html, attachments }) {
+  // Reuse your nodemailer transport + helpers already defined above
+  const transporter = buildMailTransport();
+
+  const toList = normalizeEmails(to);
+  const ccList = normalizeEmails(cc);
+
+  // Optional test override
+  if (TEST_RECIPIENT) {
+    console.warn(
+      '[mail] TEST_RECIPIENT in use; overriding To:',
+      TEST_RECIPIENT
+    );
+    toList.length = 0;
+    toList.push(TEST_RECIPIENT);
+  }
+  if (!toList.length) throw new Error('no_valid_recipients');
+
+  const mail = {
+    from: SMTP_FROM || SMTP_USER,
+    to: toList.join(', '),
+    cc: ccList.length ? ccList.join(', ') : undefined,
+    subject: subject || '(no subject)',
+    html: html || '',
+    attachments: Array.isArray(attachments) ? attachments : undefined,
+  };
+
+  const info = await transporter.sendMail(mail);
+
+  // Base payload we want to return to callers (UI-friendly)
+  const base = {
+    ok: true,
+    mode: MAIL_MODE, // 'smtp' or 'file'
+    messageId: info?.messageId || null, // RFC-5322 Message-ID
+    to: toList, // array of resolved "to" emails
+    cc: ccList, // array of resolved "cc" emails
+    subject: mail.subject, // final subject line
+  };
+
+  // In MAIL_MODE='file' we spool the .eml for local review
+  if (MAIL_MODE === 'file' && info?.message) {
+    const buf = Buffer.isBuffer(info.message)
+      ? info.message
+      : ArrayBuffer.isView(info.message)
+      ? Buffer.from(info.message)
+      : Buffer.from(String(info.message));
+
+    const dir = path.join(EXPORT_DIR, 'emails');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[:.]/g, '')
+      .replace('T', '_')
+      .slice(0, 15);
+    const fname =
+      fileSafeSlug(`${stamp}_${subject || 'message'}`, 100) + '.eml';
+    const out = path.join(dir, fname);
+    fs.writeFileSync(out, buf);
+    console.log('[mail][spooled]', out);
+    return { ...base, eml: out };
   }
 
-  let tsv =
-    'date\tuser\tticketId\ttitle\tstate\tcode\tnote\titerationPath\tassignedTo\n';
-  for (const x of Array.from(map.values()).sort(
-    (a, b) =>
-      a.email.localeCompare(b.email) ||
-      String(a.ticketId).localeCompare(String(b.ticketId))
-  )) {
-    const fields = [
-      date,
-      x.email,
-      x.ticketId,
-      x.title || '',
-      x.state || '',
-      x.code || '',
-      (x.note || '').replace(/\t/g, ' ').replace(/\r?\n/g, ' '),
-      x.iterationPath || '',
-      x.assignedTo || '',
-    ];
-    tsv += fields.join('\t') + '\n';
-  }
-  const out = path.join(EXPORT_DIR, `updates-${date}.tsv`);
-  fs.writeFileSync(out, tsv, 'utf8');
-  console.log('[export]', out);
+  console.log('[mail][sent]', base.messageId, '->', base.to.join(', '));
+  return base;
+}
+
+function buildBaseUrl(req) {
+  const proto = req.headers['x-forwarded-proto'] || req.protocol || 'https';
+  const host = (
+    req.headers['x-forwarded-host'] ||
+    req.headers.host ||
+    ''
+  ).trim();
+  return `${proto}://${host}`;
 }
 
 // --- health
@@ -406,7 +716,7 @@ app.post('/api/auth/signup', async (req, res) => {
   if (!email || !password)
     return res.status(400).json({ error: 'email and password required' });
 
-  // 1) optional: quick domain allowlist (set ALLOWED_EMAIL_DOMAINS=company.com in Render)
+  // 1) optional: quick domain allowlist (set ALLOWED_DOMAIN=company.com in Render)
   if (!emailDomainOk(email)) {
     return res
       .status(403)
@@ -439,10 +749,14 @@ app.post('/api/auth/signup', async (req, res) => {
   const lower = lowerEmail;
   try {
     await pool.query(
-      `insert into users(email, name, pw) values ($1,$2,$3)
-   on conflict (email) do update set name=excluded.name, pw=excluded.pw`,
+      `insert into users (id, email, name, pw)
+   values (gen_random_uuid(), $1, $2, $3)
+   on conflict (email) do update
+     set name = excluded.name,
+         pw   = excluded.pw`,
       [lower, displayName, hashPassword(password)]
     );
+
     res.json({ status: 'ok' });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -456,17 +770,19 @@ app.post('/api/auth/login', async (req, res) => {
   const lower = String(email).toLowerCase().trim();
   try {
     const u = await pool.query(
-      'select email,name,pw,role from users where email=$1',
+      'select id, email, name, pw, role from users where email=$1',
       [lower]
     );
+
     if (u.rowCount === 0 || !verifyPassword(password, u.rows[0].pw)) {
       return res.status(401).json({ error: 'invalid credentials' });
     }
     const token = newToken();
-    await pool.query('insert into sessions(token,email) values($1,$2)', [
-      token,
-      lower,
-    ]);
+    await pool.query(
+      'insert into sessions(token, email, user_id) values ($1, $2, $3)',
+      [token, lower, u.rows[0].id]
+    );
+
     res.json({
       status: 'ok',
       token,
@@ -484,12 +800,27 @@ async function requireAuth(req, res, next) {
   const token = hdr.startsWith('Bearer ') ? hdr.slice(7) : null;
   if (!token) return res.status(401).json({ error: 'missing token' });
   try {
-    const s = await pool.query('select email from sessions where token=$1', [
-      token,
-    ]);
+    const s = await pool.query(
+      'select email, user_id from sessions where token=$1',
+      [token]
+    );
     if (s.rowCount === 0)
       return res.status(401).json({ error: 'invalid token' });
+
     req.userEmail = s.rows[0].email;
+    req.userId = s.rows[0].user_id || null;
+
+    // Fallback for older sessions that may not have user_id populated
+    if (!req.userId) {
+      const u = await pool.query(
+        'select id from users where email=$1 limit 1',
+        [req.userEmail]
+      );
+      req.userId = u.rows[0]?.id || null;
+    }
+    if (!req.userId)
+      return res.status(401).json({ error: 'missing user_id for session' });
+
     next();
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -522,7 +853,7 @@ app.post('/api/auth/logout_all', requireAuth, async (req, res) => {
   res.json({ status: 'ok' });
 });
 
-// POST /api/sync/tfs-users   body: [{ alias, email?, displayName?, tfs_id?, project_id?, team_id? }]
+// POST /api/sync/tickets     body: { source, tickets: [...], pushedAt, presentIds: [...] }
 app.post('/api/sync/tickets', async (req, res) => {
   // The agent can send: { source, tickets: [...], pushedAt, presentIds: [...], presentIteration: "Sprint 2025-400" }
   const {
@@ -554,6 +885,7 @@ app.post('/api/sync/tickets', async (req, res) => {
     created_date, changed_date, state_change_date,
     tags, found_in_build, integrated_in_build,
     related_link_count, effort,
+    created_by,           -- << NEW
     last_seen_at, deleted
   )
   VALUES (
@@ -563,7 +895,8 @@ app.post('/api/sync/tickets', async (req, res) => {
     $11,$12,$13,
     $14,$15,$16,
     $17,$18,
-    $19,false
+    $19,                 -- << NEW (created_by)
+    $20,false
   )
   ON CONFLICT (id) DO UPDATE SET
     type                = EXCLUDED.type,
@@ -583,35 +916,42 @@ app.post('/api/sync/tickets', async (req, res) => {
     integrated_in_build = EXCLUDED.integrated_in_build,
     related_link_count  = EXCLUDED.related_link_count,
     effort              = EXCLUDED.effort,
+    -- keep the first non-empty creator we ever stored
+    created_by          = CASE
+                            WHEN tickets.created_by IS NULL OR tickets.created_by = ''
+                              THEN EXCLUDED.created_by
+                            ELSE tickets.created_by
+                          END,
     last_seen_at        = EXCLUDED.last_seen_at,
     deleted             = false
   `,
         [
-          String(t.id),
-          t.type || '',
-          t.title || '',
-          t.state || '',
-          t.reason || '', // NEW
+          String(t.id), // $1
+          t.type || '', // $2
+          t.title || '', // $3
+          t.state || '', // $4
+          t.reason || '', // $5
 
-          Number.isFinite(+t.priority) ? +t.priority : null, // NEW
-          t.severity || null, // NEW
+          Number.isFinite(+t.priority) ? +t.priority : null, // $6
+          t.severity || null, // $7
 
-          t.assignedTo || '',
-          t.areaPath || '',
-          t.iterationPath || '',
+          t.assignedTo || '', // $8
+          t.areaPath || '', // $9
+          t.iterationPath || '', // $10
 
-          t.createdDate || null, // NEW
-          t.changedDate || null,
-          t.stateChangeDate || null, // NEW
+          t.createdDate || null, // $11
+          t.changedDate || null, // $12
+          t.stateChangeDate || null, // $13
 
-          t.tags || '',
-          t.foundInBuild || null, // NEW
-          t.integratedInBuild || null, // NEW
+          t.tags || '', // $14
+          t.foundInBuild || null, // $15
+          t.integratedInBuild || null, // $16
 
-          Number.isFinite(+t.relatedLinkCount) ? +t.relatedLinkCount : 0, // NEW
-          t.effort != null && t.effort !== '' ? String(t.effort) : null, // NEW
+          Number.isFinite(+t.relatedLinkCount) ? +t.relatedLinkCount : 0, // $17
+          t.effort != null && t.effort !== '' ? String(t.effort) : null, // $18
 
-          seenAt,
+          t.createdBy || '', // $19  << NEW
+          seenAt, // $20
         ]
       );
     }
@@ -710,14 +1050,16 @@ app.get('/api/team-members', requireAuth, async (req, res) => {
       return res.status(403).json({ error: 'forbidden' });
     }
 
-    // Pull active tfs_users, sorted by display name then alias
+    // Pull registered devs from users, shaped like the old tfs_users payload
     const { rows } = await pool.query(`
       select
-        lower(alias) as alias,
-        coalesce(display_name, '') as display_name,
+        -- alias: email local-part
+        split_part(lower(email), '@', 1) as alias,
+        -- display_name: prefer users.name, fall back to alias
+        coalesce(nullif(name, ''), split_part(email, '@', 1)) as display_name,
         lower(email) as email
-      from tfs_users
-      where active = true
+      from users
+      where role = 'dev'
       order by display_name nulls last, alias
       limit 1000
     `);
@@ -1043,17 +1385,25 @@ app.post('/api/progress', requireAuth, async (req, res) => {
       return res.status(400).json({ error: `note required for code ${code}` });
   }
 
+  // Guard: we must have a userId now that user_id is NOT NULL in DB
+  if (!req.userId) {
+    return res.status(500).json({ error: 'server_missing_user_id' });
+  }
+
   await pool.query(
-    `insert into progress_updates(ticket_id,email,code,note,risk_level,impact_area,date,at)
-     values ($1,$2,$3,$4,$5,$6,$7,now())`,
+    `insert into progress_updates
+       (ticket_id, email, user_id, code, note, risk_level, impact_area, date, at)
+     values
+       ($1,        $2,    $3,      $4,   $5,   $6,         $7,          $8,   now())`,
     [
-      String(ticketId),
-      req.userEmail,
-      code,
-      note || '',
-      riskLevel || 'low',
-      impactArea || '',
-      date,
+      String(ticketId), // $1
+      req.userEmail, // $2
+      req.userId, // $3  <-- NEW
+      code, // $4
+      note || '', // $5
+      riskLevel || 'low', // $6
+      impactArea || '', // $7
+      date, // $8
     ]
   );
   res.json({ status: 'ok' });
@@ -1079,11 +1429,12 @@ app.post('/api/updates/lock', requireAuth, async (req, res) => {
   const date = await todayLocal(pool);
 
   await pool.query(
-    `insert into progress_locks(email,date,at) values ($1,$2,now())
-     on conflict (email,date) do nothing`,
-    [req.userEmail, date]
+    `insert into progress_locks(email, user_id, date, at)
+   values ($1, $2, $3, now())
+   on conflict (email, date) do nothing`,
+    [req.userEmail, req.userId, date]
   );
-  exportTodayTSVIfReady().catch(() => {});
+
   res.json({ status: 'ok', locked: true, date });
 });
 app.post('/api/updates/unlock', requireAuth, async (req, res) => {
@@ -1149,14 +1500,30 @@ app.get('/api/updates/today', async (_req, res) => {
     const prev = m.get(r.ticketId);
     if (!prev || r.at > prev.at) m.set(r.ticketId, r);
   }
-  // load names if any
-  for (const [email, obj] of byUser) {
-    const u = await pool.query(`select name from users where email=$1`, [
-      email,
-    ]);
-    obj.name = u.rows[0]?.name || '';
+  // load names in one shot
+  const emails = Array.from(byUser.keys());
+  let names = new Map();
+  if (emails.length) {
+    const rNames = await pool.query(
+      `select lower(email) as email, coalesce(nullif(name,''), '') as name
+       from users
+       where lower(email) = any($1)`,
+      [emails.map((e) => e.toLowerCase())]
+    );
+    names = new Map(rNames.rows.map((x) => [x.email, x.name || '']));
   }
   const users = Array.from(byUser.values())
+    .map((u) => {
+      const nm = names.get(String(u.email).toLowerCase()) || '';
+      return {
+        email: u.email,
+        name: nm,
+        locked: u.locked,
+        tickets: Array.from(u.tickets.values()).sort((a, b) =>
+          String(a.ticketId).localeCompare(String(b.ticketId))
+        ),
+      };
+    })
     .map((u) => ({
       email: u.email,
       name: u.name,
@@ -1164,6 +1531,7 @@ app.get('/api/updates/today', async (_req, res) => {
       tickets: Array.from(u.tickets.values()).sort((a, b) =>
         String(a.ticketId).localeCompare(String(b.ticketId))
       ),
+      ...u,
     }))
     .sort((a, b) => a.email.localeCompare(b.email));
 
@@ -1202,13 +1570,13 @@ from pu
     const hasData = !!s.last_day;
 
     // Recommend default range = last 7 days (or today if empty)
-    const todayISO = new Date().toISOString().slice(0, 10);
-    const toISO = hasData ? String(s.last_day).slice(0, 10) : todayISO;
+    const todayStr = todayISO();
+    const toISO = hasData ? String(s.last_day).slice(0, 10) : todayStr;
     const fromISO = hasData
       ? new Date(Date.parse(toISO) - 6 * 24 * 3600 * 1000)
           .toISOString()
           .slice(0, 10)
-      : todayISO;
+      : todayStr;
 
     res.json({
       api_up: true,
@@ -1236,25 +1604,6 @@ from pu
   }
 });
 
-// serve the saved TSV if it's been exported already
-app.get('/api/exports/today', async (_req, res) => {
-  try {
-    const date = await todayLocal(pool); // <- needs async + pool
-    const file = path.join(EXPORT_DIR, `updates-${date}.tsv`);
-    if (!fs.existsSync(file)) {
-      return res.status(404).json({ error: 'not ready' });
-    }
-    res.setHeader('Content-Type', 'text/tab-separated-values; charset=utf-8');
-    res.setHeader(
-      'Content-Disposition',
-      `attachment; filename="updates-${date}.tsv"`
-    );
-    res.send(fs.readFileSync(file));
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-
 // “No updates yet today” (PM signal)
 app.get('/api/updates/missing', requireAuth, async (req, res) => {
   // PMs only
@@ -1264,7 +1613,7 @@ app.get('/api/updates/missing', requireAuth, async (req, res) => {
   if (me.rows[0]?.role !== 'pm')
     return res.status(403).json({ error: 'pm only' });
 
-  const date = todayISO();
+  const date = await todayLocal(pool);
   // All devs who have an account…
   // …minus those who posted at least one update today.
   const sql = `
@@ -1292,91 +1641,955 @@ function parseDateParam(s, def) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return def;
   return s;
 }
-
-// JSON: /api/updates/range?from=YYYY-MM-DD&to=YYYY-MM-DD
-app.get('/api/updates/range', async (req, res) => {
+// --- unified range helpers (used by JSON + TSV) ------------------------------
+function parseRangeFilters(req) {
   const today = new Date().toISOString().slice(0, 10);
   const from = parseDateParam(req.query.from, today);
   const to = parseDateParam(req.query.to, today);
 
-  const r = await pool.query(
-    `
-    SELECT
-      u.at::date                          AS "date",
-      t.assigned_to                       AS "assignedTo",
-      u.ticket_id                         AS "ticketId",
-      t.title,
-      t.state,
-      u.code,
-      u.note
-    FROM progress_updates u
-    JOIN tickets t ON t.id = u.ticket_id
-    WHERE timezone($3, u.at)::date BETWEEN $1 AND $2
+  // normalize developer filter (email or alias/local-part or "all")
+  const raw = S(req.query.developer || '').toLowerCase();
+  let devEmail = null,
+    devLocal = null,
+    devFilter = 'all';
+  if (raw && raw !== 'all') {
+    let cand = raw.includes('\\') ? raw.split('\\').pop() : raw;
+    if (cand.includes('@')) {
+      devEmail = cand;
+      devLocal = cand.split('@')[0];
+    } else {
+      devLocal = cand;
+    }
+    devFilter = devEmail || devLocal || raw;
+  }
 
-    ORDER BY u.at::date DESC, t.assigned_to NULLS LAST, u.ticket_id
-  `,
-    [from, to, APP_TZ]
-  );
+  return { from, to, devEmail, devLocal, devFilter };
+}
 
-  res.json({ from, to, items: r.rows, count: r.rowCount });
+const RANGE_SQL = `
+  SELECT
+    u.at::date        AS "date",
+    t.assigned_to     AS "assignedTo",
+    u.ticket_id       AS "ticketId",
+    t.type            AS "type",
+    t.title,
+    t.state,
+    u.code,
+    u.note
+  FROM progress_updates u
+  JOIN tickets t ON t.id = u.ticket_id
+  WHERE timezone($3, u.at)::date BETWEEN $1::date AND $2::date
+    AND (
+      ($4::text IS NULL AND $5::text IS NULL)
+      OR lower(u.email) = $4
+      OR split_part(lower(u.email),'@',1) = $5
+    )
+  ORDER BY u.at::date DESC, t.assigned_to NULLS LAST, u.ticket_id
+`;
+
+async function selectRangeRows({ from, to, devEmail, devLocal }) {
+  const r = await pool.query(RANGE_SQL, [from, to, APP_TZ, devEmail, devLocal]);
+  return r.rows;
+}
+
+// JSON: /api/updates/range?from=YYYY-MM-DD&to=YYYY-MM-DD
+app.get('/api/updates/range', async (req, res) => {
+  const q = parseRangeFilters(req);
+  const rows = await selectRangeRows(q);
+  res.json({
+    from: q.from,
+    to: q.to,
+    developer: q.devFilter,
+    items: rows,
+    count: rows.length,
+  });
 });
 
 // TSV: /api/updates/range.tsv?from=YYYY-MM-DD&to=YYYY-MM-DD
 app.get('/api/updates/range.tsv', async (req, res) => {
-  const today = new Date().toISOString().slice(0, 10);
-  const from = parseDateParam(req.query.from, today);
-  const to = parseDateParam(req.query.to, today);
+  const q = parseRangeFilters(req);
+  const rows = await selectRangeRows(q);
 
-  const r = await pool.query(
-    `
-    SELECT
-      u.at::date        AS "date",
-      t.assigned_to     AS "assignedTo",
-      u.ticket_id       AS "ticketId",
-      t.title,
-      t.state,
-      u.code,
-      u.note
-    FROM progress_updates u
-    JOIN tickets t ON t.id = u.ticket_id
-    WHERE timezone($3, u.at)::date BETWEEN $1 AND $2
-    ORDER BY u.at::date DESC, t.assigned_to NULLS LAST, u.ticket_id
-  `,
-    [from, to, APP_TZ]
-  );
+  const safeDev =
+    q.devFilter && q.devFilter !== 'all'
+      ? q.devFilter.replace(/[^a-z0-9._-]+/gi, '-').slice(0, 120)
+      : '';
 
-  function cell(x) {
-    // basic TSV escaping: replace tabs/newlines
-    return String(x == null ? '' : x)
+  const cell = (x) =>
+    String(x == null ? '' : x)
       .replace(/\t/g, ' ')
       .replace(/\r?\n/g, ' ');
-  }
-
-  let out = 'date\tassignedTo\tticketId\ttitle\tstate\tcode\tnote\n';
-  for (const row of r.rows) {
+  let out = 'date\tassignedTo\tticketId\ttitle\ttype\tstate\tcode\tnote\n';
+  for (const r of rows) {
     out +=
       [
-        cell(row.date),
-        cell(row.assignedTo),
-        cell(row.ticketId),
-        cell(row.title),
-        cell(row.state),
-        cell(row.code),
-        cell(row.note),
+        cell(r.date),
+        cell(r.assignedTo),
+        cell(r.ticketId),
+        cell(r.title),
+        cell(r.type),
+        cell(r.state),
+        cell(r.code),
+        cell(r.note),
       ].join('\t') + '\n';
   }
 
   res.setHeader('Content-Type', 'text/tab-separated-values; charset=utf-8');
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename="progress_${from}_to_${to}.tsv"`
+    `attachment; filename="progress_${q.from}_to_${q.to}${
+      safeDev ? '_' + safeDev : ''
+    }.tsv"`
   );
   res.send(out);
 });
 
+// --- Developer Progress Snapshots (PDF/HTML) ---------------------------------
+async function requirePMOnly(req, res, next) {
+  try {
+    const me = await pool.query('select role from users where email=$1', [
+      req.userEmail,
+    ]);
+    if ((me.rows[0]?.role || 'dev') !== 'pm')
+      return res.status(403).json({ error: 'pm only' });
+    next();
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+}
+
+app.get(
+  '/api/reports/snapshots',
+  requireAuth,
+  requirePMOnly,
+  async (req, res) => {
+    try {
+      const {
+        from,
+        to,
+        groupBy = 'month',
+        developer = 'all',
+        format = 'pdf',
+        stallHours = '12',
+      } = req.query;
+      // Record if caller asked for AI; we'll enable only for a targeted dev (not "all")
+      const aiRequested = String(req.query.ai || '') === '1';
+
+      // Normalize developer (email or alias/local-part)
+      const rawDev = S(developer || 'all').toLowerCase();
+      let devEmail = null,
+        devLocal = null; // email like "a@b" and local-part like "a"
+      if (rawDev && rawDev !== 'all') {
+        let candidate = rawDev.includes('\\')
+          ? rawDev.split('\\').pop()
+          : rawDev;
+        if (candidate.includes('@')) {
+          devEmail = candidate;
+          devLocal = candidate.split('@')[0];
+        } else {
+          // alias → try resolve email; still keep alias as local-part fallback
+          const r = await pool.query(
+            `select lower(email) as email
+          from tfs_users
+         where active=true
+           and lower(regexp_replace(alias,'^.*\\\\','')) = $1
+         limit 1`,
+            [candidate]
+          );
+          devEmail = r.rowCount ? r.rows[0].email : null;
+          devLocal = candidate;
+        }
+      }
+      let devFilter =
+        rawDev && rawDev !== 'all' ? devEmail || devLocal || rawDev : 'all';
+
+      // limit developer filter length defensively
+      if (devFilter && devFilter.length > 120)
+        devFilter = devFilter.slice(0, 120);
+      // Enable AI only for targeted dev requests (ignore for developer=all)
+      const useAI = aiRequested && (devEmail || devLocal);
+
+      const today = todayISO();
+      const d7 = new Date(Date.now() - 6 * 24 * 3600 * 1000)
+        .toISOString()
+        .slice(0, 10);
+      const fromISO = parseDateParam(from, d7);
+      const toISO = parseDateParam(to, today);
+
+      // Cap window at 90 days to avoid runaway PDFs
+      const MAX_DAYS = 90;
+      const spanDays = Math.floor(
+        (Date.parse(toISO) - Date.parse(fromISO)) / 86400000
+      );
+      if (!Number.isFinite(spanDays) || spanDays < 0 || spanDays > MAX_DAYS) {
+        return res
+          .status(400)
+          .json({ error: `Range too large (max ${MAX_DAYS} days)` });
+      }
+
+      // limit developer filter length defensively
+      if (devFilter && devFilter.length > 120)
+        devFilter = devFilter.slice(0, 120);
+
+      // SQL: durations per dev per progress family (Aggregate & Average)
+      // credit time from an update by DEV until next update on the same ticket (any author)
+      const sql = `
+      with windowed as (
+        select
+          email as dev,
+          ticket_id,
+          code,
+          at AT TIME ZONE $3 as ts_local,
+          lead(at) over (partition by ticket_id order by at) AT TIME ZONE $3 as next_ts_local
+        from progress_updates
+        where at >= ($1::timestamptz - interval '7 days')
+          and at <  ($2::timestamptz + interval '1 day')
+           and (
+   ($5::text is null and $6::text is null)
+   or lower(email) = $5::text      -- exact email match
+   or split_part(lower(email),'@',1) = $6::text  -- local-part match
+ )
+
+
+      ),
+      segments as (
+        select
+          dev, ticket_id, code,
+          greatest(ts_local, $1::date AT TIME ZONE $3) as seg_start,
+          least(coalesce(next_ts_local, $2::date AT TIME ZONE $3), $2::date AT TIME ZONE $3) as seg_end
+        from windowed
+      ),
+      usable as (
+        select *,
+               case when seg_end > seg_start
+                 then extract(epoch from (seg_end - seg_start))/3600.0
+                 else 0 end as hours
+        from segments
+        where seg_end > seg_start
+      ),
+      coded as (
+        select
+          dev, ticket_id,
+          split_part(code,'_',1) || '_xx' as family,
+          hours
+        from usable
+      ),
+      per_dev_family as (
+        select dev, family,
+               count(*) as transitions,
+               sum(hours) as hours_sum,
+               case when count(*)>0 then sum(hours)/count(*) else 0 end as hours_avg
+        from coded
+        group by dev, family
+      ),
+      ticket_touch as (
+        select dev, count(distinct ticket_id) as ticket_volume
+        from coded
+        group by dev
+      ),
+      completion as (
+        select dev,
+               count(distinct ticket_id) filter (where family='500_xx') as completed_tickets,
+               count(distinct ticket_id) as touched_tickets
+        from coded
+        group by dev
+      ),
+      latest_ticket as (
+        -- latest update per ticket up to report end
+        select distinct on (ticket_id)
+          ticket_id,
+          at AT TIME ZONE $3 as last_ts_local,
+          split_part(code,'_',1) || '_xx' as last_family
+        from progress_updates
+        where at <= ($2::timestamptz)
+        order by ticket_id, at desc
+      ),
+      stalled as (
+        -- count tickets that ended the window in 200/600/800 and are "old" vs end
+        select c.dev, count(distinct c.ticket_id) as stalled_tickets
+        from coded c
+        join latest_ticket lt on lt.ticket_id = c.ticket_id
+        where lt.last_ts_local between ($1::date AT TIME ZONE $3) and ($2::date AT TIME ZONE $3)
+          and lt.last_family in ('200_xx','600_xx','800_xx')
+          and (($2::date AT TIME ZONE $3) - lt.last_ts_local) >= (interval '1 hour' * $4::int)
+        group by c.dev
+      )
+      select
+        p.dev as email,
+        jsonb_object_agg(p.family, jsonb_build_object(
+          'transitions', p.transitions,
+          'hours_sum', round(p.hours_sum::numeric, 2),
+          'hours_avg', round(p.hours_avg::numeric, 2)
+        )) as families,
+        coalesce(t.ticket_volume,0) as ticket_volume,
+        coalesce(c.completed_tickets,0) as completed_tickets,
+        coalesce(c.touched_tickets,0) as touched_tickets,
+        case when coalesce(c.touched_tickets,0)>0
+             then round(100.0*c.completed_tickets/c.touched_tickets,1) else 0 end as completion_pct,
+        coalesce(s.stalled_tickets,0) as stalled_tickets
+      from per_dev_family p
+      left join ticket_touch t on t.dev = p.dev
+      left join completion   c on c.dev = p.dev
+      left join stalled      s on s.dev = p.dev
+      group by p.dev, t.ticket_volume, c.completed_tickets, c.touched_tickets, s.stalled_tickets
+      order by p.dev;
+    `;
+
+      const { rows } = await pool.query(sql, [
+        fromISO,
+        toISO,
+        APP_TZ,
+        parseInt(stallHours, 10) || 12,
+        devEmail, // $5
+        devLocal, // $6
+      ]);
+
+      // optional filter by a specific developer (email)
+      const rowsF =
+        devEmail || devLocal
+          ? rows.filter((r) => {
+              const e = S(r.email).toLowerCase();
+              const lp = e.split('@')[0];
+              return (
+                (devEmail && e === devEmail) || (devLocal && lp === devLocal)
+              );
+            })
+          : rows;
+
+      const SNAPSHOT_CSS = `
+  body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;color:#111;margin:0;padding:24px;}
+  h1{font-size:20px;margin:0 0 6px;}
+  .muted{color:#6b7280}
+  .card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:12px 0;background:#fff;}
+  .kpi{display:flex;gap:12px;flex-wrap:wrap}
+  .pill{background:#f6f6f6;border:1px solid #eee;border-radius:999px;padding:8px 12px;font-weight:600}
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  th,td{border-bottom:1px solid #f0f0f0;padding:8px;text-align:left;font-size:12.5px}
+  th{background:#fafafa}
+  .lbl{width:40%}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .h2{font-size:14px;margin:14px 0 6px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .section-title{font-weight:700;margin-top:8px}
+  .kb ul{margin:6px 0 0 16px;padding:0}
+  .kb li{margin:4px 0}
+  @media print {
+  .card{page-break-inside:avoid}
+  .kb ul, .kb li { break-inside: avoid; page-break-inside: avoid; }
+  }
+  @media (max-width: 1024px), print {
+  .grid { grid-template-columns: 1fr; }
+  .grid .card { margin: 0 0 12px 0; }
+    }
+
+`;
+
+      // No data → show a helpful HTML page instead of a blank response
+      if (format === 'html' && rowsF.length === 0) {
+        const safe = (x) => (x ? String(x) : '—');
+        const emptyHtml = `<!doctype html>
+<meta charset="utf-8">
+<style>${SNAPSHOT_CSS}</style>
+<h1>Developer Progress Snapshot</h1>
+<div class="muted">No progress data found for the selected filters.</div>
+<ul>
+  <li><strong>Range:</strong> ${safe(fromISO)} → ${safe(toISO)}</li>
+  <li><strong>Developer:</strong> ${
+    safe(devFilter) === '—' ? 'all' : safe(devFilter)
+  }</li>
+  <li><strong>Group:</strong> ${safe(groupBy)}</li>
+  <li><strong>Stall threshold (hours):</strong> ${safe(stallHours)}</li>
+  </ul>
+<div class="tips">
+  <p>Try one of these:</p>
+  <ul>
+    <li>Expand the date range (e.g., last 7–30 days).</li>
+    <li>Remove the developer filter (use <code>developer=all</code>).</li>
+    <li>Confirm there are any <code>progress_updates</code> in that window.</li>
+  </ul>
+</div>`;
+        return res.type('html').send(emptyHtml);
+      }
+
+      // if (process.env.SNAPSHOTS_DEBUG === '1') {
+      console.log('[snapshots]', {
+        rawDev,
+        devFilter,
+        rows: rows.length,
+        rowsF: rowsF.length,
+      });
+      //}
+
+      // label like "Oct 1 – Oct 31, 2025" or "October 2025"
+      function labelPeriod(f, t) {
+        const fd = new Date(f),
+          td = new Date(t);
+        const sameDay = f === t;
+        const month = (d) => d.toLocaleString('en', { month: 'short' });
+        const longMonth = (d) => d.toLocaleString('en', { month: 'long' });
+
+        // If the window is the full month, show "October 2025"
+        const firstOfMonth = new Date(fd.getFullYear(), fd.getMonth(), 1);
+        const lastOfMonth = new Date(fd.getFullYear(), fd.getMonth() + 1, 0);
+        const isFullMonth =
+          fd.getTime() === firstOfMonth.getTime() &&
+          td.getTime() === lastOfMonth.getTime();
+
+        if (isFullMonth) return `${longMonth(fd)} ${fd.getFullYear()}`;
+        if (sameDay)
+          return `${longMonth(fd)} ${fd.getDate()}, ${fd.getFullYear()}`;
+
+        return `${month(fd)} ${fd.getDate()} – ${month(
+          td
+        )} ${td.getDate()}, ${td.getFullYear()}`;
+      }
+
+      const periodLabel = labelPeriod(fromISO, toISO, groupBy);
+      // slug used in the PDF filename (prefer email local-part, else alias, else nothing)
+      const aliasSlugRaw = devEmail ? devEmail.split('@')[0] : devLocal || '';
+      const aliasSlug = fileSafeSlug(aliasSlugRaw);
+      const fileDevPart = aliasSlug ? `${aliasSlug}_` : '';
+
+      // If AI is requested, precompute insights ONLY for targeted dev(s)
+      const insightsByEmail = new Map();
+      if (useAI && openai && rowsF.length > 0) {
+        for (const r of rowsF) {
+          try {
+            const got = await aiSnapshotInsightsForDev({
+              periodLabel,
+              metrics: r,
+            });
+            insightsByEmail.set(String(r.email || '').toLowerCase(), got);
+          } catch (e) {
+            console.warn(
+              '[snapshots][ai] insight error for',
+              r.email,
+              e.message
+            );
+          }
+        }
+      }
+
+      // HTML renderer
+      function pct(n) {
+        const x = Number(n);
+        return Number.isFinite(x) ? `${x.toFixed(1)}%` : '0%';
+      }
+      function h(n) {
+        const x = Number(n);
+        return Number.isFinite(x) ? x.toFixed(2) : '0.00';
+      }
+      function v(obj, key) {
+        return (
+          (obj && obj[key]) || { transitions: 0, hours_sum: 0, hours_avg: 0 }
+        );
+      }
+
+      function renderSnapshotHTML({
+        name,
+        email,
+        period,
+        ticketVolume,
+        completionPct,
+        stalled,
+        families,
+        insights, // NEW
+      }) {
+        const famKeys = [
+          '100_xx',
+          '200_xx',
+          '300_xx',
+          '400_xx',
+          '500_xx',
+          '600_xx',
+          '700_xx',
+          '800_xx',
+        ];
+        const totalTransitions =
+          famKeys.reduce((s, k) => s + (v(families, k).transitions || 0), 0) ||
+          0;
+        const totalHours = famKeys.reduce(
+          (s, k) => s + (v(families, k).hours_sum || 0),
+          0
+        );
+        const weightedAvg = totalTransitions
+          ? totalHours / totalTransitions
+          : 0;
+        const makeRow = (label, code) => {
+          const f = v(families, code);
+          const pctOfTotal = totalTransitions
+            ? Math.round((100 * (f.transitions || 0)) / totalTransitions)
+            : 0;
+          return `
+          <tr>
+            <td class="lbl">${label}</td>
+            <td class="num">${f.transitions || 0}</td>
+            <td class="num">${pctOfTotal}%</td>
+            <td class="num">${h(f.hours_sum)}h</td>
+            <td class="num">${h(f.hours_avg)}h</td>
+          </tr>`;
+        };
+        const starts = v(families, '100_xx').transitions || 0;
+        const finishes = v(families, '500_xx').transitions || 0;
+        const blockers =
+          (v(families, '600_xx').transitions || 0) +
+          (v(families, '800_xx').transitions || 0);
+        const reviews = v(families, '400_xx').transitions || 0;
+        const testing = v(families, '300_xx').transitions || 0;
+
+        const I = insights || null;
+        const stallWhy =
+          I && I.risk && I.risk.stall_why
+            ? I.risk.stall_why
+            : `Blocker/delay footprint ${blockers} (600/800) and elevated 200_xx avg of ${h(
+                v(families, '200_xx').hours_avg
+              )}h.`;
+
+        const slipWhy =
+          I && I.risk && I.risk.slip_why
+            ? I.risk.slip_why
+            : `Starts ${starts} vs finishes ${finishes}; completion ${pct(
+                completionPct
+              )}.`;
+        const list = (arr) =>
+          Array.isArray(arr) && arr.length
+            ? arr.map((x) => `<li>${escapeHtml(x)}</li>`).join('')
+            : '<li class="muted">—</li>';
+        // NEW: attach a KPI to each action by pulling from suggested_kpis
+        function focusRows(focusAreas, suggestedKpis = []) {
+          const kpisPool = Array.isArray(suggestedKpis)
+            ? suggestedKpis.slice()
+            : [];
+
+          const toks = (s) =>
+            String(s || '')
+              .toLowerCase()
+              .match(/[a-z0-9_]+/g) || [];
+
+          // choose a KPI that shares tokens with this focus row; else take first unused
+          const takeKpiFor = (fa) => {
+            if (!kpisPool.length) return '';
+            const hay = new Set(
+              toks(`${fa.focus} ${fa.why || ''} ${fa.action || ''}`)
+            );
+            let idx = kpisPool.findIndex((k) =>
+              toks(k).some((w) => hay.has(w))
+            );
+            if (idx < 0) idx = 0;
+            return kpisPool.splice(idx, 1)[0] || '';
+          };
+
+          if (!Array.isArray(focusAreas) || !focusAreas.length) {
+            return `<tr><td class="muted">—</td><td class="muted">—</td><td class="muted">—</td></tr>`;
+          }
+
+          return focusAreas
+            .map((x) => {
+              const f = escapeHtml(x.focus || '');
+              const y = escapeHtml(x.why || '');
+              const a = escapeHtml(x.action || '');
+              const kpi = takeKpiFor(x);
+              const actionWithKpi = kpi
+                ? `${a} <span class="muted">KPI: ${escapeHtml(kpi)}</span>`
+                : a;
+              return `<tr><td>${f}</td><td>${
+                y || '—'
+              }</td><td>${actionWithKpi}</td></tr>`;
+            })
+            .join('');
+        }
+
+        return `<!doctype html>
+<html><head><meta charset="utf-8">
+<style>
+  body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;color:#111;margin:0;padding:24px;}
+  h1{font-size:20px;margin:0 0 6px;}
+  .muted{color:#6b7280}
+  .card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:12px 0;background:#fff;}
+  .kpi{display:flex;gap:12px;flex-wrap:wrap}
+  .pill{background:#f6f6f6;border:1px solid #eee;border-radius:999px;padding:8px 12px;font-weight:600}
+  table{width:100%;border-collapse:collapse;margin-top:6px}
+  th,td{border-bottom:1px solid #f0f0f0;padding:8px;text-align:left;font-size:12.5px}
+  th{background:#fafafa}
+  .lbl{width:40%}
+  .num{text-align:right;font-variant-numeric:tabular-nums}
+  .h2{font-size:14px;margin:14px 0 6px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .section-title{font-weight:700;margin-top:8px}
+  .kb ul{margin:6px 0 0 16px;padding:0}
+  .kb li{margin:4px 0}
+  @media print {.card{page-break-inside:avoid}}
+</style>
+</head>
+<body>
+  <h1>Developer Progress Snapshot</h1>
+  <div class="muted">Developer: <strong>${
+    name || email || '—'
+  }</strong> &nbsp;|&nbsp; Report Period: <strong>${period}</strong></div>
+
+  <div class="card">
+    <div class="kpi">
+      <div class="pill">Ticket Volume: ${ticketVolume}</div>
+      <div class="pill">Completion Rate: ${pct(completionPct)}</div>
+      <div class="pill">Stalled Tickets: ${stalled}</div>
+      <div class="pill">Total Transitions: ${totalTransitions}</div>
+      <div class="pill">Avg Cycle-Time: ${h(weightedAvg)}h</div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="section-title">Progress Status (Aggregate & Average)</div>
+    <table>
+      <thead>
+        <tr><th class="lbl">Status Codes</th><th class="num">Transitions</th><th class="num">% of Total</th><th class="num">Aggregate Hours</th><th class="num">Avg Cycle-Time</th></tr>
+      </thead>
+      <tbody>
+        ${makeRow('100_xx - Discovery / Starting Work', '100_xx')}
+        ${makeRow('200_xx - In-Progress Development', '200_xx')}
+        ${makeRow('300_xx - Testing / Debugging', '300_xx')}
+        ${makeRow('400_xx - Peer / Code Review', '400_xx')}
+        ${makeRow('500_xx - Completion / Handoffs', '500_xx')}
+        ${makeRow('600_xx - Challenges', '600_xx')}
+        ${makeRow('700_xx - Investigation', '700_xx')}
+        ${makeRow('800_xx - Delays', '800_xx')}
+      </tbody>
+    </table>
+    <div class="muted" style="margin-top:6px; font-size: 0.8rem;">Average cycle-time = Aggregate Hours ÷ Transitions per family; durations clipped to the report window.</div>
+  </div>
+
+  <div class="grid">
+  <div class="card kb">
+  <div class="section-title">Key Takeaways</div>
+  <ul>
+    ${(() => {
+      // Reuse escapeHtml, v(), h(), I, families, and the computed starts/finishes/blockers/reviews/testing in scope.
+
+      const pickInsight = (regexes, fallback) => {
+        const pool = [];
+        if (I?.key_findings?.length) pool.push(...I.key_findings);
+        if (I?.strengths?.length) pool.push(...I.strengths);
+        if (I?.focus_areas?.length) {
+          pool.push(
+            ...I.focus_areas.map(
+              (f) => `${f.focus} ${f.why || ''} ${f.action || ''}`
+            )
+          );
+        }
+        if (I?.risk) {
+          pool.push(`stall ${I.risk.stall_risk}`, `slip ${I.risk.slip_risk}`);
+        }
+        const found = pool.find((s) => {
+          const t = String(s || '').toLowerCase();
+          return regexes.some((re) => re.test(t));
+        });
+        return escapeHtml(found || fallback);
+      };
+
+      // Baselines for numbers we show:
+      const inprog = v(families, '200_xx').transitions || 0;
+      const avg200 = h(v(families, '200_xx').hours_avg || 0);
+      const avg300 = h(v(families, '300_xx').hours_avg || 0);
+
+      // Themed AI tails (fallbacks keep it sensible if no AI insight was produced)
+      const tail1 = pickInsight(
+        [/finish|500_xx|throughput|complete|conversion|delivery/],
+        finishes >= starts
+          ? 'throughput kept pace'
+          : 'consider more pushes to 500_xx'
+      );
+      const tail2 = pickInsight(
+        [/600|800|block|delay|stall|unblock|dependency/],
+        'target reduction'
+      );
+      const fallbackRT = `${
+        reviews > 0 ? 'Code reviews visible' : 'Surface PR reviews (400_xx)'
+      }; Testing ${testing > 0 ? 'active' : 'light'}`;
+      const tail3 = pickInsight(
+        [/review|400_xx|\bpr\b|testing|qa|300_xx/],
+        fallbackRT
+      );
+      const tail4 = pickInsight(
+        [/200|wip|in[- ]progress|flow|context|multitask|batch|queue/],
+        'keep WIP small to improve flow'
+      );
+      const tail5 = pickInsight(
+        [/cycle|lead[- ]?time|avg|aging|wait|stall|slip|flow time|latency/],
+        I?.risk
+          ? `risk — stall ${escapeHtml(I.risk.stall_risk)}, slip ${escapeHtml(
+              I.risk.slip_risk
+            )}`
+          : 'watch cycle-time averages'
+      );
+      // If AI is active (I exists) -> overall; else -> per-family 200/300
+      const cycleLine = I
+        ? `overall avg ${h(weightedAvg)}h; ${tail5}`
+        : `200_xx avg ${avg200}h, 300_xx avg ${avg300}h; ${tail5}`;
+
+      return `
+        <li><b>Starts vs Finishes:</b> ${starts} vs ${finishes}; ${tail1}.</li>
+        <li><b>Blocked/Delays footprint:</b> ${blockers} transitions (600/800); ${tail2}.</li>
+        <li><b>Reviews/Testing:</b> ${tail3}.</li>
+        <li><b>WIP/Flow balance:</b> ${inprog} transitions (200_xx); ${tail4}.</li>
+        <li><b>Cycle-time signals:</b> ${cycleLine}.</li>
+
+      `;
+    })()}
+  </ul>
+</div>
+
+
+
+      <div class="card kb">
+    <div class="section-title">What's Working Well</div>
+    <ul>
+      ${
+        I
+          ? list(I.strengths)
+          : `
+      <li>${
+        finishes > 0
+          ? 'Conversion to 500_xx completions is consistent'
+          : 'Good groundwork in early stages (100/200)'
+      }.</li>
+      <li>${
+        testing > 0
+          ? 'Testing cadence (300_xx) present'
+          : 'Primary dev flow focus is clear'
+      }.</li>
+      `
+      }
+    </ul>
+  </div>
+
+  </div>
+
+    <div class="card kb">
+    <div class="section-title">Focus Areas</div>
+    <table>
+      <thead><tr><th>Focus</th><th>Why it Matters</th><th>Concrete Action (Next Month)</th></tr></thead>
+      <tbody>
+        ${
+          I
+            ? focusRows(I.focus_areas, I.suggested_kpis)
+            : `
+        <tr><td>Limit WIP</td><td>High time in 200_xx inflates cycle-time.</td><td>Cap concurrent tickets at 3; KPI: reduce 200_xx avg to ≤ 6h.</td></tr>
+        <tr><td>Unblock Faster</td><td>600/800 footprint increases stall risk.</td><td>Daily chase with owners; KPI: cut 800_xx transitions by 25%.</td></tr>
+        <tr><td>Make Reviews Visible</td><td>Low 400_xx hinders flow.</td><td>Post PR links; KPI: ≥ 1 review transition per completed ticket.</td></tr>
+        `
+        }
+      </tbody>
+    </table>
+
+
+    
+  </div>
+
+
+    <div class="card kb">
+    <div class="section-title">Support from Team Leads</div>
+    <ul>
+      ${
+        I &&
+        Array.isArray(I.support_from_team_leads) &&
+        I.support_from_team_leads.length
+          ? list(I.support_from_team_leads)
+          : '<li>WIP coaching, shared escalation path, daily 15-min review window.</li>'
+      }
+    </ul>
+  </div>
+
+  <div class="card kb">
+    <div class="section-title">Risk Signals</div>
+    ${
+      I && I.risk
+        ? `<ul>
+            <li><strong>Stall:</strong> ${escapeHtml(
+              I.risk.stall_risk
+            )} — <span class="muted">${escapeHtml(stallWhy)}</span></li>
+            <li><strong>Slip:</strong> ${escapeHtml(
+              I.risk.slip_risk
+            )} — <span class="muted">${escapeHtml(slipWhy)}</span></li>
+           </ul>`
+        : `<ul>
+            <li><strong>Stall:</strong> — <span class="muted">${escapeHtml(
+              stallWhy
+            )}</span></li>
+            <li><strong>Slip:</strong> — <span class="muted">${escapeHtml(
+              slipWhy
+            )}</span></li>
+           </ul>`
+    }
+  </div>
+
+</body></html>`;
+      }
+
+      // Load display names (nice header)
+      const namesByEmail = new Map();
+      const emails = rowsF.map((r) => S(r.email).toLowerCase()).filter(Boolean);
+
+      if (emails.length) {
+        const { rows: users } = await pool.query(
+          `select lower(email) as email, coalesce(nullif(name,''), '') as name from users where lower(email) = any($1)`,
+          [emails]
+        );
+        users.forEach((u) => namesByEmail.set(u.email, u.name || ''));
+      }
+
+      const docs = rowsF.map((r) =>
+        renderSnapshotHTML({
+          name: namesByEmail.get((r.email || '').toLowerCase()) || '',
+          email: r.email,
+          period: periodLabel,
+          ticketVolume: Number(r.ticket_volume) || 0,
+          completionPct: Number(r.completion_pct) || 0,
+          stalled: Number(r.stalled_tickets) || 0,
+          families: r.families || {},
+          insights:
+            insightsByEmail.get(String(r.email || '').toLowerCase()) || null, // NEW
+        })
+      );
+
+      if (format === 'html') {
+        return res
+          .type('html')
+          .send(docs.join("<div style='page-break-after:always'></div>"));
+      }
+
+      // PDF (one multi-page file)
+      const puppeteer = await import('puppeteer');
+      const browser = await puppeteer.launch({
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+        ],
+      });
+
+      const stripOuter = (html) =>
+        String(html || '')
+          .replace(/^<!doctype html>/i, '')
+          .replace(/<\/body>\s*<\/html>\s*$/i, '')
+          .replace(/^[\s\S]*?<body[^>]*>/i, ''); // keep only <body> inner
+
+      const pages = docs
+        .map(stripOuter)
+        .join("<div style='page-break-after:always'></div>");
+
+      const shell = `<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    @page { size: A4; margin: 20mm 16mm; }
+    body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    ${SNAPSHOT_CSS}
+  </style>
+</head>
+<body>${pages}</body>
+</html>`;
+
+      const page = await browser.newPage();
+      await page.setContent(shell, { waitUntil: 'networkidle0' });
+      const pdfRaw = await page.pdf({
+        format: 'A4',
+        printBackground: true,
+        margin: { top: '20mm', right: '16mm', bottom: '20mm', left: '16mm' },
+      });
+      await browser.close();
+
+      // Coerce to a Node Buffer (Puppeteer can return a Uint8Array in some setups)
+      const buf = Buffer.isBuffer(pdfRaw)
+        ? pdfRaw
+        : ArrayBuffer.isView(pdfRaw)
+        ? Buffer.from(pdfRaw)
+        : Buffer.from(pdfRaw ?? []);
+
+      // Signature + header check
+      if (buf.length < 5 || buf.toString('ascii', 0, 5) !== '%PDF-') {
+        console.error(
+          '[snapshots] invalid PDF payload, first bytes:',
+          Array.from(buf.slice(0, 16)).join(',')
+        );
+        return res.status(500).json({ error: 'pdf_generation_failed' });
+      }
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="Developer-Snapshots_${fileDevPart}${fromISO}_to_${toISO}.pdf"`
+      );
+
+      res.setHeader('Cache-Control', 'no-store, no-transform');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.setHeader('Content-Length', String(buf.length));
+      return res.end(buf); // avoid implicit string conversion
+    } catch (e) {
+      console.error('[snapshots] error:', e);
+      res.status(500).json({ error: 'snapshot_failed', detail: String(e) });
+    }
+  }
+);
+
+// Email Developer Progress Snapshot
+app.post(
+  '/api/reports/snapshots/email',
+  requireAuth,
+  requirePMOnly,
+  async (req, res) => {
+    try {
+      const {
+        developer = 'all',
+        developerLabel = '',
+        fromDate,
+        toDate,
+        ai = '0',
+        cc = [],
+      } = req.body || {};
+
+      const from = parseDateParam(fromDate, todayISO());
+      const to = parseDateParam(toDate, from);
+
+      // Build the HTML & PDF via existing helper
+      const { subject, html, attachments } = await buildSnapshotEmail(
+        req,
+        { from, to, developer },
+        { ai: String(ai) === '1' }
+      );
+
+      // Resolve main recipient from dev/label using your DB (tfs_users/users)
+      const toEmail = await resolveRecipientEmail(
+        pool,
+        developer,
+        developerLabel
+      );
+      const toList = toEmail ? [toEmail] : []; // no-op if "all"
+      const ccList = normalizeEmails(cc);
+
+      // If developer=all and no toEmail, just send to CCs (PM/team leads)
+      if (!toList.length && !ccList.length) {
+        return res.status(400).json({
+          error: 'no recipients (developer unresolved and no CC provided)',
+        });
+      }
+
+      const info = await sendEmail({
+        to: toList,
+        cc: ccList,
+        subject,
+        html,
+        attachments,
+      });
+      res.json(info);
+    } catch (e) {
+      res.status(500).json({ error: String(e.message || e) });
+    }
+  }
+);
+
 // --- blockers radar
 app.get('/api/updates/blockers', async (_req, res) => {
-  const date = todayISO();
+  const date = await todayLocal(pool);
   const r = await pool.query(
     `select u.ticket_id as "ticketId", u.email, u.code, u.note, u.at,
          t.title, t.state, t.type, t.assigned_to as "assignedTo", t.iteration_path as "iterationPath"
@@ -1385,7 +2598,7 @@ app.get('/api/updates/blockers', async (_req, res) => {
      where u.date = $1`,
     [date]
   );
-  const isBlockerCode = (c) => c && /^(600|700|800)_/.test(String(c));
+  // const isBlockerCode = (c) => c && /^(600|700|800)_/.test(String(c));
   const hits = [];
   for (const x of r.rows) {
     const txt = `${x.code} ${x.note || ''}`.toLowerCase();
@@ -1401,54 +2614,6 @@ app.get('/api/updates/blockers', async (_req, res) => {
   }
   const items = Array.from(byTicket.values());
   res.json({ date, keywords: blockerKeywords, items });
-});
-
-// --- TSV export
-app.get('/api/updates/today.tsv', async (_req, res) => {
-  const date = await todayLocal(pool);
-
-  const r = await pool.query(
-    `select u.email, u.ticket_id as "ticketId", u.code, u.note,
-            t.title, t.state, t.iteration_path as "iterationPath", t.assigned_to as "assignedTo",
-            u.at
-     from progress_updates u
-     left join tickets t on t.id = u.ticket_id
-     where u.date = $1`,
-    [date]
-  );
-  // latest per (email,ticket)
-  const map = new Map();
-  for (const x of r.rows) {
-    const k = `${x.email}:${x.ticketId}`;
-    const prev = map.get(k);
-    if (!prev || x.at > prev.at) map.set(k, x);
-  }
-  let tsv =
-    'date\tuser\tticketId\ttitle\tstate\tcode\tnote\titerationPath\tassignedTo\n';
-  for (const x of Array.from(map.values()).sort(
-    (a, b) =>
-      a.email.localeCompare(b.email) ||
-      String(a.ticketId).localeCompare(String(b.ticketId))
-  )) {
-    const fields = [
-      date,
-      x.email,
-      x.ticketId,
-      x.title || '',
-      x.state || '',
-      x.code || '',
-      (x.note || '').replace(/\t/g, ' ').replace(/\r?\n/g, ' '),
-      x.iterationPath || '',
-      x.assignedTo || '',
-    ];
-    tsv += fields.join('\t') + '\n';
-  }
-  res.setHeader('Content-Type', 'text/tab-separated-values; charset=utf-8');
-  res.setHeader(
-    'Content-Disposition',
-    `attachment; filename="updates-${date}.tsv"`
-  );
-  res.send(tsv);
 });
 
 // --- progress codes (dynamic)
@@ -1501,70 +2666,33 @@ app.get('/api/ui/progress-codes/options', async (_req, res) => {
 });
 
 // --- AI triage for blockers (per-row or bulk). PM section already gated in UI, but require auth.
+// --- AI triage (explicit list only; "triage-all" fallback removed)
 app.post('/api/ai/triage', requireAuth, async (req, res) => {
   try {
     if (!openai) return res.status(501).json({ error: 'ai_not_configured' });
 
-    // Accept either an explicit list of items (preferred)
-    // or, if none provided, fall back to "today blockers" like /api/updates/blockers.
-    let items = Array.isArray(req.body?.items) ? req.body.items : null;
-
-    if (!items) {
-      const date = todayISO();
-      const r = await pool.query(
-        `select u.ticket_id as "ticketId", u.code, u.note, u.at,
-       t.title, t.state, t.type,
-       t.assigned_to         as "assignedTo",
-       t.iteration_path      as "iterationPath",
-       t.area_path           as "areaPath",
-       t.tags,
-       t.priority,
-       t.severity,
-       t.created_date        as "createdDate",
-       t.changed_date        as "changedDate",
-       t.state_change_date   as "stateChangeDate",
-       t.found_in_build      as "foundInBuild",
-       t.integrated_in_build as "integratedInBuild",
-       t.related_link_count  as "relatedLinkCount",
-       t.effort
-  from progress_updates u
-  left join tickets t on t.id = u.ticket_id
- where u.date = $1
-`,
-        [date]
-      );
-      const isBlockerCode = (c) => c && /^(600|700|800)_/.test(String(c));
-      const hits = [];
-      for (const x of r.rows) {
-        const txt = `${x.code} ${x.note || ''}`.toLowerCase();
-        const kw = blockerKeywords.find((k) => k && txt.includes(k));
-        if (isBlockerCode(x.code) || kw)
-          hits.push({
-            ...x,
-            keyword: isBlockerCode(x.code) ? 'code' : kw || '',
-          });
-      }
-      const byTicket = new Map();
-      for (const h of hits) {
-        const prev = byTicket.get(String(h.ticketId));
-        if (!prev || h.at > prev.at) byTicket.set(String(h.ticketId), h);
-      }
-      items = Array.from(byTicket.values());
+    // Require an explicit list of items; no implicit DB fallback anymore.
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    if (!items.length) {
+      return res.status(400).json({
+        status: 'error',
+        error: 'items_required',
+        message:
+          'Provide items:[...] with ticket context to triage. Bulk/implicit triage has been removed.',
+      });
     }
 
     const suggestions = await aiTriage(items);
-    res.json({ status: 'ok', count: suggestions.length, suggestions });
+    return res.json({ status: 'ok', count: suggestions.length, suggestions });
   } catch (e) {
     const http = e?.status || e?.response?.status || 500;
-
-    console.error('[ai/triage] OpenAI error:', {
+    console.error('[ai/triage] error:', {
       status: http,
       code: e?.code,
       message: e?.message,
       data: e?.response?.data,
       raw: e?.error || null,
     });
-
     return res.status(http).json({
       status: 'error',
       error: e?.message || 'server_error',
@@ -1573,6 +2701,499 @@ app.post('/api/ai/triage', requireAuth, async (req, res) => {
     });
   }
 });
+
+// --- AI: Dev Assist (chase draft + next steps) -------------------------------
+
+// If you already declared a scrub() helper, we reuse it. Otherwise define a no-op.
+const __hasScrub = typeof scrub === 'function';
+const _scrub = __hasScrub ? scrub : (s) => String(s || '');
+
+// Small schemas for strict JSON output
+const ChaseDraftSchema = {
+  name: 'ChaseDraft',
+  strict: false, // allow optional fields
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      chase_text: { type: 'string' },
+      who: { type: 'string' },
+      tone: { type: 'string', enum: ['neutral', 'friendly', 'polite'] },
+    },
+    required: ['chase_text'],
+  },
+};
+
+const NextStepsSchema = {
+  name: 'NextSteps',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      next_steps: {
+        type: 'array',
+        items: { type: 'string' },
+        minItems: 2,
+        maxItems: 6,
+      },
+    },
+    required: ['next_steps'],
+  },
+};
+// --- AI: Snapshot Insights (used by /api/reports/snapshots?ai=1) -------------
+const SnapshotInsightsSchema = {
+  name: 'SnapshotInsights',
+  strict: false,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      key_findings: {
+        type: 'array',
+        items: { type: 'string' },
+        minItems: 3,
+        maxItems: 6,
+      },
+      strengths: {
+        type: 'array',
+        items: { type: 'string' },
+        minItems: 1,
+        maxItems: 5,
+      },
+      focus_areas: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            focus: { type: 'string' },
+            why: { type: 'string' },
+            action: { type: 'string' },
+          },
+          required: ['focus', 'action'],
+        },
+        minItems: 1,
+        maxItems: 5,
+      },
+      suggested_kpis: {
+        type: 'array',
+        items: { type: 'string' },
+        minItems: 1,
+        maxItems: 5,
+      },
+      risk: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          stall_risk: { type: 'string', enum: ['low', 'medium', 'high'] },
+          slip_risk: { type: 'string', enum: ['low', 'medium', 'high'] },
+          stall_why: { type: 'string' }, // NEW (optional)
+          slip_why: { type: 'string' }, // NEW (optional)
+        },
+        required: ['stall_risk', 'slip_risk'],
+      },
+      // Optional, not required to keep compatibility
+      support_from_team_leads: {
+        type: 'array',
+        items: { type: 'string' },
+        minItems: 1,
+        maxItems: 3,
+      },
+    },
+    required: ['key_findings', 'strengths', 'focus_areas', 'risk'],
+  },
+};
+
+// Minimal helper to call OpenAI for one developer's metrics
+async function aiSnapshotInsightsForDev({ periodLabel, metrics }) {
+  if (!openai)
+    throw Object.assign(new Error('AI not configured'), { status: 501 });
+
+  const fams = metrics.families || {};
+  const famKeys = [
+    '100_xx',
+    '200_xx',
+    '300_xx',
+    '400_xx',
+    '500_xx',
+    '600_xx',
+    '700_xx',
+    '800_xx',
+  ];
+  const totH = famKeys.reduce((s, k) => s + (fams[k]?.hours_sum || 0), 0);
+  const totT = famKeys.reduce((s, k) => s + (fams[k]?.transitions || 0), 0);
+  const overallAvg = totT ? +(totH / totT).toFixed(2) : 0;
+
+  // Keep payload tidy and grounded on your computed aggregates
+  const trimmed = {
+    period: periodLabel,
+    email: String(metrics.email || ''),
+    ticket_volume: Number(metrics.ticket_volume || 0),
+    completion_pct: Number(metrics.completion_pct || 0),
+    stalled_tickets: Number(metrics.stalled_tickets || 0),
+    families: metrics.families || {}, // { '100_xx': { transitions, hours_sum, hours_avg }, ... }
+    overall_avg_cycle_time: overallAvg, // <- NEW
+  };
+
+  const system = `You are a delivery PM analyzing a developer's progress snapshot.
+You receive per-family metrics (100_xx..800_xx: transitions, hours_sum, hours_avg), ticket_volume, completion_pct, stalled_tickets.
+Write concise outputs:
+- key_findings: 3-5 bullets (throughput, bottlenecks, balance across 100/200/300/400/500, blocker footprint 600/800).
+- strengths: 2-5 bullets.
+- focus_areas: 1-5 (each with <focus>, optional <why>, and concrete <action> for next month).
+- suggested_kpis: ≤5 compact KPI statements (e.g., "Reduce 800_xx transitions by 25%").
+- risk: stall_risk & slip_risk = low/medium/high inferred from metrics, plus stall_why and slip_why (one-line, data-grounded reasons).
+- support_from_team_leads: 1-3 bullets, written as actions for the team lead/manager (not the developer), each ≤20 words, concrete, next-week scope (cadence, escalations, pairing, env access, PR gates, 10–15 min unblock huddles).
+You also receive overall_avg_cycle_time (weighted across all families). Prefer it when summarizing “Cycle-time signals” and risk rationales.
+Keep outputs brief and practical, using the team's progress families.`;
+
+  const user = `Developer period: ${trimmed.period}
+Input JSON:
+${JSON.stringify(trimmed)}`;
+
+  const resp = await openai.responses.create({
+    model: OPENAI_MODEL,
+    input: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    text: {
+      format: {
+        type: 'json_schema',
+        name: SnapshotInsightsSchema.name,
+        schema: SnapshotInsightsSchema.schema,
+        strict: !!SnapshotInsightsSchema.strict,
+      },
+    },
+    max_output_tokens: 600,
+  });
+
+  const js = parseOpenAIJson(resp);
+  if (!js) throw new Error('bad_ai_response');
+  return js;
+}
+
+// Normalize & clamp free-form strings to keep prompts tidy
+function clampText(s, max = 600) {
+  s = String(s == null ? '' : s).trim();
+  if (!s) return '';
+  if (s.length <= max) return s;
+  return s.slice(0, max - 3) + '...';
+}
+// --- explicit "who" extractor (from notes/tags) -----------------------------
+function extractExplicitWho({ currentNote = '', lastNote = '', tags = '' }) {
+  const raw = [currentNote, lastNote, tags].filter(Boolean).join(' ');
+  const hay = raw.toLowerCase();
+
+  // role keywords → normalized role/team
+  const roleMap = [
+    {
+      re: /\bqa\b|\bquality\b|\bverification\b|\btester(s)?\b/,
+      who: 'QA team',
+    },
+    { re: /\breview\b|\bcrr\b|\bcode review\b/, who: 'Team Lead' },
+    { re: /\bapi\b|\bbackend\b|\bplatform\b/, who: 'API team' },
+    {
+      re: /\bpm\b|\bproject manager\b|\bprogram manager\b/,
+      who: 'Project Manager',
+    },
+    { re: /\bteam lead\b|\btech( |-)lead\b/, who: 'Team Lead' },
+    { re: /\boffshore\b|\bOM\b/, who: 'Offshore Manager' },
+    { re: /\bSSIS\b|\bENT\b/, who: 'ENT team' },
+
+    { re: /\bWinApp\b|\bNextGen\b/, who: 'NextGen team' },
+    { re: /\bagent7\b|\bdevice?\b/, who: 'Device team' },
+    {
+      re: /\bdep(endency)? (owner|client)\b|\bwaiting on\b/,
+      who: 'Offshore Manager',
+    },
+  ];
+  for (const { re, who } of roleMap) if (re.test(hay)) return who;
+
+  // light @tag capture
+  const m = hay.match(
+    /@(qa|api|pm|om|sre|ux|design|security|data|backend|platform|team[- ]lead)\b/i
+  );
+  if (m) {
+    const tag = m[1].toLowerCase();
+    const aliasMap = {
+      qa: 'QA team',
+      api: 'API team',
+      pm: 'Project Manager',
+      om: 'Offshore Manager',
+      sre: 'Ops/SRE',
+      ux: 'Design/UX',
+      design: 'Design/UX',
+      security: 'Security team',
+      data: 'Data team',
+      backend: 'API team',
+      platform: 'API team',
+      'team lead': 'Team Lead',
+      'team-lead': 'Team Lead',
+    };
+    return aliasMap[tag] || 'Team Lead';
+  }
+
+  // Person/email/alias extraction (addresses “with Roland”, “ask Alice”, “cc Bob”)
+  // 1) direct email
+  const email = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  if (email) return email[0];
+  // 2) @alias (keeps handle as target)
+  const atAlias = raw.match(/@([A-Za-z0-9._-]{2,})/);
+  if (atAlias) return atAlias[1];
+  // 3) capitalized person name after common verbs/preps
+  const person = raw.match(
+    /\b(?:with|to|for|ask|ping|cc|tag|loop(?:ing)?\s+in|handoff\s+to|handover\s+to|blocked\s+by|waiting\s+on)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/
+  );
+  if (person) return person[1]; // e.g., "Roland", "Alice Smith"
+
+  return ''; // nothing explicit found
+}
+
+// Guard: dev & pm may call this; others 403
+async function requireDevOrPM(req, res, next) {
+  try {
+    const me = await pool.query('select role from users where email=$1', [
+      req.userEmail,
+    ]);
+    const role = me.rows[0]?.role || 'dev';
+    if (role !== 'dev' && role !== 'pm') {
+      return res.status(403).json({ error: 'forbidden' });
+    }
+    next();
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+}
+
+app.post(
+  '/api/ai/dev-assist',
+  requireAuth,
+  requireDevOrPM,
+  async (req, res) => {
+    try {
+      if (!openai) return res.status(501).json({ error: 'ai_not_configured' });
+
+      // body: { mode, ticket: {id,title,assignedTo?,state?}, context: {...} }
+      const body = req.body || {};
+      const mode = String(body.mode || '').toLowerCase();
+      const ticket = body.ticket || {};
+      const ctx = body.context || {};
+      const selectedCode = clampText(
+        ctx.selectedCode || ctx.code || ctx.lastCode || '',
+        32
+      );
+
+      const tId = String(ticket.id || ticket.ticketId || '').trim();
+      const tTitle = clampText(ticket.title || '');
+      const tState = clampText(ticket.state || '');
+      const tWho = clampText(ticket.assignedTo || '');
+
+      // scrub potentially sensitive note/logs
+      const lastNote = clampText(_scrub(ctx.lastNote || ctx.note || ''), 800);
+      const tags = clampText(ctx.tags || '');
+      const blockers = clampText(ctx.blockers || '');
+      const currentNote = clampText(_scrub(ctx.currentNote || ''), 800);
+      const recentErrors = clampText(_scrub(ctx.recentErrors || ''), 800);
+
+      if (!tId) return res.status(400).json({ error: 'ticket.id required' });
+      if (!mode || (mode !== 'chase' && mode !== 'next')) {
+        return res
+          .status(400)
+          .json({ error: 'mode must be "chase" or "next"' });
+      }
+
+      // Enforce: only allow chase drafts for blocker families (600/700/800)
+      if (mode === 'chase' && !isBlockerCode(selectedCode)) {
+        return res.status(400).json({
+          error: 'chase_not_applicable_for_code',
+          code: selectedCode || null,
+        });
+      }
+
+      // Build prompt per mode
+      let system, user, schema;
+      // who is asking for the chase (the logged-in dev/pm)
+      let requesterLabel = req.userEmail;
+      try {
+        const meRow = await pool.query(
+          `select coalesce(nullif(name,''), email) as label from users where email=$1 limit 1`,
+          [req.userEmail]
+        );
+        requesterLabel = meRow.rows[0]?.label || req.userEmail;
+      } catch (_) {}
+
+      // Hints we may reuse after the OpenAI call (must be outer-scoped)
+      let explicitWho = '';
+      let defaultQATargetOk = false;
+
+      if (mode === 'chase') {
+        system = `You draft a concise “chase” message to unblock a developer.
+
+Audience / Targeting (strict priority):
+1) If an explicit target (explicit_who_hint) is provided (person name, email, alias, or team), you MUST address THEM and set who accordingly.
+2) Else if default_qa_ok is true, address the QA team.
+3) Else infer a sensible contact from the context (dependencies, review, ops, etc.).
+NEVER address the requester and NEVER greet the ticket assignee unless they are the correct contact.
+
+Style:
+- 2-3 sentences total, copy-paste ready.
+- Include: (1) specific ask, (2) why it unblocks the ticket, (3) a light time ask (today / ETA).
+- Calm, professional, blame-free. Default tone: "polite".
+- Start with a short salutation naming the role/person you're addressing
+  (e.g., "Hi QA team,", "Hi API team,", "Hi Alice (QA),", or "Hi team,").
+- Do NOT default to QA unless default_qa_ok=true or explicit_who_hint implies QA.
+
+Heuristics you may use when inferring:
+- review/CRR → Code reviewer
+- dependency/API/platform/backend → API team or Dependency owner
+- ops/sre/infra → Ops/SRE
+- security/secops → Security team
+- ux/design → Design/UX
+- data/analytics → Data team`;
+
+        // hydrate extra ticket context (includes type to control QA default)
+        let assignedToDb = tWho,
+          tagsDb = tags,
+          relLinksDb = null,
+          typeDb = (ticket.type || '').trim();
+        try {
+          const r = await pool.query(
+            'select assigned_to, tags, related_link_count, type from tickets where id=$1 limit 1',
+            [tId]
+          );
+          if (r.rowCount) {
+            assignedToDb = clampText(r.rows[0].assigned_to || assignedToDb);
+            tagsDb = clampText(r.rows[0].tags || tagsDb);
+            relLinksDb = Number.isFinite(+r.rows[0].related_link_count)
+              ? +r.rows[0].related_link_count
+              : null;
+            typeDb = clampText(r.rows[0].type || typeDb);
+          }
+        } catch (_) {}
+
+        // compute explicit target + QA default flag
+        explicitWho = extractExplicitWho({
+          currentNote,
+          lastNote,
+          tags: tagsDb,
+        });
+        defaultQATargetOk =
+          String(typeDb || '').toLowerCase() === 'bug' && !explicitWho;
+
+        user = `Ticket #${tId} — ${tTitle || '(no title)'}
+State: ${tState || '—'}
+Work item type: ${typeDb || '—'}
+AssignedTo (ticket): ${assignedToDb || '—'}
+Requester (logged-in): ${requesterLabel}
+Hints:
+- explicit_who_hint: ${explicitWho || '(none)'}
+- default_qa_ok: ${defaultQATargetOk ? 'true' : 'false'}
+
+Context:
+- Selected/last code: ${
+          clampText(ctx.selectedCode || ctx.code || ctx.lastCode || '') || '—'
+        }
+- Current note: ${currentNote || '—'}
+- Last note: ${lastNote || '—'}
+- Tags: ${tagsDb || '—'}
+- Related links: ${relLinksDb == null ? 'unknown' : String(relLinksDb)}
+- Blocker hints: ${blockers || '—'}
+- Recent errors/logs: ${recentErrors || '—'}
+
+Return JSON EXACTLY in this shape:
+{
+  "chase_text": "<start with 'Hi <role/person>,'; then 2-3 sentences with ask/why/when>",
+  "who": "<final target you addressed; role or person (e.g., 'QA team', 'API team', 'Code reviewer')>",
+  "tone": "neutral|friendly|polite"
+}`;
+        schema = ChaseDraftSchema;
+      } else {
+        // mode === 'next'
+        system = `You are a senior developer coach. Given a ticket, return the next 2-3 actions; each must be concrete, testable, and completable in ~30-90 minutes.
+
+STYLE: Imperative verbs only; be specific (files/functions/endpoints/data/envs/owner); avoid vague “continue work”.
+
+GUARDRAILS: Split anything >90 min. If blocked, include one “Chase/Unblock” (who + what to ask) and one fallback step. Prefer actions that produce an artifact.
+
+TAILORING: If a progress_code family (100/200/300/400/500/600/700/800_xx) or acceptance criteria are provided, align steps accordingly.
+
+OUTPUT: prefer steps should include <imperative action>; optional <objective end state> or <artifact: PR/test name/log line/screenshot/comment link> 
+
+`;
+        user = `Ticket #${tId} — ${tTitle || '(no title)'}
+State: ${tState || '—'}
+Notes:
+- Current note: ${currentNote || '—'}
+- Last note: ${lastNote || '—'}
+- Tags: ${tags || '—'}
+- Recent errors/logs: ${recentErrors || '—'}
+
+Return JSON: { "next_steps": ["...", "...", "..."] }`;
+        schema = NextStepsSchema;
+      }
+
+      const resp = await openai.responses.create({
+        model: OPENAI_MODEL,
+        input: [
+          { role: 'system', content: system },
+          { role: 'user', content: user },
+        ],
+        text: {
+          format: {
+            type: 'json_schema',
+            name: schema.name,
+            schema: schema.schema,
+            strict: !!schema.strict,
+          },
+        },
+        max_output_tokens: 400,
+      });
+
+      const js = parseOpenAIJson(resp);
+      if (!js) throw new Error('bad_ai_response');
+
+      // If the model chose QA but QA wasn't allowed, nudge to neutral
+      if (mode === 'chase' && js?.who) {
+        const whoLower = String(js.who).toLowerCase();
+        const isQAChoice = /\bqa\b/.test(whoLower);
+
+        // Re-evaluate the flags we computed above (we're still in the same scope)
+        if (
+          isQAChoice &&
+          !defaultQATargetOk &&
+          !/\bqa\b/.test(String(explicitWho).toLowerCase())
+        ) {
+          // soften greeting if model defaulted to QA but that wasn't allowed
+          if (typeof js.chase_text === 'string') {
+            js.chase_text = js.chase_text.replace(
+              /^hi\s+qa[^\w]*,\s*/i,
+              'Hi team, '
+            );
+          }
+          js.who = 'Team / owner';
+        }
+      }
+
+      return res.json({ status: 'ok', mode, ticket: { id: tId }, result: js });
+    } catch (e) {
+      const http = e?.status || e?.response?.status || 500;
+      console.error('[ai/dev-assist] error:', {
+        status: http,
+        code: e?.code,
+        message: e?.message,
+        data: e?.response?.data,
+      });
+      return res.status(http).json({
+        status: 'error',
+        error: e?.message || 'server_error',
+        code: e?.code || null,
+        openai: e?.response?.data || e?.error || null,
+      });
+    }
+  }
+);
 
 // static web
 app.use('/', express.static(path.join(process.cwd(), '..', 'web')));
