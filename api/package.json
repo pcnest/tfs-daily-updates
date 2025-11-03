@@ -6,7 +6,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server-pg.js",
-    "postinstall": "npx puppeteer browsers install chrome"
+    "start:render": "npx puppeteer browsers install chrome && node api/server-pg.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
