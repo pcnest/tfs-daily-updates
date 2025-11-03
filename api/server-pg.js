@@ -8,6 +8,7 @@ import fs from 'fs';
 import path from 'path';
 import OpenAI from 'openai';
 import nodemailer from 'nodemailer';
+import puppeteer from 'puppeteer';
 
 dotenv.config();
 
@@ -244,7 +245,15 @@ async function htmlToPdfBuffer(html) {
   const puppeteer = (await import('puppeteer')).default;
   const browser = await puppeteer.launch({
     headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    executablePath: puppeteer.executablePath(), // uses the Chrome we installed
+    args: [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-gpu',
+      '--no-zygote',
+      '--single-process',
+    ],
   });
   const page = await browser.newPage();
   await page.setContent(html, { waitUntil: 'networkidle0' });
