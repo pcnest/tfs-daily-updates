@@ -17,7 +17,7 @@ app.use(express.json({ limit: '50mb' }));
 app.use(cors());
 
 const API_KEY = process.env.API_KEY || 'CHANGE_ME_API_KEY';
-const PORT = process.env.PORT || 8080;
+const PORT = Number(process.env.PORT) || 8080;
 
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const openai = process.env.OPENAI_API_KEY
@@ -3316,7 +3316,3 @@ pool
   .catch((e) => {
     console.error('[boot] meta table ensure failed:', e);
   });
-
-app.listen(PORT, () =>
-  console.log(`API (Postgres) on http://localhost:${PORT}`)
-);
