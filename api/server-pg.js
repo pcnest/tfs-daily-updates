@@ -55,6 +55,7 @@ const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.SMTP_PASS || '';
 const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER; // must usually match SMTP_USER
 const TEST_RECIPIENT = process.env.TEST_RECIPIENT || ''; // handy for local testing
+const SNAPSHOT_CC = process.env.SNAPSHOT_CC || '';
 
 function buildMailTransport() {
   if (MAIL_MODE === 'file') {
@@ -176,6 +177,65 @@ async function resolveRecipientEmail(pool, developer, developerLabel) {
   return null; // not found
 }
 
+// Resolve a friendly display name for subject lines
+async function resolveDeveloperDisplayName(pool, developer, developerLabel) {
+  const dev = String(developer || '').trim();
+  const label = String(developerLabel || '').trim();
+
+  // 'all' stays 'all'
+  if (!dev || dev.toLowerCase() === 'all') return 'all';
+
+  // Prefer a clean name from the UI label if present (e.g., "Jane Doe — jdoe · jdoe@x")
+  if (label) {
+    // Take portion before an em-dash if present, and ensure it's not an email
+    const beforeDash = label.split('—')[0]?.trim();
+    if (beforeDash && !/@/.test(beforeDash)) return beforeDash;
+  }
+
+  // Determine an email to look up
+  let email = dev.includes('@') ? dev.toLowerCase() : null;
+  if (!email) {
+    // Try alias → tfs_users
+    const r = await pool.query(
+      `select lower(email) as email,
+              coalesce(nullif(display_name,''), '') as display_name
+         from tfs_users
+        where active=true
+          and lower(regexp_replace(alias,'^.*\\\\','')) = $1
+        limit 1`,
+      [dev.toLowerCase()]
+    );
+    if (r.rowCount) {
+      if (r.rows[0].display_name) return r.rows[0].display_name;
+      email = r.rows[0].email;
+    }
+  }
+
+  if (email) {
+    // Prefer app user name
+    const u = await pool.query(
+      `select coalesce(nullif(name,''), '') as name
+         from users where lower(email)=$1 limit 1`,
+      [email]
+    );
+    if (u.rowCount && u.rows[0].name) return u.rows[0].name;
+
+    // Fall back to TFS display_name
+    const t = await pool.query(
+      `select coalesce(nullif(display_name,''), '') as display_name
+         from tfs_users where lower(email)=$1 limit 1`,
+      [email]
+    );
+    if (t.rowCount && t.rows[0].display_name) return t.rows[0].display_name;
+
+    // Last resort: local-part
+    return email.split('@')[0];
+  }
+
+  // Couldn’t resolve → return the given token (alias) as-is
+  return dev;
+}
+
 // --- Email font normalization (Gmail + Outlook/Word) -------------------------
 const EMAIL_FONT_STACK =
   'Segoe UI, Arial, Helvetica, Noto Sans, Roboto, sans-serif';
@@ -245,15 +305,7 @@ async function htmlToPdfBuffer(html) {
   const puppeteer = (await import('puppeteer')).default;
   const browser = await puppeteer.launch({
     headless: true,
-    executablePath: puppeteer.executablePath(), // uses the Chrome we installed
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--no-zygote',
-      '--single-process',
-    ],
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
   const page = await browser.newPage();
   await page.setContent(html, { waitUntil: 'networkidle0' });
@@ -616,7 +668,12 @@ async function buildSnapshotEmail(req, range, { ai = false } = {}) {
   const pdfBuffer = await htmlToPdfBuffer(html);
 
   const devSlug = fileSafeSlug(range.developer || 'all');
-  const subject = `Developer Snapshot • ${range.developer || 'all'} • ${
+  const friendlyDev = await resolveDeveloperDisplayName(
+    pool,
+    range.developer,
+    range.developerLabel
+  );
+  const subject = `Developer Snapshot • ${friendlyDev || 'all'} • ${
     range.from
   } → ${range.to}`;
 
@@ -713,9 +770,36 @@ function buildBaseUrl(req) {
 app.get('/health', async (_req, res) => {
   try {
     await pool.query('select 1');
-    res.json({ ok: true, at: new Date().toISOString() });
+    res.json({
+      ok: true,
+      at: new Date().toISOString(),
+      has_snapshot_cc: ccFromEnv && ccFromEnv.length > 0, // <-- if you move this into scope or reparse here
+      snapshot_cc_count: normalizeEmails(SNAPSHOT_CC).length,
+    });
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
+  }
+});
+// puppeteer quick smoke test
+app.get('/diag/puppeteer', async (req, res) => {
+  try {
+    const execPath = puppeteer.executablePath();
+    const browser = await puppeteer.launch({
+      headless: true,
+      executablePath: execPath,
+      args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--no-zygote',
+        '--single-process',
+      ],
+    });
+    const version = await browser.version();
+    await browser.close();
+    res.json({ ok: true, execPath, version });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: String(e) });
   }
 });
 
@@ -2562,7 +2646,7 @@ app.post(
       // Build the HTML & PDF via existing helper
       const { subject, html, attachments } = await buildSnapshotEmail(
         req,
-        { from, to, developer },
+        { from, to, developer, developerLabel },
         { ai: String(ai) === '1' }
       );
 
@@ -2573,7 +2657,10 @@ app.post(
         developerLabel
       );
       const toList = toEmail ? [toEmail] : []; // no-op if "all"
-      const ccList = normalizeEmails(cc);
+      // Merge CCs from the request and from env; dedupe
+      const ccFromBody = normalizeEmails(cc);
+      const ccFromEnv = normalizeEmails(SNAPSHOT_CC);
+      const ccList = Array.from(new Set([...ccFromEnv, ...ccFromBody]));
 
       // If developer=all and no toEmail, just send to CCs (PM/team leads)
       if (!toList.length && !ccList.length) {
