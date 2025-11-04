@@ -767,19 +767,23 @@ function buildBaseUrl(req) {
 }
 
 // --- health
-app.get('/health', async (_req, res) => {
+// --- PORT & LISTEN ---
+app.get('/health', (_req, res) => res.sendStatus(200)); // keep this instant & dependency-free
+
+// Optional readiness endpoint that checks DB and other deps
+app.get('/ready', async (_req, res) => {
   try {
     await pool.query('select 1');
-    res.json({
-      ok: true,
-      at: new Date().toISOString(),
-      has_snapshot_cc: ccFromEnv && ccFromEnv.length > 0, // <-- if you move this into scope or reparse here
-      snapshot_cc_count: normalizeEmails(SNAPSHOT_CC).length,
-    });
+    res.json({ ok: true, at: new Date().toISOString() });
   } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    res.status(503).json({ ok: false, error: String(e) });
   }
 });
+
+app.listen(PORT, '0.0.0.0', () => {
+  console.log(`[boot] listening on http://0.0.0.0:${PORT}`);
+});
+
 // puppeteer quick smoke test
 app.get('/diag/puppeteer', async (req, res) => {
   try {
