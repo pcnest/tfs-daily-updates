@@ -493,19 +493,35 @@ Write-Log "All chunks pushed. Total tickets sent: $($exactDelta.Count) (from $($
 # ---- Presence sweep: tell the API what is currently in-scope so it can tombstone the rest
 try {
   $presenceUrl = "$PublicApiBase/api/sync/tickets"
+  # Prepare present IDs and include iteration path
+  $presentIds = @($idsFull | ForEach-Object { [string]$_ })
   $presenceObj = @{
     source            = 'tfs-agent'
     tickets           = @()  # no upserts in this call
     pushedAt          = (Get-Date).ToUniversalTime().ToString('o')
-    presentIds        = ($idsFull | ForEach-Object { [string]$_ })   # <<< use FULL scope here
+    presentIds        = $presentIds   # <<< use FULL scope here
     presentIteration  = $currentIterName                              # e.g., "Sprint 2025-400"
     presentIterationPath  = $currentIterPath   # <<< NEW
   }
   $presenceJson  = $presenceObj | ConvertTo-Json -Depth 6
   $presenceBytes = [Text.Encoding]::UTF8.GetBytes($presenceJson)
-  Write-Log "Posting presence list ($($idsFull.Count) ids) to $presenceUrl ..."
+
+  # Debug: log counts and a small sample to help server-side tombstone debugging
+  try {
+    $sample = @()
+    if ($presentIds.Count -gt 0) {
+      $maxSample = [Math]::Min(10, $presentIds.Count)
+      $sample = $presentIds[0..($maxSample - 1)] -join ', '
+    }
+    Write-Log ("[iter-presence] presentCount={0}, iterationPath='{1}'" -f $presentIds.Count, $currentIterPath)
+    if ($sample) { Write-Log ("[iter-presence] sampleIds (up to 10): {0}" -f $sample) }
+  } catch {
+    Write-Log ("[iter-presence] debug log failed: {0}" -f $_)
+  }
+
+  Write-Log "Posting presence list ($($presentIds.Count) ids) to $presenceUrl ..."
   $null = Invoke-RestMethod -Method Post -Uri $presenceUrl `
-           -Headers @{ 'x-api-key' = $PublicApiKey; 'Content-Type' = 'application/json; charset=utf-8' } `
+         -Headers @{ 'x-api-key' = $PublicApiKey; 'Content-Type' = 'application/json; charset=utf-8' } `
            -Body $presenceBytes
   Write-Log "Presence sweep: OK"
 } catch {

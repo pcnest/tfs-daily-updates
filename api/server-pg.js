@@ -3,74 +3,62 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
-import { Pool } from 'pg';
-import fs from 'fs';
-import path from 'path';
-import OpenAI from 'openai';
-import nodemailer from 'nodemailer';
-import puppeteer from 'puppeteer';
+      if (idsText.length > 0) {
+        const upRes = await client.query(
+          `UPDATE tickets
+         SET deleted = false, last_seen_at = now()
+     WHERE id = ANY($1::text[])`,
+          [idsText]
+        );
 
-dotenv.config();
+        // 2) Derive exact iteration_path values of *this* presence set
+        const { rows: pathRows } = await client.query(
+          `SELECT DISTINCT iteration_path
+    FROM tickets
+        WHERE id = ANY($1::text[])`,
+          [idsText]
+        );
 
-const app = express();
-app.use(express.json({ limit: '50mb' }));
-app.use(cors());
+        const scopePaths = pathRows.map((r) => r.iteration_path).filter((p) => p != null);
 
-const API_KEY = process.env.API_KEY || 'CHANGE_ME_API_KEY';
-const PORT = Number(process.env.PORT) || 8080;
+        // 3) Tombstone anything in those paths that wasn't present this run
+        let tombedByScope = 0;
+        if (scopePaths.length > 0) {
+          const tRes = await client.query(
+            `UPDATE tickets
+           SET deleted = true
+         WHERE iteration_path = ANY($1::text[])
+           AND NOT (id = ANY($2::text[]))`,
+            [scopePaths, idsText]
+          );
+          tombedByScope = tRes.rowCount || 0;
+        }
 
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-const openai = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  : null;
+        // 4) Also handle items whose iteration_path IS NULL (if any present had NULL)
+        const hasNullPath = pathRows.some((r) => r.iteration_path == null);
+        let tombedNullPath = 0;
+        if (hasNullPath) {
+          const nRes = await client.query(
+            `UPDATE tickets
+           SET deleted = true
+         WHERE iteration_path IS NULL
+           AND NOT (id = ANY($1::text[]))`,
+            [idsText]
+          );
+          tombedNullPath = nRes.rowCount || 0;
+        }
 
-function parseOpenAIJson(resp) {
-  try {
-    if (
-      resp &&
-      typeof resp.output_text === 'string' &&
-      resp.output_text.trim()
-    ) {
-      return JSON.parse(resp.output_text);
-    }
-    const parts = resp?.output?.[0]?.content || [];
-    for (const p of parts) {
-      if (p?.type === 'output_text' && p?.text) return JSON.parse(p.text);
-      if (p?.type === 'json' && p?.json && typeof p.json === 'object')
-        return p.json;
-    }
-  } catch (_) {}
-  return null;
-}
-
-// --- Mail (Office 365-friendly defaults)
-const MAIL_MODE = process.env.MAIL_MODE || 'smtp'; // 'smtp' | 'file' (dev no-send)
-const SMTP_HOST = process.env.SMTP_HOST || 'smtp.office365.com';
-const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
-const SMTP_SECURE =
-  String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true';
-const SMTP_REQUIRE_TLS =
-  String(process.env.SMTP_REQUIRE_TLS || 'true').toLowerCase() === 'true';
-const SMTP_USER = process.env.SMTP_USER || '';
-const SMTP_PASS = process.env.SMTP_PASS || '';
-const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER; // must usually match SMTP_USER
-const TEST_RECIPIENT = process.env.TEST_RECIPIENT || ''; // handy for local testing
-const SNAPSHOT_CC = process.env.SNAPSHOT_CC || '';
-
-function buildMailTransport() {
-  if (MAIL_MODE === 'file') {
-    // writes .eml to memory; we'll save it below for preview
-    return nodemailer.createTransport({
-      streamTransport: true,
-      buffer: true,
-      newline: 'unix',
-    });
-  }
-  if (!SMTP_USER || !SMTP_PASS) throw new Error('mail_not_configured');
-  return nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_SECURE,
+        // optional: richer debug including counts
+        console.log('[sweep]', {
+          presentCount: idsText.length,
+          presentUpdated: upRes.rowCount || 0,
+          scopePaths: scopePaths.length,
+          tombedByScope,
+          hasNullPath,
+          tombedNullPath,
+          iteration: presentIteration || null,
+        });
+      } else {
     requireTLS: SMTP_REQUIRE_TLS,
     auth: { user: SMTP_USER, pass: SMTP_PASS },
     // logger: true, debug: true, // uncomment while debugging
