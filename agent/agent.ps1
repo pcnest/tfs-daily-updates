@@ -530,7 +530,7 @@ else {
     # or 4) are explicitly watched IDs. This ensures WIQL C items (like 154823) aren't filtered out by stale changedDate
     # and type differences (string vs int).
     $isRecent = ($idsRecent -contains $idStr) -or ($idsRecent -contains ([int]$_.id))
-    $isWatch = $WatchIds -contains $idStr
+    $isWatch = ($WatchIds -contains $idStr) -or ($WatchIds -contains ([int]$_.id))
     $isMissing -or $isRecent -or $isWatch -or ($eff -and $eff.ToUniversalTime() -ge $EffSinceUtc)
   }
 }
