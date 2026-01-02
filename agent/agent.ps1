@@ -528,7 +528,8 @@ else {
 
     # Include items that: 1) are missing, 2) changed since delta window, OR 3) came from recent-changes scope (idsRecent)
     # This ensures WIQL C items (like 154823) aren't filtered out by stale changedDate
-    $isRecent = $idsRecent -contains $idStr
+      # Use both int and string checks for robust type matching
+      $isRecent = ($idsRecent -contains $idStr) -or ($idsRecent -contains ([int]$_.id))
     $isMissing -or $isRecent -or ($eff -and $eff.ToUniversalTime() -ge $EffSinceUtc)
   }
 }
