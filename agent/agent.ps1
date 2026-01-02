@@ -535,6 +535,19 @@ else {
   }
 }
 
+# Debug: confirm watch IDs are present in the exactDelta set, log their state and dates
+foreach ($wid in $WatchIds) {
+  $w = $exactDelta | Where-Object { [string]$_.id -eq [string]$wid }
+  if ($w) {
+    foreach ($item in $w) {
+      Write-Log ("[watch] id {0} in exactDelta with state='{1}', changedDate='{2}', effSince='{3}'" -f $wid, $item.state, $item.changedDate, $EffSinceUtc)
+    }
+  }
+  else {
+    Write-Log ("[watch] id {0} NOT in exactDelta" -f $wid)
+  }
+}
+
 
 
 
