@@ -40,7 +40,8 @@ function buildMailTransport() {
 const app = express();
 const PORT = process.env.PORT || 8080;
 app.use(cors());
-app.use(express.json({ limit: '2mb' }));
+// Bump JSON body limit to handle larger sync batches without 502/413
+app.use(express.json({ limit: '10mb' }));
 
 // Small helper: normalize a comma/space separated list
 function normalizeEmails(value) {
@@ -900,6 +901,19 @@ async function requireAuth(req, res, next) {
   }
 }
 
+// Centralized error handler to surface body-parser and runtime errors with clear logs
+app.use((err, req, res, next) => {
+  if (err.type === 'entity.too.large') {
+    console.error('[error] payload too large', {
+      path: req.path,
+      contentLength: req.header('content-length') || 'n/a',
+    });
+    return res.status(413).json({ error: 'payload_too_large' });
+  }
+  console.error('[error] unhandled', err);
+  return res.status(500).json({ error: 'internal_error' });
+});
+
 app.get('/api/me', requireAuth, async (req, res) => {
   const u = await pool.query(
     'select email,name,role from users where email=$1',
@@ -936,6 +950,13 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
     presentIds = [],
     presentIteration = '',
   } = req.body || {};
+  // Debug: log batch sizes and request size to aid 502 investigation
+  console.log('[sync] incoming', {
+    source,
+    ticketsCount: Array.isArray(tickets) ? tickets.length : 'n/a',
+    presentIdsCount: Array.isArray(presentIds) ? presentIds.length : 'n/a',
+    contentLength: req.header('content-length') || 'n/a',
+  });
   // Defensive validation: ensure caller sent expected shapes to avoid runtime TypeErrors
   if (!Array.isArray(tickets)) {
     console.error('[sync] bad_request: tickets must be an array', {
