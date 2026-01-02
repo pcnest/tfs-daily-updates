@@ -499,6 +499,99 @@ for ($i = 0; $i -lt $expandIds.Count; $i += $batchSize) {
   Write-Log ("Types seen: " + ($types -join ", "))
 }
 
+# Ensure watched IDs exist in the expanded ticket set; refetch individually if missing
+foreach ($wid in $WatchIds) {
+  $hit = $tickets | Where-Object { [string]$_.id -eq [string]$wid }
+  if (-not $hit) {
+    Write-Log ("[watch] id {0} missing after batch expand; refetching directly" -f $wid)
+    try {
+      $direct = Get-WorkItems @($wid)
+      if ($direct -and $direct.Count -gt 0) {
+        foreach ($it in $direct) {
+          $f = $it.fields
+          $effort = $null; try { $effort = $f."Microsoft.VSTS.Scheduling.Effort" } catch {}
+          $ticket = [PSCustomObject]@{
+            id                = $f."System.Id"
+            type              = $f."System.WorkItemType"
+            title             = $f."System.Title"
+            state             = $f."System.State"
+            reason            = $f."System.Reason"
+            priority          = $f."Microsoft.VSTS.Common.Priority"
+            severity          = $f."Microsoft.VSTS.Common.Severity"
+            assignedTo        = if ($f."System.AssignedTo") { $f."System.AssignedTo".displayName } else { $null }
+            areaPath          = $f."System.AreaPath"
+            iterationPath     = $f."System.IterationPath"
+            createdDate       = $f."System.CreatedDate"
+            changedDate       = $f."System.ChangedDate"
+            stateChangeDate   = $f."Microsoft.VSTS.Common.StateChangeDate"
+            tags              = $f."System.Tags"
+            foundInBuild      = $f."Microsoft.VSTS.Build.FoundIn"
+            integratedInBuild = $f."Microsoft.VSTS.Build.IntegrationBuild"
+            relatedLinkCount  = ($it.relations | Measure-Object).Count
+            effort            = $effort
+          }
+          $tickets += $ticket
+          Write-Log ("[watch] id {0} added via direct refetch" -f $wid)
+        }
+      }
+      else {
+        Write-Log ("[watch] id {0} refetch returned no results; trying single-item endpoint" -f $wid)
+        try {
+          $singleUrl = "$TfsUrl/$Collection/_apis/wit/workitems/$wid?api-version=2.0&`$expand=Relations"
+          $single = Invoke-RestMethod -Method Get -Uri $singleUrl -Headers $tfsHeaders -ErrorAction Stop
+          if ($single -and $single.fields) {
+            $f = $single.fields
+            $effort = $null; try { $effort = $f."Microsoft.VSTS.Scheduling.Effort" } catch {}
+            $ticket = [PSCustomObject]@{
+              id                = $f."System.Id"
+              type              = $f."System.WorkItemType"
+              title             = $f."System.Title"
+              state             = $f."System.State"
+              reason            = $f."System.Reason"
+              priority          = $f."Microsoft.VSTS.Common.Priority"
+              severity          = $f."Microsoft.VSTS.Common.Severity"
+              assignedTo        = if ($f."System.AssignedTo") { $f."System.AssignedTo".displayName } else { $null }
+              areaPath          = $f."System.AreaPath"
+              iterationPath     = $f."System.IterationPath"
+              createdDate       = $f."System.CreatedDate"
+              changedDate       = $f."System.ChangedDate"
+              stateChangeDate   = $f."Microsoft.VSTS.Common.StateChangeDate"
+              tags              = $f."System.Tags"
+              foundInBuild      = $f."Microsoft.VSTS.Build.FoundIn"
+              integratedInBuild = $f."Microsoft.VSTS.Build.IntegrationBuild"
+              relatedLinkCount  = ($single.relations | Measure-Object).Count
+              effort            = $effort
+            }
+            $tickets += $ticket
+            Write-Log ("[watch] id {0} added via single-item endpoint" -f $wid)
+          }
+          else {
+            Write-Log ("[watch] id {0} single-item endpoint returned empty payload" -f $wid)
+          }
+        }
+        catch {
+          $msg = $_.Exception.Message
+          $respBody = $null
+          if ($_.Exception.Response) {
+            try {
+              $reader = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())
+              $reader.BaseStream.Position = 0
+              $reader.DiscardBufferedData()
+              $respBody = $reader.ReadToEnd()
+            }
+            catch {}
+          }
+          $tail = if ($respBody) { "; body=" + $respBody } else { '' }
+          Write-Log ("[watch] id {0} single-item endpoint error: {1}{2}" -f $wid, $msg, $tail)
+        }
+      }
+    }
+    catch {
+      Write-Log ("[watch] id {0} refetch failed: {1}" -f $wid, $_)
+    }
+  }
+}
+
 # ---------- Exact-time delta filter (post-expand) ----------
 # Items to push this run:
 #  1) changed/created after effective since, OR
@@ -512,7 +605,9 @@ function AsUtc([object]$v) {
 $idsSet = @{}; foreach ($z in $ids) { $idsSet[[string]$z] = $true }  # “in current WIQL delta” set
 
 # If we’re in FULL scope (i.e., no WIQL delta) or forced full refresh, push everything to keep DB fields (like state) fresh.
+# MEDIUM FIX: Honor $IsFullPush flag - skip timestamp filtering to ensure all items are refreshed
 if ($IsFullPush) {
+  Write-Log "[delta] Full push mode: sending all $($tickets.Count) tickets (no timestamp filter)"
   $exactDelta = $tickets
 }
 else {
@@ -533,6 +628,7 @@ else {
     $isWatch = ($WatchIds -contains $idStr) -or ($WatchIds -contains ([int]$_.id))
     $isMissing -or $isRecent -or $isWatch -or ($eff -and $eff.ToUniversalTime() -ge $EffSinceUtc)
   }
+  Write-Log "[delta] Filtered to $($exactDelta.Count) changed items (from $($tickets.Count) fetched)"
 }
 
 # Debug: confirm watch IDs are present in the exactDelta set, log their state and dates

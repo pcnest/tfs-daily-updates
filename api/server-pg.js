@@ -1028,7 +1028,12 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
     severity            = EXCLUDED.severity,
     assigned_to         = EXCLUDED.assigned_to,
     area_path           = EXCLUDED.area_path,
-    iteration_path      = EXCLUDED.iteration_path,
+    -- HIGH FIX: Only update iteration_path if agent data is newer (prevents stale path propagation)
+    iteration_path      = CASE 
+                            WHEN EXCLUDED.changed_date >= COALESCE(tickets.changed_date, '1900-01-01'::timestamptz)
+                            THEN EXCLUDED.iteration_path
+                            ELSE tickets.iteration_path
+                          END,
     created_date        = EXCLUDED.created_date,
     changed_date        = EXCLUDED.changed_date,
     state_change_date   = EXCLUDED.state_change_date,
@@ -1077,11 +1082,12 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
       );
     }
 
-    // ---- Presence sweep (derive scope from the IDs themselves) ----
+    // ---- Presence sweep (use agent's authoritative presentIterationPath) ----
     {
       const idsText = Array.isArray(presentIds)
         ? presentIds.map(String).filter(Boolean)
         : [];
+      const authPath = String(presentIterationPath || '').trim();
 
       // 1) If we have any "present" IDs, un-delete them and bump last_seen_at
       if (idsText.length > 0) {
@@ -1092,50 +1098,66 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
           [idsText]
         );
 
-        // 2) Derive exact iteration_path values of *this* presence set
-        const { rows: pathRows } = await client.query(
-          `SELECT DISTINCT iteration_path
-         FROM tickets
-        WHERE id = ANY($1::text[])`,
-          [idsText]
-        );
-
-        const scopePaths = pathRows
-          .map((r) => r.iteration_path)
-          .filter((p) => p != null);
-
-        // 3) Tombstone anything in those paths that wasn't present this run
-        if (scopePaths.length > 0) {
+        // 2) Use agent's presentIterationPath as authoritative scope (not DB's stale paths)
+        // This ensures we tombstone based on TFS current state, not historical DB state
+        if (authPath) {
+          // Tombstone anything whose iteration_path MATCHES the agent's current iteration
+          // but wasn't in the present list
           await client.query(
             `UPDATE tickets
+           SET deleted = true
+         WHERE lower(iteration_path) = lower($1)
+           AND NOT (id = ANY($2::text[]))`,
+            [authPath, idsText]
+          );
+
+          console.log('[sweep]', {
+            presentCount: idsText.length,
+            authPath,
+            mode: 'agent-authoritative',
+          });
+        } else {
+          // Fallback: derive scope from DB (original behavior) if agent didn't provide path
+          const { rows: pathRows } = await client.query(
+            `SELECT DISTINCT iteration_path
+         FROM tickets
+        WHERE id = ANY($1::text[])`,
+            [idsText]
+          );
+
+          const scopePaths = pathRows
+            .map((r) => r.iteration_path)
+            .filter((p) => p != null);
+
+          if (scopePaths.length > 0) {
+            await client.query(
+              `UPDATE tickets
            SET deleted = true
          WHERE iteration_path = ANY($1::text[])
            AND NOT (id = ANY($2::text[]))`,
-            [scopePaths, idsText]
-          );
-        }
+              [scopePaths, idsText]
+            );
+          }
 
-        // 4) Also handle items whose iteration_path IS NULL (if any present had NULL)
-        const hasNullPath = pathRows.some((r) => r.iteration_path == null);
-        if (hasNullPath) {
-          await client.query(
-            `UPDATE tickets
+          const hasNullPath = pathRows.some((r) => r.iteration_path == null);
+          if (hasNullPath) {
+            await client.query(
+              `UPDATE tickets
            SET deleted = true
          WHERE iteration_path IS NULL
            AND NOT (id = ANY($1::text[]))`,
-            [idsText]
-          );
-        }
+              [idsText]
+            );
+          }
 
-        // optional: one-line debug
-        console.log('[sweep]', {
-          presentCount: idsText.length,
-          scopePaths: scopePaths.length,
-          hasNullPath,
-        });
+          console.log('[sweep]', {
+            presentCount: idsText.length,
+            scopePaths: scopePaths.length,
+            hasNullPath,
+            mode: 'db-derived-fallback',
+          });
+        }
       } else {
-        // No present IDs provided → do NOT sweep by guesswork.
-        // (If you prefer the old behavior, you could fall back to presentIteration/name here.)
         console.log('[sweep] skipped (no presentIds)');
       }
     }
@@ -1303,6 +1325,27 @@ app.get('/api/tickets', async (req, res) => {
     clauses.push(`coalesce(t.deleted, false) = false`);
   }
 
+  // CRITICAL FIX: Default to current iteration if no explicit iterationPath filter provided
+  // Prevents UI from showing tickets from all sprints (including old/stale ones)
+  let effectiveIterationPath = iterationPath;
+  if (!effectiveIterationPath) {
+    try {
+      const currIter = await pool.query(
+        `select value from meta where key='current_iteration'`
+      );
+      const currentIterName = currIter.rows[0]?.value || null;
+      if (currentIterName) {
+        effectiveIterationPath = currentIterName;
+      }
+    } catch (e) {
+      // If meta query fails, continue without default filter (better than failing request)
+      console.warn(
+        '[tickets] could not fetch current iteration for default filter:',
+        e.message
+      );
+    }
+  }
+
   // Default: only Bug + Product Backlog Item.
   // Override with ?types=all or ?types=Bug,Product Backlog Item
   if (!types || String(types).toLowerCase() === 'default') {
@@ -1330,9 +1373,9 @@ app.get('/api/tickets', async (req, res) => {
     clauses.push(`lower(t.state)=lower($${i++})`);
     params.push(state);
   }
-  if (iterationPath) {
+  if (effectiveIterationPath) {
     clauses.push(`lower(t.iteration_path) like lower($${i++})`);
-    params.push(`%${iterationPath}%`);
+    params.push(`%${effectiveIterationPath}%`);
   }
   if (areaPath) {
     clauses.push(`lower(t.area_path) like lower($${i++})`);
