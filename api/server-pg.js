@@ -3,67 +3,43 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
-      if (idsText.length > 0) {
-        const upRes = await client.query(
-          `UPDATE tickets
-         SET deleted = false, last_seen_at = now()
-     WHERE id = ANY($1::text[])`,
-          [idsText]
-        );
+import path from 'path';
+import fs from 'fs';
+import nodemailer from 'nodemailer';
+import { Pool } from 'pg';
 
-        // 2) Derive exact iteration_path values of *this* presence set
-        const { rows: pathRows } = await client.query(
-          `SELECT DISTINCT iteration_path
-    FROM tickets
-        WHERE id = ANY($1::text[])`,
-          [idsText]
-        );
+// Load environment
+dotenv.config();
 
-        const scopePaths = pathRows.map((r) => r.iteration_path).filter((p) => p != null);
+// Minimal mailer config and safe transport builder so server can start
+const MAIL_MODE = process.env.MAIL_MODE || 'file';
+const SMTP_HOST = process.env.SMTP_HOST || '';
+const SMTP_PORT = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : undefined;
+const SMTP_USER = process.env.SMTP_USER || '';
+const SMTP_PASS = process.env.SMTP_PASS || '';
+const SMTP_REQUIRE_TLS = (process.env.SMTP_REQUIRE_TLS || 'false') === 'true';
+const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
 
-        // 3) Tombstone anything in those paths that wasn't present this run
-        let tombedByScope = 0;
-        if (scopePaths.length > 0) {
-          const tRes = await client.query(
-            `UPDATE tickets
-           SET deleted = true
-         WHERE iteration_path = ANY($1::text[])
-           AND NOT (id = ANY($2::text[]))`,
-            [scopePaths, idsText]
-          );
-          tombedByScope = tRes.rowCount || 0;
-        }
-
-        // 4) Also handle items whose iteration_path IS NULL (if any present had NULL)
-        const hasNullPath = pathRows.some((r) => r.iteration_path == null);
-        let tombedNullPath = 0;
-        if (hasNullPath) {
-          const nRes = await client.query(
-            `UPDATE tickets
-           SET deleted = true
-         WHERE iteration_path IS NULL
-           AND NOT (id = ANY($1::text[]))`,
-            [idsText]
-          );
-          tombedNullPath = nRes.rowCount || 0;
-        }
-
-        // optional: richer debug including counts
-        console.log('[sweep]', {
-          presentCount: idsText.length,
-          presentUpdated: upRes.rowCount || 0,
-          scopePaths: scopePaths.length,
-          tombedByScope,
-          hasNullPath,
-          tombedNullPath,
-          iteration: presentIteration || null,
-        });
-      } else {
-    requireTLS: SMTP_REQUIRE_TLS,
-    auth: { user: SMTP_USER, pass: SMTP_PASS },
-    // logger: true, debug: true, // uncomment while debugging
-  });
+function buildMailTransport() {
+  if (MAIL_MODE === 'smtp' && SMTP_HOST) {
+    return nodemailer.createTransport({
+      host: SMTP_HOST,
+      port: SMTP_PORT || 587,
+      secure: SMTP_PORT === 465,
+      requireTLS: SMTP_REQUIRE_TLS,
+      auth: SMTP_USER ? { user: SMTP_USER, pass: SMTP_PASS } : undefined,
+    });
+  }
+  // Default to a safe JSON transport for local testing
+  return nodemailer.createTransport({ jsonTransport: true });
 }
+
+// Express app + basic middleware
+const app = express();
+const PORT = process.env.PORT || 8080;
+app.use(cors());
+app.use(express.json({ limit: '2mb' }));
+
 
 // Small helper: normalize a comma/space separated list
 function normalizeEmails(value) {
@@ -948,6 +924,15 @@ app.post('/api/sync/tickets', async (req, res) => {
     presentIds = [],
     presentIteration = '',
   } = req.body || {};
+  // Defensive validation: ensure caller sent expected shapes to avoid runtime TypeErrors
+  if (!Array.isArray(tickets)) {
+    console.error('[sync] bad_request: tickets must be an array', { source, ticketsType: typeof tickets });
+    return res.status(400).json({ status: 'error', error: 'bad_request', detail: 'tickets must be an array' });
+  }
+  if (presentIds && !Array.isArray(presentIds)) {
+    console.error('[sync] bad_request: presentIds must be an array', { presentIdsType: typeof presentIds });
+    return res.status(400).json({ status: 'error', error: 'bad_request', detail: 'presentIds must be an array' });
+  }
   // Require API key
   const key = req.header('x-api-key') || '';
   if (!key || key !== API_KEY) {

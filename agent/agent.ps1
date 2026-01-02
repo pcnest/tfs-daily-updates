@@ -12,7 +12,7 @@ $Collection    = "SupplyPro.Applications"
 $Project       = "SupplyPro.Core"
 $Team          = "Enterprise Software Team"
 $Pat           = "x34cxkcnvd7zuxw6egqyg2yyf6frsbw3vjjnmh37xgar2aopxwqa"   # Read-only PAT is recommended
-$WiqlFile      = ".\sample.wiql"            # WIQL file path (relative to this script)
+$WiqlFile      = $null  # will be resolved after $AgentDir is determined
 $PublicApiBase = "https://tfs-daily-api.onrender.com"
 # $PublicApiBase = "http://localhost:8080"
 $PublicApiKey  = "3bded27a3b75ee54e2ae2da4293687c26172d3f551e3584e343c71d399e4054f"
@@ -20,7 +20,16 @@ $PublicApiKey  = "3bded27a3b75ee54e2ae2da4293687c26172d3f551e3584e343c71d399e405
 
 # ---------- Basics ----------
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
-$AgentDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$AgentDir = $null
+try {
+  $AgentDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+} catch {}
+if (-not $AgentDir) {
+  if ($PSScriptRoot) { $AgentDir = $PSScriptRoot }
+  else { $AgentDir = (Get-Location).Path }
+}
+# Resolve default WIQL file path now that $AgentDir is known
+if (-not $WiqlFile) { $WiqlFile = Join-Path $AgentDir 'sample.wiql' }
 $NowUtc   = (Get-Date).ToUniversalTime()
 
 function Write-Log([string]$msg) {
@@ -439,27 +448,30 @@ for ($i = 0; $i -lt $exactDelta.Count; $i += $pushBatchSize) {
   $end   = [Math]::Min($i + $pushBatchSize - 1, $exactDelta.Count - 1)
   $chunk = $exactDelta[$i..$end]
 
-  $payloadTickets += [PSCustomObject]@{
-  id                 = [string]$t.id
-  type               = Sanitize $t.type
-  title              = Sanitize $t.title
-  state              = Sanitize $t.state
-  reason             = Sanitize $t.reason
-  priority           = $t.priority
-  severity           = Sanitize $t.severity
-  assignedTo         = Sanitize $t.assignedTo
-  areaPath           = Sanitize $t.areaPath
-  iterationPath      = Sanitize $t.iterationPath
-  createdDate        = ToIso $t.createdDate
-  changedDate        = ToIso $t.changedDate
-  stateChangeDate    = ToIso $t.stateChangeDate
-  tags               = Sanitize $t.tags
-  foundInBuild       = Sanitize $t.foundInBuild
-  integratedInBuild  = Sanitize $t.integratedInBuild
-  relatedLinkCount   = $t.relatedLinkCount
-  effort             = $t.effort
-}
-
+  # Build an explicit array of ticket objects for this chunk
+  $payloadTickets = @()
+  foreach ($t in $chunk) {
+    $payloadTickets += [PSCustomObject]@{
+      id                 = [string]$t.id
+      type               = Sanitize $t.type
+      title              = Sanitize $t.title
+      state              = Sanitize $t.state
+      reason             = Sanitize $t.reason
+      priority           = $t.priority
+      severity           = Sanitize $t.severity
+      assignedTo         = Sanitize $t.assignedTo
+      areaPath           = Sanitize $t.areaPath
+      iterationPath      = Sanitize $t.iterationPath
+      createdDate        = ToIso $t.createdDate
+      changedDate        = ToIso $t.changedDate
+      stateChangeDate    = ToIso $t.stateChangeDate
+      tags               = Sanitize $t.tags
+      foundInBuild       = Sanitize $t.foundInBuild
+      integratedInBuild  = Sanitize $t.integratedInBuild
+      relatedLinkCount   = $t.relatedLinkCount
+      effort             = $t.effort
+    }
+  }
 
   $obj = @{ source = 'tfs-agent'; tickets = $payloadTickets; pushedAt = (Get-Date).ToUniversalTime().ToString('o') }
   $json  = $obj | ConvertTo-Json -Depth 8
