@@ -927,7 +927,7 @@ app.post('/api/auth/logout_all', requireAuth, async (req, res) => {
 });
 
 // POST /api/sync/tickets     body: { source, tickets: [...], pushedAt, presentIds: [...] }
-app.post('/api/sync/tickets', async (req, res) => {
+app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
   // The agent can send: { source, tickets: [...], pushedAt, presentIds: [...], presentIteration: "Sprint 2025-400" }
   const {
     source = 'unknown',
@@ -942,32 +942,22 @@ app.post('/api/sync/tickets', async (req, res) => {
       source,
       ticketsType: typeof tickets,
     });
-    return res
-      .status(400)
-      .json({
-        status: 'error',
-        error: 'bad_request',
-        detail: 'tickets must be an array',
-      });
+    return res.status(400).json({
+      status: 'error',
+      error: 'bad_request',
+      detail: 'tickets must be an array',
+    });
   }
   if (presentIds && !Array.isArray(presentIds)) {
     console.error('[sync] bad_request: presentIds must be an array', {
       presentIdsType: typeof presentIds,
     });
-    return res
-      .status(400)
-      .json({
-        status: 'error',
-        error: 'bad_request',
-        detail: 'presentIds must be an array',
-      });
+    return res.status(400).json({
+      status: 'error',
+      error: 'bad_request',
+      detail: 'presentIds must be an array',
+    });
   }
-  // Require API key
-  const key = req.header('x-api-key') || '';
-  if (!key || key !== API_KEY) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
