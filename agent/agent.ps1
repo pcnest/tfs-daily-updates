@@ -538,7 +538,7 @@ else {
 # ---------- Push to Public API ----------
 $pushUrl = "$PublicApiBase/api/sync/tickets"
 $headers = @{ 'x-api-key' = $PublicApiKey; 'Content-Type' = 'application/json; charset=utf-8' }
-$pushBatchSize = 200
+$pushBatchSize = 100  # reduce payload size to avoid gateway/limit errors
 
 function ToIso([object]$v) {
   if (-not $v) { return $null }
