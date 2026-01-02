@@ -526,11 +526,12 @@ else {
     try { $cd = [datetime]$_.createdDate } catch { $cd = $null }
     $eff = if ($md) { $md } elseif ($cd) { $cd } else { $null }
 
-    # Include items that: 1) are missing, 2) changed since delta window, OR 3) came from recent-changes scope (idsRecent)
-    # This ensures WIQL C items (like 154823) aren't filtered out by stale changedDate
-      # Use both int and string checks for robust type matching
-      $isRecent = ($idsRecent -contains $idStr) -or ($idsRecent -contains ([int]$_.id))
-    $isMissing -or $isRecent -or ($eff -and $eff.ToUniversalTime() -ge $EffSinceUtc)
+    # Include items that: 1) are missing, 2) changed since delta window, 3) came from recent-changes scope (idsRecent),
+    # or 4) are explicitly watched IDs. This ensures WIQL C items (like 154823) aren't filtered out by stale changedDate
+    # and type differences (string vs int).
+    $isRecent = ($idsRecent -contains $idStr) -or ($idsRecent -contains ([int]$_.id))
+    $isWatch = $WatchIds -contains $idStr
+    $isMissing -or $isRecent -or $isWatch -or ($eff -and $eff.ToUniversalTime() -ge $EffSinceUtc)
   }
 }
 
