@@ -3,79 +3,44 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import crypto from 'crypto';
-import { Pool } from 'pg';
-import fs from 'fs';
 import path from 'path';
-import OpenAI from 'openai';
+import fs from 'fs';
 import nodemailer from 'nodemailer';
-import puppeteer from 'puppeteer';
+import { Pool } from 'pg';
 
+// Load environment
 dotenv.config();
 
-const app = express();
-app.use(express.json({ limit: '50mb' }));
-app.use(cors());
-
-const API_KEY = process.env.API_KEY || 'CHANGE_ME_API_KEY';
-const PORT = Number(process.env.PORT) || 8080;
-
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-const openai = process.env.OPENAI_API_KEY
-  ? new OpenAI({ apiKey: process.env.OPENAI_API_KEY })
-  : null;
-
-function parseOpenAIJson(resp) {
-  try {
-    if (
-      resp &&
-      typeof resp.output_text === 'string' &&
-      resp.output_text.trim()
-    ) {
-      return JSON.parse(resp.output_text);
-    }
-    const parts = resp?.output?.[0]?.content || [];
-    for (const p of parts) {
-      if (p?.type === 'output_text' && p?.text) return JSON.parse(p.text);
-      if (p?.type === 'json' && p?.json && typeof p.json === 'object')
-        return p.json;
-    }
-  } catch (_) {}
-  return null;
-}
-
-// --- Mail (Office 365-friendly defaults)
-const MAIL_MODE = process.env.MAIL_MODE || 'smtp'; // 'smtp' | 'file' (dev no-send)
-const SMTP_HOST = process.env.SMTP_HOST || 'smtp.office365.com';
-const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
-const SMTP_SECURE =
-  String(process.env.SMTP_SECURE || 'false').toLowerCase() === 'true';
-const SMTP_REQUIRE_TLS =
-  String(process.env.SMTP_REQUIRE_TLS || 'true').toLowerCase() === 'true';
+// Minimal mailer config and safe transport builder so server can start
+const MAIL_MODE = process.env.MAIL_MODE || 'file';
+const SMTP_HOST = process.env.SMTP_HOST || '';
+const SMTP_PORT = process.env.SMTP_PORT
+  ? Number(process.env.SMTP_PORT)
+  : undefined;
 const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.SMTP_PASS || '';
-const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER; // must usually match SMTP_USER
-const TEST_RECIPIENT = process.env.TEST_RECIPIENT || ''; // handy for local testing
-const SNAPSHOT_CC = process.env.SNAPSHOT_CC || '';
+const SMTP_REQUIRE_TLS = (process.env.SMTP_REQUIRE_TLS || 'false') === 'true';
+const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
 
 function buildMailTransport() {
-  if (MAIL_MODE === 'file') {
-    // writes .eml to memory; we'll save it below for preview
+  if (MAIL_MODE === 'smtp' && SMTP_HOST) {
     return nodemailer.createTransport({
-      streamTransport: true,
-      buffer: true,
-      newline: 'unix',
+      host: SMTP_HOST,
+      port: SMTP_PORT || 587,
+      secure: SMTP_PORT === 465,
+      requireTLS: SMTP_REQUIRE_TLS,
+      auth: SMTP_USER ? { user: SMTP_USER, pass: SMTP_PASS } : undefined,
     });
   }
-  if (!SMTP_USER || !SMTP_PASS) throw new Error('mail_not_configured');
-  return nodemailer.createTransport({
-    host: SMTP_HOST,
-    port: SMTP_PORT,
-    secure: SMTP_SECURE,
-    requireTLS: SMTP_REQUIRE_TLS,
-    auth: { user: SMTP_USER, pass: SMTP_PASS },
-    // logger: true, debug: true, // uncomment while debugging
-  });
+  // Default to a safe JSON transport for local testing
+  return nodemailer.createTransport({ jsonTransport: true });
 }
+
+// Express app + basic middleware
+const app = express();
+const PORT = process.env.PORT || 8080;
+app.use(cors());
+app.use(express.json({ limit: '2mb' }));
 
 // Small helper: normalize a comma/space separated list
 function normalizeEmails(value) {
@@ -508,6 +473,17 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
+
+// Log which DB host we are talking to (masking secrets) to rule out DSN drift
+try {
+  const dbUrl = new URL(process.env.DATABASE_URL || '');
+  const hostMasked = dbUrl.host || '(none)';
+  const dbName = (dbUrl.pathname || '').replace(/^\//, '') || '(none)';
+  const userMasked = dbUrl.username ? `${dbUrl.username}@` : '';
+  console.log('[db]', { host: hostMasked, db: dbName, user: userMasked });
+} catch (e) {
+  console.log('[db] could not parse DATABASE_URL');
+}
 
 // Auto-export TSV at day end
 const EXPORT_DIR = path.join(process.cwd(), 'exports');
@@ -960,6 +936,32 @@ app.post('/api/sync/tickets', async (req, res) => {
     presentIds = [],
     presentIteration = '',
   } = req.body || {};
+  // Defensive validation: ensure caller sent expected shapes to avoid runtime TypeErrors
+  if (!Array.isArray(tickets)) {
+    console.error('[sync] bad_request: tickets must be an array', {
+      source,
+      ticketsType: typeof tickets,
+    });
+    return res
+      .status(400)
+      .json({
+        status: 'error',
+        error: 'bad_request',
+        detail: 'tickets must be an array',
+      });
+  }
+  if (presentIds && !Array.isArray(presentIds)) {
+    console.error('[sync] bad_request: presentIds must be an array', {
+      presentIdsType: typeof presentIds,
+    });
+    return res
+      .status(400)
+      .json({
+        status: 'error',
+        error: 'bad_request',
+        detail: 'presentIds must be an array',
+      });
+  }
   // Require API key
   const key = req.header('x-api-key') || '';
   if (!key || key !== API_KEY) {
@@ -970,8 +972,19 @@ app.post('/api/sync/tickets', async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    const WATCH_IDS = new Set(['154823']);
+
     // Upsert all tickets we just saw; set last_seen_at and clear deleted
     for (const t of tickets) {
+      if (WATCH_IDS.has(String(t.id))) {
+        console.log('[sync/watch]', {
+          id: String(t.id),
+          state: t.state,
+          changedDate: t.changedDate,
+          iterationPath: t.iterationPath,
+        });
+      }
+
       const seenAt = pushedAt || new Date().toISOString();
       await client.query(
         `
