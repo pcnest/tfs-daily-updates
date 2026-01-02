@@ -942,13 +942,14 @@ app.post('/api/auth/logout_all', requireAuth, async (req, res) => {
 
 // POST /api/sync/tickets     body: { source, tickets: [...], pushedAt, presentIds: [...] }
 app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
-  // The agent can send: { source, tickets: [...], pushedAt, presentIds: [...], presentIteration: "Sprint 2025-400" }
+  // The agent can send: { source, tickets: [...], pushedAt, presentIds: [...], presentIteration: "Sprint 2025-400", presentIterationPath: "SupplyPro.Core\2025\Sprint 400" }
   const {
     source = 'unknown',
     tickets = [],
     pushedAt,
     presentIds = [],
     presentIteration = '',
+    presentIterationPath = '',
   } = req.body || {};
   // Debug: log batch sizes and request size to aid 502 investigation
   console.log('[sync] incoming', {

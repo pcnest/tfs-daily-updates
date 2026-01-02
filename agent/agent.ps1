@@ -235,7 +235,8 @@ if ($respB.workItemRelations) {
 Write-Log "WIQL B returned $($idsB.Count) parent id(s)."
 
 # Merge & dedupe → put into $ids (so your next section can reuse it as-is)
-$ids = ($idsA + $idsB) | Sort-Object -Unique
+# Fix: Use array constructor to safely handle null/empty arrays
+$ids = @($idsA) + @($idsB) | Sort-Object -Unique
 if (!$ids -or $ids.Count -eq 0) {
   Write-Log "No work items returned by WIQL (A+B delta)."
   $ids = @()
