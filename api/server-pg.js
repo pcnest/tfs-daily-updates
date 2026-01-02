@@ -14,7 +14,9 @@ dotenv.config();
 // Minimal mailer config and safe transport builder so server can start
 const MAIL_MODE = process.env.MAIL_MODE || 'file';
 const SMTP_HOST = process.env.SMTP_HOST || '';
-const SMTP_PORT = process.env.SMTP_PORT ? Number(process.env.SMTP_PORT) : undefined;
+const SMTP_PORT = process.env.SMTP_PORT
+  ? Number(process.env.SMTP_PORT)
+  : undefined;
 const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.SMTP_PASS || '';
 const SMTP_REQUIRE_TLS = (process.env.SMTP_REQUIRE_TLS || 'false') === 'true';
@@ -39,7 +41,6 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
-
 
 // Small helper: normalize a comma/space separated list
 function normalizeEmails(value) {
@@ -472,6 +473,17 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
+
+// Log which DB host we are talking to (masking secrets) to rule out DSN drift
+try {
+  const dbUrl = new URL(process.env.DATABASE_URL || '');
+  const hostMasked = dbUrl.host || '(none)';
+  const dbName = (dbUrl.pathname || '').replace(/^\//, '') || '(none)';
+  const userMasked = dbUrl.username ? `${dbUrl.username}@` : '';
+  console.log('[db]', { host: hostMasked, db: dbName, user: userMasked });
+} catch (e) {
+  console.log('[db] could not parse DATABASE_URL');
+}
 
 // Auto-export TSV at day end
 const EXPORT_DIR = path.join(process.cwd(), 'exports');
@@ -926,12 +938,29 @@ app.post('/api/sync/tickets', async (req, res) => {
   } = req.body || {};
   // Defensive validation: ensure caller sent expected shapes to avoid runtime TypeErrors
   if (!Array.isArray(tickets)) {
-    console.error('[sync] bad_request: tickets must be an array', { source, ticketsType: typeof tickets });
-    return res.status(400).json({ status: 'error', error: 'bad_request', detail: 'tickets must be an array' });
+    console.error('[sync] bad_request: tickets must be an array', {
+      source,
+      ticketsType: typeof tickets,
+    });
+    return res
+      .status(400)
+      .json({
+        status: 'error',
+        error: 'bad_request',
+        detail: 'tickets must be an array',
+      });
   }
   if (presentIds && !Array.isArray(presentIds)) {
-    console.error('[sync] bad_request: presentIds must be an array', { presentIdsType: typeof presentIds });
-    return res.status(400).json({ status: 'error', error: 'bad_request', detail: 'presentIds must be an array' });
+    console.error('[sync] bad_request: presentIds must be an array', {
+      presentIdsType: typeof presentIds,
+    });
+    return res
+      .status(400)
+      .json({
+        status: 'error',
+        error: 'bad_request',
+        detail: 'presentIds must be an array',
+      });
   }
   // Require API key
   const key = req.header('x-api-key') || '';
@@ -943,8 +972,19 @@ app.post('/api/sync/tickets', async (req, res) => {
   try {
     await client.query('BEGIN');
 
+    const WATCH_IDS = new Set(['154823']);
+
     // Upsert all tickets we just saw; set last_seen_at and clear deleted
     for (const t of tickets) {
+      if (WATCH_IDS.has(String(t.id))) {
+        console.log('[sync/watch]', {
+          id: String(t.id),
+          state: t.state,
+          changedDate: t.changedDate,
+          iterationPath: t.iterationPath,
+        });
+      }
+
       const seenAt = pushedAt || new Date().toISOString();
       await client.query(
         `
