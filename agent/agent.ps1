@@ -444,63 +444,65 @@ $tickets = @()
 $batchSize = 180
 for ($i = 0; $i -lt $expandIds.Count; $i += $batchSize) {
   $batch = $expandIds[$i..([Math]::Min($i + $batchSize - 1, $expandIds.Count - 1))]
+  
   $items = Get-WorkItems $batch
   foreach ($it in $items) {
-    $f = $it.fields
+    try {
+      $f = $it.fields
 
-    # --- assignedTo normalization (keep your existing logic) ---
-    $assigned = ""
-    $ass = $f.'System.AssignedTo'
-    if ($null -ne $ass) {
-      if ($ass -is [string]) { $assigned = $ass }
-      elseif ($ass -is [hashtable]) {
-        if ($ass['uniqueName']) { $assigned = [string]$ass['uniqueName'] }
-        elseif ($ass['displayName']) { $assigned = [string]$ass['displayName'] }
-        elseif ($ass['name']) { $assigned = [string]$ass['name'] }
+      # --- assignedTo normalization (keep your existing logic) ---
+      $assigned = ""
+      $ass = $f.'System.AssignedTo'
+      
+      if ($null -ne $ass) {
+        if ($ass -is [string]) { $assigned = $ass }
+        elseif ($ass -is [hashtable]) {
+          if ($ass['uniqueName']) { $assigned = [string]$ass['uniqueName'] }
+          elseif ($ass['displayName']) { $assigned = [string]$ass['displayName'] }
+          elseif ($ass['name']) { $assigned = [string]$ass['name'] }
+        }
+        else {
+          if ($ass.PSObject.Properties['uniqueName']) { $assigned = [string]$ass.uniqueName }
+          elseif ($ass.PSObject.Properties['displayName']) { $assigned = [string]$ass.displayName }
+          elseif ($ass.PSObject.Properties['name']) { $assigned = [string]$ass.name }
+          else { $assigned = [string]$ass }
+        }
       }
-      else {
-        if ($ass.PSObject.Properties['uniqueName']) { $assigned = [string]$ass.uniqueName }
-        elseif ($ass.PSObject.Properties['displayName']) { $assigned = [string]$ass.displayName }
-        elseif ($ass.PSObject.Properties['name']) { $assigned = [string]$ass.name }
-        else { $assigned = [string]$ass }
+
+      # --- relations → relatedLinkCount (exclude Hierarchy) ---
+      $rels = @($it.relations)
+      $related = $rels | Where-Object {
+        $_.rel -like 'System.LinkTypes.*' -and $_.rel -notmatch 'Hierarchy'
       }
-    }
+      $relatedLinkCount = @($related).Count
 
-    # --- relations → relatedLinkCount (exclude Hierarchy) ---
-    $rels = @($it.relations)
-    $related = $rels | Where-Object {
-      $_.rel -like 'System.LinkTypes.*' -and $_.rel -notmatch 'Hierarchy'
-    }
-    $relatedLinkCount = @($related).Count
-
-    # --- capture all finalized raw fields ---
-    $ticketObj = [PSCustomObject]@{
-      id                = $f."System.Id"
-      type              = $f."System.WorkItemType"
-      title             = $f."System.Title"
-      state             = $f."System.State"
-      reason            = $f."System.Reason"
-      priority          = $f."Microsoft.VSTS.Common.Priority"
-      severity          = $f."Microsoft.VSTS.Common.Severity"         # Bugs only
-      assignedTo        = (Sanitize $assigned)
-      areaPath          = $f."System.AreaPath"
-      iterationPath     = $f."System.IterationPath"
-      createdDate       = $f."System.CreatedDate"
-      changedDate       = $f."System.ChangedDate"
-      stateChangeDate   = $f."Microsoft.VSTS.Common.StateChangeDate"
-      tags              = $f."System.Tags"
-      foundInBuild      = $f."Microsoft.VSTS.Build.FoundIn"
-      integratedInBuild = $f."Microsoft.VSTS.Build.IntegrationBuild"
-      relatedLinkCount  = $relatedLinkCount
-      effort            = $f."Microsoft.VSTS.Scheduling.Effort"       # PBIs only
-    }
+      # --- capture all finalized raw fields ---
+      $ticketObj = [PSCustomObject]@{
+        id                = $it.id  # Use $it.id instead of $f."System.Id"
+        type              = $f."System.WorkItemType"
+        title             = $f."System.Title"
+        state             = $f."System.State"
+        reason            = $f."System.Reason"
+        priority          = $f."Microsoft.VSTS.Common.Priority"
+        severity          = $f."Microsoft.VSTS.Common.Severity"         # Bugs only
+        assignedTo        = (Sanitize $assigned)
+        areaPath          = $f."System.AreaPath"
+        iterationPath     = $f."System.IterationPath"
+        createdDate       = $f."System.CreatedDate"
+        changedDate       = $f."System.ChangedDate"
+        stateChangeDate   = $f."Microsoft.VSTS.Common.StateChangeDate"
+        tags              = $f."System.Tags"
+        foundInBuild      = $f."Microsoft.VSTS.Build.FoundIn"
+        integratedInBuild = $f."Microsoft.VSTS.Build.IntegrationBuild"
+        relatedLinkCount  = $relatedLinkCount
+        effort            = $f."Microsoft.VSTS.Scheduling.Effort"       # PBIs only
+      }
     
-    # DEBUG: Log ticket 189879 details
-    if ($ticketObj.id -eq 189879) {
-      Write-Log "[DEBUG-189879] Fetched from TFS: id=$($ticketObj.id), state=$($ticketObj.state), changedDate=$($ticketObj.changedDate), iterationPath=$($ticketObj.iterationPath)"
+      $tickets += $ticketObj
     }
-    
-    $tickets += $ticketObj
+    catch {
+      Write-Log "[ERROR] Failed to process ticket id=$($it.id): $($_.Exception.Message)"
+    }
   }
 
   $types = $tickets | Select-Object -ExpandProperty type -Unique
@@ -517,6 +519,38 @@ foreach ($wid in $WatchIds) {
       if ($direct -and $direct.Count -gt 0) {
         foreach ($it in $direct) {
           $f = $it.fields
+          $effort = $null; try { $effort = $f."Microsoft.VSTS.Scheduling.Effort" } catch {}          # FIX: Use $it.id instead of $f."System.Id" - TFS API sometimes returns work items
+          # where .id property exists but .fields['System.Id'] is empty/null (e.g., ticket 189879)          $ticket = [PSCustomObject]@{
+          id                = $f."System.Id"
+          type              = $f."System.WorkItemType"
+          title             = $f."System.Title"
+          state             = $f."System.State"
+          reason            = $f."System.Reason"
+          priority          = $f."Microsoft.VSTS.Common.Priority"
+          severity          = $f."Microsoft.VSTS.Common.Severity"
+          assignedTo        = if ($f."System.AssignedTo") { $f."System.AssignedTo".displayName } else { $null }
+          areaPath          = $f."System.AreaPath"
+          iterationPath     = $f."System.IterationPath"
+          createdDate       = $f."System.CreatedDate"
+          changedDate       = $f."System.ChangedDate"
+          stateChangeDate   = $f."Microsoft.VSTS.Common.StateChangeDate"
+          tags              = $f."System.Tags"
+          foundInBuild      = $f."Microsoft.VSTS.Build.FoundIn"
+          integratedInBuild = $f."Microsoft.VSTS.Build.IntegrationBuild"
+          relatedLinkCount  = ($it.relations | Measure-Object).Count
+          effort            = $effort
+        }
+        $tickets += $ticket
+        Write-Log ("[watch] id {0} added via direct refetch" -f $wid)
+      }
+    }
+    else {
+      Write-Log ("[watch] id {0} refetch returned no results; trying single-item endpoint" -f $wid)
+      try {
+        $singleUrl = "$TfsUrl/$Collection/_apis/wit/workitems/$wid?api-version=2.0&`$expand=Relations"
+        $single = Invoke-RestMethod -Method Get -Uri $singleUrl -Headers $tfsHeaders -ErrorAction Stop
+        if ($single -and $single.fields) {
+          $f = $single.fields
           $effort = $null; try { $effort = $f."Microsoft.VSTS.Scheduling.Effort" } catch {}
           $ticket = [PSCustomObject]@{
             id                = $f."System.Id"
@@ -535,69 +569,37 @@ foreach ($wid in $WatchIds) {
             tags              = $f."System.Tags"
             foundInBuild      = $f."Microsoft.VSTS.Build.FoundIn"
             integratedInBuild = $f."Microsoft.VSTS.Build.IntegrationBuild"
-            relatedLinkCount  = ($it.relations | Measure-Object).Count
+            relatedLinkCount  = ($single.relations | Measure-Object).Count
             effort            = $effort
           }
           $tickets += $ticket
-          Write-Log ("[watch] id {0} added via direct refetch" -f $wid)
+          Write-Log ("[watch] id {0} added via single-item endpoint" -f $wid)
+        }
+        else {
+          Write-Log ("[watch] id {0} single-item endpoint returned empty payload" -f $wid)
         }
       }
-      else {
-        Write-Log ("[watch] id {0} refetch returned no results; trying single-item endpoint" -f $wid)
-        try {
-          $singleUrl = "$TfsUrl/$Collection/_apis/wit/workitems/$wid?api-version=2.0&`$expand=Relations"
-          $single = Invoke-RestMethod -Method Get -Uri $singleUrl -Headers $tfsHeaders -ErrorAction Stop
-          if ($single -and $single.fields) {
-            $f = $single.fields
-            $effort = $null; try { $effort = $f."Microsoft.VSTS.Scheduling.Effort" } catch {}
-            $ticket = [PSCustomObject]@{
-              id                = $f."System.Id"
-              type              = $f."System.WorkItemType"
-              title             = $f."System.Title"
-              state             = $f."System.State"
-              reason            = $f."System.Reason"
-              priority          = $f."Microsoft.VSTS.Common.Priority"
-              severity          = $f."Microsoft.VSTS.Common.Severity"
-              assignedTo        = if ($f."System.AssignedTo") { $f."System.AssignedTo".displayName } else { $null }
-              areaPath          = $f."System.AreaPath"
-              iterationPath     = $f."System.IterationPath"
-              createdDate       = $f."System.CreatedDate"
-              changedDate       = $f."System.ChangedDate"
-              stateChangeDate   = $f."Microsoft.VSTS.Common.StateChangeDate"
-              tags              = $f."System.Tags"
-              foundInBuild      = $f."Microsoft.VSTS.Build.FoundIn"
-              integratedInBuild = $f."Microsoft.VSTS.Build.IntegrationBuild"
-              relatedLinkCount  = ($single.relations | Measure-Object).Count
-              effort            = $effort
-            }
-            $tickets += $ticket
-            Write-Log ("[watch] id {0} added via single-item endpoint" -f $wid)
+      catch {
+        $msg = $_.Exception.Message
+        $respBody = $null
+        if ($_.Exception.Response) {
+          try {
+            $reader = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())
+            $reader.BaseStream.Position = 0
+            $reader.DiscardBufferedData()
+            $respBody = $reader.ReadToEnd()
           }
-          else {
-            Write-Log ("[watch] id {0} single-item endpoint returned empty payload" -f $wid)
-          }
+          catch {}
         }
-        catch {
-          $msg = $_.Exception.Message
-          $respBody = $null
-          if ($_.Exception.Response) {
-            try {
-              $reader = New-Object IO.StreamReader($_.Exception.Response.GetResponseStream())
-              $reader.BaseStream.Position = 0
-              $reader.DiscardBufferedData()
-              $respBody = $reader.ReadToEnd()
-            }
-            catch {}
-          }
-          $tail = if ($respBody) { "; body=" + $respBody } else { '' }
-          Write-Log ("[watch] id {0} single-item endpoint error: {1}{2}" -f $wid, $msg, $tail)
-        }
+        $tail = if ($respBody) { "; body=" + $respBody } else { '' }
+        Write-Log ("[watch] id {0} single-item endpoint error: {1}{2}" -f $wid, $msg, $tail)
       }
-    }
-    catch {
-      Write-Log ("[watch] id {0} refetch failed: {1}" -f $wid, $_)
     }
   }
+  catch {
+    Write-Log ("[watch] id {0} refetch failed: {1}" -f $wid, $_)
+  }
+}
 }
 
 # ---------- Exact-time delta filter (post-expand) ----------
@@ -700,11 +702,6 @@ for ($i = 0; $i -lt $exactDelta.Count; $i += $pushBatchSize) {
       integratedInBuild = Sanitize $t.integratedInBuild
       relatedLinkCount  = $t.relatedLinkCount
       effort            = $t.effort
-    }
-    
-    # DEBUG: Log ticket 189879 in payload
-    if ([string]$t.id -eq '189879') {
-      Write-Log "[DEBUG-189879] In payload chunk: id=$($t.id), state=$($t.state), changedDate=$($t.changedDate)"
     }
   }
 
