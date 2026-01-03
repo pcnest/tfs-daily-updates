@@ -474,7 +474,7 @@ for ($i = 0; $i -lt $expandIds.Count; $i += $batchSize) {
     $relatedLinkCount = @($related).Count
 
     # --- capture all finalized raw fields ---
-    $tickets += [PSCustomObject]@{
+    $ticketObj = [PSCustomObject]@{
       id                = $f."System.Id"
       type              = $f."System.WorkItemType"
       title             = $f."System.Title"
@@ -494,6 +494,13 @@ for ($i = 0; $i -lt $expandIds.Count; $i += $batchSize) {
       relatedLinkCount  = $relatedLinkCount
       effort            = $f."Microsoft.VSTS.Scheduling.Effort"       # PBIs only
     }
+    
+    # DEBUG: Log ticket 189879 details
+    if ($ticketObj.id -eq 189879) {
+      Write-Log "[DEBUG-189879] Fetched from TFS: id=$($ticketObj.id), state=$($ticketObj.state), changedDate=$($ticketObj.changedDate), iterationPath=$($ticketObj.iterationPath)"
+    }
+    
+    $tickets += $ticketObj
   }
 
   $types = $tickets | Select-Object -ExpandProperty type -Unique
@@ -693,6 +700,11 @@ for ($i = 0; $i -lt $exactDelta.Count; $i += $pushBatchSize) {
       integratedInBuild = Sanitize $t.integratedInBuild
       relatedLinkCount  = $t.relatedLinkCount
       effort            = $t.effort
+    }
+    
+    # DEBUG: Log ticket 189879 in payload
+    if ([string]$t.id -eq '189879') {
+      Write-Log "[DEBUG-189879] In payload chunk: id=$($t.id), state=$($t.state), changedDate=$($t.changedDate)"
     }
   }
 
