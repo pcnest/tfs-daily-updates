@@ -1379,19 +1379,20 @@ app.get('/api/tickets', async (req, res) => {
     clauses.push(`lower(t.state)=lower($${i++})`);
     params.push(state);
   }
-  // Iteration filter logic:
-  // - If explicit iteration provided, use it
-  // - If assignedTo provided (PM searching for specific person), show:
-  //   * Items in current sprint (any state), OR
-  //   * Non-Done items from recent sprints only (within ~60 days based on changed_date)
-  //     This captures parent Bug/PBI with child Tasks in current sprint without showing years-old tickets
+  // Iteration filter logic per requirements:
+  // 1. Show Bug/PBI only (Tasks excluded via type filter)
+  // 2. Show if EITHER:
+  //    a) The Bug/PBI is in current sprint (any state), OR
+  //    b) The Bug/PBI has child Task in current sprint (even if parent is in old sprint)
+  //       - Agent syncs these via WIQL B every 5-10 min, so proxy: last_seen_at is recent
+  //       - If agent still sees it (last_seen_at < 20 min ago), it has active child Task
   // - Otherwise, default to current sprint only
   if (effectiveIterationPath) {
     if (assignedTo && currentIterName) {
-      // Relaxed filter for PM: current sprint OR (non-Done AND recently changed)
+      // PM filter: current sprint OR recently synced by agent (has child Task in current sprint)
       clauses.push(
         `(lower(t.iteration_path) like lower($${i++}) OR 
-          (lower(t.state) != 'done' AND t.changed_date >= now() - interval '60 days'))`
+          t.last_seen_at >= now() - interval '20 minutes')`
       );
       params.push(`%${effectiveIterationPath}%`);
     } else {
