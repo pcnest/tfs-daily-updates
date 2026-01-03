@@ -1329,8 +1329,10 @@ app.get('/api/tickets', async (req, res) => {
 
   // CRITICAL FIX: Default to current iteration if no explicit iterationPath filter provided
   // Prevents UI from showing tickets from all sprints (including old/stale ones)
+  // EXCEPTION: When PM explicitly filters by assignedTo, skip iteration filter to show all
+  // assigned work (including parent Bug/PBI from old sprints with child Tasks in current sprint)
   let effectiveIterationPath = iterationPath;
-  if (!effectiveIterationPath) {
+  if (!effectiveIterationPath && !assignedTo) {
     try {
       const currIter = await pool.query(
         `select value from meta where key='current_iteration'`
