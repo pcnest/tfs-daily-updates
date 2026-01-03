@@ -1366,10 +1366,13 @@ app.get('/api/tickets', async (req, res) => {
 
   // same filters, but prefix columns with t.
   if (assignedTo) {
+    // Match against both the full assigned_to field (may contain display name)
+    // and the alias-only portion (after stripping domain prefix)
     clauses.push(
-      `lower(regexp_replace(t.assigned_to,'^.*\\\\','')) like $${i++}`
+      `(lower(t.assigned_to) like $${i++} OR lower(regexp_replace(t.assigned_to,'^.*\\\\','')) like $${i++})`
     );
-    params.push(`%${normId(assignedTo)}%`);
+    const normalized = normId(assignedTo);
+    params.push(`%${assignedTo.toLowerCase().trim()}%`, `%${normalized}%`);
   }
   if (state) {
     clauses.push(`lower(t.state)=lower($${i++})`);
