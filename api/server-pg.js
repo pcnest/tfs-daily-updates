@@ -959,17 +959,6 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
     contentLength: req.header('content-length') || 'n/a',
   });
 
-  // DEBUG: Log ticket 189879 details if present
-  const ticket189879 = tickets.find((t) => String(t.id) === '189879');
-  if (ticket189879) {
-    console.log('[DEBUG-189879] Received in API payload:', {
-      id: ticket189879.id,
-      state: ticket189879.state,
-      changedDate: ticket189879.changedDate,
-      iterationPath: ticket189879.iterationPath,
-    });
-  }
-
   // Defensive validation: ensure caller sent expected shapes to avoid runtime TypeErrors
   if (!Array.isArray(tickets)) {
     console.error('[sync] bad_request: tickets must be an array', {
@@ -1093,26 +1082,6 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
           seenAt, // $20
         ]
       );
-
-      // DEBUG: Log upsert for ticket 189879
-      if (String(t.id) === '189879') {
-        console.log('[DEBUG-189879] Upsert executed with values:', {
-          id: t.id,
-          state: t.state,
-          changedDate: t.changedDate,
-          iterationPath: t.iterationPath,
-        });
-
-        // Query the DB to see what was actually written
-        const checkResult = await client.query(
-          'SELECT id, state, changed_date, iteration_path, deleted FROM tickets WHERE id = $1',
-          ['189879']
-        );
-        console.log(
-          '[DEBUG-189879] DB state after upsert:',
-          checkResult.rows[0]
-        );
-      }
     }
 
     // ---- Presence sweep (use agent's authoritative presentIterationPath) ----
