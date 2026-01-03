@@ -1329,15 +1329,14 @@ app.get('/api/tickets', async (req, res) => {
 
   // CRITICAL FIX: Default to current iteration if no explicit iterationPath filter provided
   // Prevents UI from showing tickets from all sprints (including old/stale ones)
-  // EXCEPTION: When PM explicitly filters by assignedTo, skip iteration filter to show all
-  // assigned work (including parent Bug/PBI from old sprints with child Tasks in current sprint)
   let effectiveIterationPath = iterationPath;
-  if (!effectiveIterationPath && !assignedTo) {
+  let currentIterName = null;
+  if (!effectiveIterationPath) {
     try {
       const currIter = await pool.query(
         `select value from meta where key='current_iteration'`
       );
-      const currentIterName = currIter.rows[0]?.value || null;
+      currentIterName = currIter.rows[0]?.value || null;
       if (currentIterName) {
         effectiveIterationPath = currentIterName;
       }
@@ -1380,9 +1379,24 @@ app.get('/api/tickets', async (req, res) => {
     clauses.push(`lower(t.state)=lower($${i++})`);
     params.push(state);
   }
+  // Iteration filter logic:
+  // - If explicit iteration provided, use it
+  // - If assignedTo provided (PM searching for specific person), show:
+  //   * Items in current sprint (any state), OR
+  //   * Non-Done items from old sprints (includes parent Bug/PBI with child Tasks in current sprint)
+  // - Otherwise, default to current sprint only
   if (effectiveIterationPath) {
-    clauses.push(`lower(t.iteration_path) like lower($${i++})`);
-    params.push(`%${effectiveIterationPath}%`);
+    if (assignedTo && currentIterName) {
+      // Relaxed filter for PM: current sprint OR non-Done from other sprints
+      clauses.push(
+        `(lower(t.iteration_path) like lower($${i++}) OR lower(t.state) != 'done')`
+      );
+      params.push(`%${effectiveIterationPath}%`);
+    } else {
+      // Standard filter: current sprint only
+      clauses.push(`lower(t.iteration_path) like lower($${i++})`);
+      params.push(`%${effectiveIterationPath}%`);
+    }
   }
   if (areaPath) {
     clauses.push(`lower(t.area_path) like lower($${i++})`);
