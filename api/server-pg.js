@@ -1383,13 +1383,15 @@ app.get('/api/tickets', async (req, res) => {
   // - If explicit iteration provided, use it
   // - If assignedTo provided (PM searching for specific person), show:
   //   * Items in current sprint (any state), OR
-  //   * Non-Done items from old sprints (includes parent Bug/PBI with child Tasks in current sprint)
+  //   * Non-Done items from recent sprints only (within ~60 days based on changed_date)
+  //     This captures parent Bug/PBI with child Tasks in current sprint without showing years-old tickets
   // - Otherwise, default to current sprint only
   if (effectiveIterationPath) {
     if (assignedTo && currentIterName) {
-      // Relaxed filter for PM: current sprint OR non-Done from other sprints
+      // Relaxed filter for PM: current sprint OR (non-Done AND recently changed)
       clauses.push(
-        `(lower(t.iteration_path) like lower($${i++}) OR lower(t.state) != 'done')`
+        `(lower(t.iteration_path) like lower($${i++}) OR 
+          (lower(t.state) != 'done' AND t.changed_date >= now() - interval '60 days'))`
       );
       params.push(`%${effectiveIterationPath}%`);
     } else {
