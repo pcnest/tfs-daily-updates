@@ -411,25 +411,6 @@ foreach ($wid in $WatchIds) {
 function Get-WorkItems($idBatch) {
   if (!$idBatch -or $idBatch.Count -eq 0) { return @() }
   $idList = ($idBatch -join ",")
-  $fields = @(
-    "System.Id",
-    "System.WorkItemType",
-    "System.Title",
-    "System.State",
-    "System.Reason",
-    "Microsoft.VSTS.Common.Priority",
-    "Microsoft.VSTS.Common.Severity",
-    "System.AssignedTo",
-    "System.AreaPath",
-    "System.IterationPath",
-    "System.CreatedDate",
-    "System.ChangedDate",
-    "Microsoft.VSTS.Common.StateChangeDate",
-    "System.Tags",
-    "Microsoft.VSTS.Build.FoundIn",
-    "Microsoft.VSTS.Build.IntegrationBuild",
-    "Microsoft.VSTS.Scheduling.Effort"
-  ) -join ","
 
   # Fetch ALL fields + relations (TFS 2017 forbids fields= with $expand=Relations)
   $url = "$TfsUrl/$Collection/_apis/wit/workitems?ids=$idList&api-version=2.0&`$expand=Relations"

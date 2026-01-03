@@ -1384,15 +1384,14 @@ app.get('/api/tickets', async (req, res) => {
   // 2. Show if EITHER:
   //    a) The Bug/PBI is in current sprint (any state), OR
   //    b) The Bug/PBI has child Task in current sprint (even if parent is in old sprint)
-  //       - Agent WIQL B only syncs parent Bug/PBI where State <> 'Done'
-  //       - So filter: NOT in current sprint AND state != 'Done' AND recently synced
+  //       - Agent WIQL B syncs parent Bug/PBI where State <> 'Done' AND has child Task in @CurrentIteration
+  //       - So filter: show non-Done items (proxy for "has child Task in current sprint")
   // - Otherwise, default to current sprint only
   if (effectiveIterationPath) {
     if (assignedTo && currentIterName) {
-      // PM filter: current sprint OR (non-Done AND recently synced by agent)
+      // PM filter: current sprint OR non-Done (agent only syncs non-Done parents with child Tasks)
       clauses.push(
-        `(lower(t.iteration_path) like lower($${i++}) OR 
-          (lower(t.state) != 'done' AND t.last_seen_at >= now() - interval '20 minutes'))`
+        `(lower(t.iteration_path) like lower($${i++}) OR lower(t.state) != 'done')`
       );
       params.push(`%${effectiveIterationPath}%`);
     } else {
