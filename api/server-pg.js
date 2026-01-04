@@ -7,9 +7,18 @@ import path from 'path';
 import fs from 'fs';
 import nodemailer from 'nodemailer';
 import { Pool } from 'pg';
+import OpenAI from 'openai';
 
 // Load environment
 dotenv.config();
+
+// OpenAI setup (optional)
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+let openai = null;
+if (OPENAI_API_KEY) {
+  openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+}
 
 // Minimal mailer config and safe transport builder so server can start
 const MAIL_MODE = process.env.MAIL_MODE || 'file';
