@@ -20,6 +20,19 @@ if (OPENAI_API_KEY) {
   openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 }
 
+// Helper to parse JSON from OpenAI response
+function parseOpenAIJson(resp) {
+  try {
+    // OpenAI response structure: resp.choices[0].message.content
+    const content = resp?.choices?.[0]?.message?.content;
+    if (!content) return null;
+    return JSON.parse(content);
+  } catch (e) {
+    console.error('[parseOpenAIJson] Failed to parse:', e.message);
+    return null;
+  }
+}
+
 // Minimal mailer config and safe transport builder so server can start
 const MAIL_MODE = process.env.MAIL_MODE || 'file';
 const SMTP_HOST = process.env.SMTP_HOST || '';
