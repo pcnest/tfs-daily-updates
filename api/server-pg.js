@@ -1159,15 +1159,6 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
             mode: 'db-derived-fallback',
           });
         }
-
-        // Global safety: tombstone any ticket not in the presentIds list, regardless of iteration
-        // This prevents cross-iteration "recent" refresh items (WIQL C) from staying visible.
-        await client.query(
-          `UPDATE tickets
-         SET deleted = true
-       WHERE NOT (id = ANY($1::text[]))`,
-          [idsText]
-        );
       } else {
         console.log('[sweep] skipped (no presentIds)');
       }
