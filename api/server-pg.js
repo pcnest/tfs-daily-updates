@@ -1373,6 +1373,9 @@ app.get('/api/tickets', async (req, res) => {
   if (state) {
     clauses.push(`lower(t.state)=lower($${i++})`);
     params.push(state);
+  } else {
+    // Default noise-reduction: hide Done items unless explicitly requested
+    clauses.push(`lower(t.state) <> 'done'`);
   }
   // Iteration filter logic per requirements:
   // 1. Show Bug/PBI only (Tasks excluded via type filter above)
