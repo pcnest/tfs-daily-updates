@@ -1283,11 +1283,6 @@ app.get('/api/iteration/:name/live-ids', async (req, res) => {
     String(req.query.typesOverride || '').toLowerCase() === '1' ||
     String(req.query.typesOverride || '').toLowerCase() === 'true';
 
-  // Explicit toggle required to override default types filter (Bug/PBI only)
-  const typesOverride =
-    String(req.query.typesOverride || '').toLowerCase() === '1' ||
-    String(req.query.typesOverride || '').toLowerCase() === 'true';
-
   if (!includeDeleted || String(includeDeleted) !== '1') {
     clauses.push(`coalesce(deleted, false) = false`);
   }
