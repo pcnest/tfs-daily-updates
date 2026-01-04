@@ -468,22 +468,21 @@ ${JSON.stringify(trimmed)}`;
     );
   }
 
-  const resp = await openai.responses.create({
+  const resp = await openai.chat.completions.create({
     model: OPENAI_MODEL,
-    input: [
+    messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    text: {
-      format: {
-        // ALL FOUR KEYS:
-        type: 'json_schema', // <— REQUIRED
-        name: TriageSchema.name, // 'TriageList'
-        schema: TriageSchema.schema, // your JSON Schema object
-        strict: !!TriageSchema.strict, // false
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        name: TriageSchema.name,
+        schema: TriageSchema.schema,
+        strict: !!TriageSchema.strict,
       },
     },
-    max_output_tokens: 1200,
+    max_tokens: 1200,
   });
 
   const js = parseOpenAIJson(resp);
@@ -3074,21 +3073,21 @@ Keep outputs brief and practical, using the team's progress families.`;
 Input JSON:
 ${JSON.stringify(trimmed)}`;
 
-  const resp = await openai.responses.create({
+  const resp = await openai.chat.completions.create({
     model: OPENAI_MODEL,
-    input: [
+    messages: [
       { role: 'system', content: system },
       { role: 'user', content: user },
     ],
-    text: {
-      format: {
-        type: 'json_schema',
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
         name: SnapshotInsightsSchema.name,
         schema: SnapshotInsightsSchema.schema,
         strict: !!SnapshotInsightsSchema.strict,
       },
     },
-    max_output_tokens: 600,
+    max_tokens: 600,
   });
 
   const js = parseOpenAIJson(resp);
@@ -3356,21 +3355,21 @@ Return JSON: { "next_steps": ["...", "...", "..."] }`;
         schema = NextStepsSchema;
       }
 
-      const resp = await openai.responses.create({
+      const resp = await openai.chat.completions.create({
         model: OPENAI_MODEL,
-        input: [
+        messages: [
           { role: 'system', content: system },
           { role: 'user', content: user },
         ],
-        text: {
-          format: {
-            type: 'json_schema',
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
             name: schema.name,
             schema: schema.schema,
             strict: !!schema.strict,
           },
         },
-        max_output_tokens: 400,
+        max_tokens: 400,
       });
 
       const js = parseOpenAIJson(resp);
