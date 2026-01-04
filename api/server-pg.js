@@ -1139,6 +1139,17 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
             authPath,
             mode: 'agent-authoritative',
           });
+
+          // Additional sweep: tombstone items recently synced but NOT in scope
+          // These are cross-iteration items (WIQL C) that were refreshed but aren't in presentIds
+          // Use a 10-minute window to catch items from the current sync run
+          await client.query(
+            `UPDATE tickets
+           SET deleted = true
+         WHERE NOT (id = ANY($1::text[]))
+           AND last_seen_at >= now() - interval '10 minutes'`,
+            [idsText]
+          );
         } else {
           // Fallback: derive scope from DB (original behavior) if agent didn't provide path
           const { rows: pathRows } = await client.query(
