@@ -1335,6 +1335,11 @@ app.get('/api/tickets', async (req, res) => {
   const params = [];
   let i = 1;
 
+  // Explicit toggle required to override default Bug/PBI types filter
+  const typesOverride =
+    String(req.query.typesOverride || '').toLowerCase() === '1' ||
+    String(req.query.typesOverride || '').toLowerCase() === 'true';
+
   // Exclude soft-deleted rows by default. Override with ?includeDeleted=1 if you ever need to audit.
   if (!includeDeleted || String(includeDeleted) !== '1') {
     // coalesce handles legacy rows where 'deleted' might be null
