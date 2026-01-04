@@ -1278,6 +1278,11 @@ app.get('/api/iteration/:name/live-ids', async (req, res) => {
   const params = [];
   let i = 1;
 
+  // Explicit toggle required to override default Bug/PBI types filter
+  const typesOverride =
+    String(req.query.typesOverride || '').toLowerCase() === '1' ||
+    String(req.query.typesOverride || '').toLowerCase() === 'true';
+
   // Explicit toggle required to override default types filter (Bug/PBI only)
   const typesOverride =
     String(req.query.typesOverride || '').toLowerCase() === '1' ||
