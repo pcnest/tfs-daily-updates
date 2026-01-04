@@ -1,14 +1,20 @@
-SELECT [System.Id]
+SELECT
+  [Source].[System.Id]
 FROM WorkItemLinks
 WHERE
-  [Source].[System.TeamProject] = @project
-  AND [Source].[System.WorkItemType] IN ('Bug','Product Backlog Item')
-  AND [Source].[System.State] <> 'Done'
-  AND [System.Links.LinkType] = 'System.LinkTypes.Hierarchy-Forward'
-  AND [Target].[System.TeamProject] = @project
-  AND [Target].[System.WorkItemType] = 'Task'
-  AND [Target].[System.IterationPath] UNDER @CurrentIteration
-  AND (
-       [Target].[System.ChangedDate] >= '{SINCE_ISO}'
+  (
+    [Source].[System.TeamProject] = @project
+    AND [Source].[System.WorkItemType] IN ('Bug', 'Product Backlog Item')
+    AND [Source].[System.State] <> 'Done'
+  )
+  AND
+  (
+    [Target].[System.TeamProject] = @project
+    AND [Target].[System.WorkItemType] = 'Task'
+    AND [Target].[System.IterationPath] = @CurrentIteration
+  )
+  AND
+  (
+    [System.Links.LinkType] <> ''
   )
 MODE (MustContain)

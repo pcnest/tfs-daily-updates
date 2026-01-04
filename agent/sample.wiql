@@ -5,4 +5,3 @@ WHERE
   AND [System.WorkItemType] IN ('Bug','Product Backlog Item')
   AND [System.IterationPath] UNDER @CurrentIteration
   AND [System.State] <> 'Done'
-  AND [System.ChangedDate] >= '{SINCE_ISO}'
