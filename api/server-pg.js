@@ -1384,21 +1384,20 @@ app.get('/api/tickets', async (req, res) => {
   // 2. Show if EITHER:
   //    a) The Bug/PBI is in current sprint (any state), OR
   //    b) The Bug/PBI has child Task in current sprint (even if parent is in old sprint)
-  //       - Agent WIQL B syncs parent Bug/PBI where State <> 'Done' AND has child Task in @CurrentIteration
-  //       - So filter: show non-Done items (proxy for "has child Task in current sprint")
-  // - Otherwise, default to current sprint only
+  //
+  // CRITICAL: The agent (WIQL A+B) already handles this correctly:
+  //   - WIQL A: Bugs/PBIs directly in @CurrentIteration
+  //   - WIQL B: Parents (Bugs/PBIs) with child Tasks in @CurrentIteration
+  //   - Presence sweep: Tombstones items not in scope
+  // The agent only syncs items that meet the requirements, so the API should
+  // simply filter by current iteration. The DB already contains the correct set.
+  //
+  // REMOVED FAULTY LOGIC: Previously had `OR state != 'done'` which showed
+  // ALL non-Done items from ALL sprints, violating the core requirements.
   if (effectiveIterationPath) {
-    if (assignedTo && currentIterName) {
-      // PM filter: current sprint OR non-Done (agent only syncs non-Done parents with child Tasks)
-      clauses.push(
-        `(lower(t.iteration_path) like lower($${i++}) OR lower(t.state) != 'done')`
-      );
-      params.push(`%${effectiveIterationPath}%`);
-    } else {
-      // Standard filter: current sprint only
-      clauses.push(`lower(t.iteration_path) like lower($${i++})`);
-      params.push(`%${effectiveIterationPath}%`);
-    }
+    // Filter to current iteration only - agent already ensured correct items are synced
+    clauses.push(`lower(t.iteration_path) like lower($${i++})`);
+    params.push(`%${effectiveIterationPath}%`);
   }
   if (areaPath) {
     clauses.push(`lower(t.area_path) like lower($${i++})`);
