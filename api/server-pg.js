@@ -1126,11 +1126,12 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
         if (authPath) {
           // Tombstone anything whose iteration_path MATCHES the agent's current iteration
           // but wasn't in the present list
-          await client.query(
+          const iterSweepResult = await client.query(
             `UPDATE tickets
            SET deleted = true
          WHERE lower(iteration_path) = lower($1)
-           AND NOT (id = ANY($2::text[]))`,
+           AND NOT (id = ANY($2::text[]))
+         RETURNING id`,
             [authPath, idsText]
           );
 
@@ -1138,18 +1139,32 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
             presentCount: idsText.length,
             authPath,
             mode: 'agent-authoritative',
+            iterTombstoned: iterSweepResult.rowCount,
           });
 
           // Additional sweep: tombstone items recently synced but NOT in scope
           // These are cross-iteration items (WIQL C) that were refreshed but aren't in presentIds
-          // Use a 10-minute window to catch items from the current sync run
-          await client.query(
+          // Use a 60-minute window to catch items from recent sync runs
+          const recentResult = await client.query(
             `UPDATE tickets
            SET deleted = true
          WHERE NOT (id = ANY($1::text[]))
-           AND last_seen_at >= now() - interval '10 minutes'`,
+           AND last_seen_at >= now() - interval '60 minutes'
+         RETURNING id`,
             [idsText]
           );
+
+          if (recentResult.rowCount > 0) {
+            console.log('[recent-sweep]', {
+              tombstoned: recentResult.rowCount,
+              sampleIds: recentResult.rows
+                .slice(0, 10)
+                .map((r) => r.id)
+                .join(', '),
+            });
+          } else {
+            console.log('[recent-sweep]', { tombstoned: 0 });
+          }
         } else {
           // Fallback: derive scope from DB (original behavior) if agent didn't provide path
           const { rows: pathRows } = await client.query(
