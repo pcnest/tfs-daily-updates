@@ -1649,7 +1649,18 @@ app.get('/api/updates/lock', requireAuth, async (req, res) => {
     `select 1 from progress_locks where email=$1 and date=$2`,
     [req.userEmail, date]
   );
-  res.json({ date, locked: r.rowCount > 0 });
+
+  // Also return the count of progress updates for today
+  const progressCount = await pool.query(
+    `select count(*) as count from progress_updates where email=$1 and date=$2`,
+    [req.userEmail, date]
+  );
+
+  res.json({
+    date,
+    locked: r.rowCount > 0,
+    progressCount: parseInt(progressCount.rows[0]?.count || 0, 10),
+  });
 });
 
 // --- collation (enriched)
