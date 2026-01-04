@@ -840,6 +840,8 @@
       var tokenKey = "pocToken";
       // Global lock flag for today
       window.__lockedToday = false;
+      // Track if any progress updates have been submitted today
+      window.__progressCount = 0;
 
       function checkLockStatus() {
         var tkn = localStorage.getItem('pocToken') || '';
@@ -850,13 +852,29 @@
           .then(function (r) { return r.json(); })
           .then(function (js) {
             window.__lockedToday = !!(js && js.locked);
+            window.__progressCount = js.progressCount || 0;
             // Hide the Submit section and disable select buttons when locked
             var sc = byId('submitCard');
             if (sc) sc.classList.toggle('hidden', window.__lockedToday);
             if (window.__lockedToday) setSelectButtonsDisabled(true);
+            // Update lock button state based on progress count
+            updateLockButtonState();
             return window.__lockedToday;
           })
           .catch(function () { return false; });
+      }
+
+      function updateLockButtonState() {
+        var lockButtons = document.querySelectorAll('button[onclick="lockDay()"]');
+        lockButtons.forEach(function (btn) {
+          // Disable if no progress updates submitted
+          btn.disabled = (window.__progressCount === 0);
+          if (window.__progressCount === 0) {
+            btn.title = 'Submit at least one ticket progress update before completing';
+          } else {
+            btn.title = '';
+          }
+        });
       }
 
       function byId(id) { return document.getElementById(id); }
@@ -1697,6 +1715,9 @@
           .then(function (js) {
             if (js && js.error) setStatus("submitStatus", js.error, false); else {
               setStatus("submitStatus", "Saved!");
+              // Increment progress count and update lock button state
+              window.__progressCount = (window.__progressCount || 0) + 1;
+              updateLockButtonState();
               byId("note").value = "";
               closeSPModal();
               var row = document.querySelector('#ticketsTbl tbody tr[data-id="' + ticket + '"]');
@@ -1716,6 +1737,13 @@
       function lockDay() {
         var tkn = token();
         if (!tkn) { setStatus("lockStatus", "Please login first.", false); return; }
+
+        // Check if any progress updates have been submitted
+        if (window.__progressCount === 0) {
+          setStatus("lockStatus", "Please submit at least one ticket progress update before completing.", false);
+          return;
+        }
+
         setStatus("lockStatus", "Submitting day...");
         req('POST', (API || location.origin) + "/api/updates/lock", null, { "Authorization": "Bearer " + tkn })
           .then(function (js) {

@@ -1,7 +1,7 @@
 # Data Flow Map - TFS Daily Updates System
 
-**Last Updated**: January 3, 2026  
-**System Version**: v1.0 (Production)
+**Last Updated**: January 4, 2026  
+**System Version**: v1.1 (Production)
 
 ---
 
@@ -517,6 +517,189 @@ if ($IsFullPush) {
 **Root Cause**: Timestamp filter always applied regardless of flag  
 **Fix**: `if ($IsFullPush) { $exactDelta = $tickets }` (lines 606-643)  
 **Date**: January 2, 2026
+
+### ✅ FIXED: Out-of-Scope Tickets Displayed
+
+**Issue**: UI showed thousands of tickets from old sprints despite WIQL filtering  
+**Root Cause**: Global tombstone sweep deleted ALL items except current 35, but agent pushed 2370 cross-iteration items from WIQL C  
+**Fix**: Removed overly aggressive global sweep; rely on iteration-scoped sweep only  
+**Date**: January 4, 2026
+
+### ✅ FIXED: Backend Type Filter Override
+
+**Issue**: PM requests sent `types=all` showing Tasks/other types, violating Bug/PBI-only rule  
+**Root Cause**: Frontend hardcoded `types=all` for PM users without backend validation  
+**Fix**: Added backend guard requiring `typesOverride=1` to honor `types` parameter; defaults to Bug/PBI only  
+**Date**: January 4, 2026
+
+### ✅ FIXED: Done Items Cluttering UI
+
+**Issue**: UI showed many Done tickets adding noise  
+**Root Cause**: No state filter applied by default  
+**Fix**: API now defaults to `state <> 'done'` unless explicitly requested  
+**Date**: January 4, 2026
+
+---
+
+## Iteration Filtering Requirements
+
+**Last Updated**: January 4, 2026
+
+### Core Requirements
+
+The system implements strict iteration filtering to ensure only relevant tickets appear in the UI:
+
+1. **Display Work Item Types**: Bug + Product Backlog Item ONLY (exclude Tasks from table)
+2. **Iteration Filter Logic**: Show Bug/PBI if EITHER:
+   - The Bug/PBI itself is in current sprint (any state), OR
+   - The Bug/PBI has at least one child Task in current sprint (even if parent is in old sprint)
+
+### Implementation Architecture
+
+#### Agent Layer (agent.ps1)
+
+**WIQL A - Direct Current Iteration Items**
+
+```sql
+SELECT [System.Id]
+FROM WorkItems
+WHERE
+  [System.TeamProject] = @project
+  AND [System.WorkItemType] IN ('Bug','Product Backlog Item')
+  AND [System.IterationPath] UNDER @CurrentIteration
+  AND [System.State] <> 'Done'
+```
+
+- Returns: Bugs/PBIs directly assigned to current sprint
+- Example: Sprint 2026-412 items (14 IDs in production)
+
+**WIQL B - Parent Items with Current Sprint Tasks**
+
+```sql
+SELECT [Source].[System.Id]
+FROM WorkItemLinks
+WHERE
+  ([Source].[System.TeamProject] = @project
+   AND [Source].[System.WorkItemType] IN ('Bug', 'Product Backlog Item')
+   AND [Source].[System.State] <> 'Done')
+  AND
+  ([Target].[System.TeamProject] = @project
+   AND [Target].[System.WorkItemType] = 'Task'
+   AND [Target].[System.IterationPath] = @CurrentIteration)
+MODE (MustContain)
+```
+
+- Returns: Bugs/PBIs from ANY sprint that have child Tasks in current sprint
+- Example: Bug #12345 in Sprint 399 with Task in Sprint 400 (31 IDs in production)
+- **Critical**: Parent's `iteration_path` may be old sprint; this is correct behavior
+
+**WIQL C - Recent Changes Refresh (Cross-Iteration)**
+
+```sql
+SELECT [System.Id]
+FROM WorkItems
+WHERE
+  [System.TeamProject] = @project
+  AND [System.WorkItemType] IN ('Bug','Product Backlog Item')
+  AND [System.ChangedDate] >= '{RECENT_ISO}'  -- Last 45 days
+```
+
+- Returns: All Bugs/PBIs changed recently across ALL iterations
+- Purpose: Keep DB fields fresh (state, tags, etc.) for cross-sprint items
+- Example: 2370 IDs in production
+- **Note**: These are expanded/pushed but NOT added to `presentIds` scope
+
+**Presence Scope (Authoritative)**
+
+```powershell
+$idsFull = ($idsA_full + $idsB_full) | Sort-Object -Unique
+# Agent sends presentIds = $idsFull (35 IDs in production)
+# Agent sends presentIterationPath = "SupplyPro.Core\Year 2026\Sprint 2026-412"
+```
+
+#### API Layer (server-pg.js)
+
+**Type Filter (Default)**
+
+```javascript
+// Lines 1350-1371
+const typesOverride =
+  req.query.typesOverride === '1' || req.query.typesOverride === 'true';
+if (!typesOverride || !typesParam || typesParam === 'default') {
+  clauses.push(`lower(t.type) in ('bug','product backlog item')`);
+}
+```
+
+- Default: Bug + Product Backlog Item only
+- Override requires explicit `?typesOverride=1&types=all`
+
+**State Filter (Default)**
+
+```javascript
+// Lines 1389-1393
+if (state) {
+  clauses.push(`lower(t.state)=lower($${i++})`);
+} else {
+  clauses.push(`lower(t.state) <> 'done'`); // Default noise reduction
+}
+```
+
+**Iteration Filter (Trust deleted Flag)**
+
+```javascript
+// Lines 1340-1347
+// NO default iteration filter applied
+// Relies on deleted=false filter + presence sweep
+clauses.push(`coalesce(t.deleted, false) = false`);
+```
+
+- **Critical Design**: API does NOT filter by `iteration_path`
+- Rationale: WIQL B items have old sprint paths but are valid (parent in Sprint 399, task in 400)
+- Trust mechanism: Agent's presence sweep sets `deleted=true` for out-of-scope items
+
+**Presence Sweep (Iteration-Scoped)**
+
+```javascript
+// Lines 1106-1114
+await client.query(
+  `UPDATE tickets
+   SET deleted = true
+   WHERE lower(iteration_path) = lower($1)
+   AND NOT (id = ANY($2::text[]))`,
+  [presentIterationPath, presentIds]
+);
+```
+
+- Tombstones items in current iteration path that aren't in agent's authoritative `presentIds`
+- Preserves historical data from other iterations (no global sweep)
+
+### Example Scenarios
+
+| Scenario                           | Bug/PBI Iter | Task Iter  | In WIQL A? | In WIQL B? | Visible? |
+| ---------------------------------- | ------------ | ---------- | ---------- | ---------- | -------- |
+| Bug in Sprint 400, no Tasks        | Sprint 400   | N/A        | ✅ Yes     | ❌ No      | ✅ Yes   |
+| Bug in Sprint 400, Task in 400     | Sprint 400   | Sprint 400 | ✅ Yes     | ✅ Yes     | ✅ Yes   |
+| Bug in Sprint 399, Task in 400     | Sprint 399   | Sprint 400 | ❌ No      | ✅ Yes     | ✅ Yes   |
+| Bug in Sprint 400, Task in 399     | Sprint 400   | Sprint 399 | ✅ Yes     | ❌ No      | ✅ Yes   |
+| Bug in Sprint 399, no Tasks in 400 | Sprint 399   | Sprint 398 | ❌ No      | ❌ No      | ❌ No    |
+
+### Troubleshooting
+
+**Problem**: UI shows items from old sprints  
+**Debug Steps**:
+
+1. Check agent logs for `FULL presence scope has X id(s)`
+2. Check agent logs for `[iter-presence] presentCount=...`
+3. Check API logs for `[sweep] presentCount=..., authPath=...`
+4. Verify presence sweep ran: `[sweep] mode=agent-authoritative`
+
+**Problem**: Valid items missing from UI  
+**Verify**:
+
+1. Item is in WIQL A or WIQL B scope
+2. Item's `deleted` flag is `false` in DB
+3. Item's `state` is not `Done` (unless explicitly requested)
+4. Item's `type` is `Bug` or `Product Backlog Item`
 
 ---
 
