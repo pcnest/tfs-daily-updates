@@ -1327,27 +1327,13 @@ app.get('/api/tickets', async (req, res) => {
     clauses.push(`coalesce(t.deleted, false) = false`);
   }
 
-  // CRITICAL FIX: Default to current iteration if no explicit iterationPath filter provided
-  // Prevents UI from showing tickets from all sprints (including old/stale ones)
-  let effectiveIterationPath = iterationPath;
-  let currentIterName = null;
-  if (!effectiveIterationPath) {
-    try {
-      const currIter = await pool.query(
-        `select value from meta where key='current_iteration'`
-      );
-      currentIterName = currIter.rows[0]?.value || null;
-      if (currentIterName) {
-        effectiveIterationPath = currentIterName;
-      }
-    } catch (e) {
-      // If meta query fails, continue without default filter (better than failing request)
-      console.warn(
-        '[tickets] could not fetch current iteration for default filter:',
-        e.message
-      );
-    }
-  }
+  // Note: We intentionally do NOT default to current iteration here.
+  // The agent (WIQL A+B + presence sweep) already ensures only correct items are in DB:
+  //   - WIQL A: Bugs/PBIs directly in @CurrentIteration
+  //   - WIQL B: Parents (Bugs/PBIs) with child Tasks in @CurrentIteration (even if parent is in old sprint)
+  //   - Presence sweep: Sets deleted=true for items no longer in scope
+  // The deleted=false filter above is sufficient to show only current items.
+  let effectiveIterationPath = iterationPath; // Only used if explicitly provided by caller
 
   // Default: only Bug + Product Backlog Item.
   // Override with ?types=all or ?types=Bug,Product Backlog Item
@@ -1380,22 +1366,19 @@ app.get('/api/tickets', async (req, res) => {
     params.push(state);
   }
   // Iteration filter logic per requirements:
-  // 1. Show Bug/PBI only (Tasks excluded via type filter)
+  // 1. Show Bug/PBI only (Tasks excluded via type filter above)
   // 2. Show if EITHER:
   //    a) The Bug/PBI is in current sprint (any state), OR
-  //    b) The Bug/PBI has child Task in current sprint (even if parent is in old sprint)
+  //    b) The Bug/PBI has child Task in current sprint (parent may be in old sprint)
   //
-  // CRITICAL: The agent (WIQL A+B) already handles this correctly:
-  //   - WIQL A: Bugs/PBIs directly in @CurrentIteration
-  //   - WIQL B: Parents (Bugs/PBIs) with child Tasks in @CurrentIteration
-  //   - Presence sweep: Tombstones items not in scope
-  // The agent only syncs items that meet the requirements, so the API should
-  // simply filter by current iteration. The DB already contains the correct set.
+  // CRITICAL: The agent (WIQL A+B + presence sweep) ensures correct items are in DB:
+  //   - WIQL A: Bugs/PBIs with iteration_path = @CurrentIteration
+  //   - WIQL B: Parents with iteration_path = old sprint BUT have child Task in @CurrentIteration
+  //   - Presence sweep: Sets deleted=true for items no longer in scope
   //
-  // REMOVED FAULTY LOGIC: Previously had `OR state != 'done'` which showed
-  // ALL non-Done items from ALL sprints, violating the core requirements.
+  // Therefore: We rely on deleted=false filter (applied above) instead of iteration_path.
+  // Only apply iteration_path filter if explicitly requested by caller.
   if (effectiveIterationPath) {
-    // Filter to current iteration only - agent already ensured correct items are synced
     clauses.push(`lower(t.iteration_path) like lower($${i++})`);
     params.push(`%${effectiveIterationPath}%`);
   }
