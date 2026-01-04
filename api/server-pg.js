@@ -1144,12 +1144,13 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
 
           // Additional sweep: tombstone items recently synced but NOT in scope
           // These are cross-iteration items (WIQL C) that were refreshed but aren't in presentIds
-          // Use a 60-minute window to catch items from recent sync runs
+          // Use a 3-hour window to handle gaps in agent runs (e.g., server downtime, network issues)
+          // This ensures out-of-scope items are tombstoned even if agent is delayed
           const recentResult = await client.query(
             `UPDATE tickets
            SET deleted = true
          WHERE NOT (id = ANY($1::text[]))
-           AND last_seen_at >= now() - interval '60 minutes'
+           AND last_seen_at >= now() - interval '3 hours'
          RETURNING id`,
             [idsText]
           );

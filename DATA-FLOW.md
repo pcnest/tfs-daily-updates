@@ -254,20 +254,34 @@ ON CONFLICT (id) DO UPDATE SET
 
 **Purpose**: Tombstone tickets that disappeared from current iteration (moved to other sprints, deleted, etc.)
 
+The presence sweep uses a **two-stage approach**:
+
+**Stage 1: Iteration-Scoped Sweep**
+
 ```sql
 UPDATE tickets
-SET deleted = true, last_seen_at = now()
+SET deleted = true
 WHERE lower(iteration_path) = lower($authPath)
   AND NOT (id = ANY($presentIds))
-  AND coalesce(deleted, false) = false
+```
+
+**Stage 2: Recent-Sync Sweep (Cross-Iteration)**
+
+```sql
+UPDATE tickets
+SET deleted = true
+WHERE NOT (id = ANY($presentIds))
+  AND last_seen_at >= now() - interval '3 hours'
 ```
 
 **Key Parameters**:
 
 - `$authPath`: **Authoritative path from agent** (`presentIterationPath` from payload)
   - **HIGH PRIORITY FIX**: Uses agent's path instead of deriving from DB's potentially stale data
-- `$presentIds`: Array of all IDs agent saw in current iteration WIQL
-- Only tombstones tickets not in present list (soft delete)
+- `$presentIds`: Array of all IDs agent saw in current iteration WIQL (WIQL A + WIQL B)
+- **3-hour window**: Catches cross-iteration items (WIQL C) synced recently but not in scope
+  - Handles gaps in agent runs (server downtime, network issues)
+  - Only affects items NOT in presentIds (safe for legitimate in-scope items)
 
 **Fallback**:
 
@@ -657,10 +671,10 @@ clauses.push(`coalesce(t.deleted, false) = false`);
 - Rationale: WIQL B items have old sprint paths but are valid (parent in Sprint 399, task in 400)
 - Trust mechanism: Agent's presence sweep sets `deleted=true` for out-of-scope items
 
-**Presence Sweep (Iteration-Scoped)**
+**Presence Sweep (Two-Stage)**
 
 ```javascript
-// Lines 1106-1114
+// Stage 1: Iteration-scoped sweep (Lines 1129-1138)
 await client.query(
   `UPDATE tickets
    SET deleted = true
@@ -668,10 +682,22 @@ await client.query(
    AND NOT (id = ANY($2::text[]))`,
   [presentIterationPath, presentIds]
 );
+
+// Stage 2: Recent-sync sweep for cross-iteration items (Lines 1148-1154)
+await client.query(
+  `UPDATE tickets
+   SET deleted = true
+   WHERE NOT (id = ANY($1::text[]))
+   AND last_seen_at >= now() - interval '3 hours'`,
+  [presentIds]
+);
 ```
 
-- Tombstones items in current iteration path that aren't in agent's authoritative `presentIds`
-- Preserves historical data from other iterations (no global sweep)
+- **Stage 1**: Tombstones items in current iteration path not in `presentIds`
+- **Stage 2**: Tombstones cross-iteration items (WIQL C) synced in last 3 hours but not in `presentIds`
+  - 3-hour window handles agent downtime/delays
+  - Prevents out-of-scope items from old sprints appearing in UI
+- Preserves historical data older than 3 hours (no global sweep)
 
 ### Example Scenarios
 
