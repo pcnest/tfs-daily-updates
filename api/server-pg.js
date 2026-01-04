@@ -1278,6 +1278,11 @@ app.get('/api/iteration/:name/live-ids', async (req, res) => {
   const params = [];
   let i = 1;
 
+  // Explicit toggle required to override default types filter (Bug/PBI only)
+  const typesOverride =
+    String(req.query.typesOverride || '').toLowerCase() === '1' ||
+    String(req.query.typesOverride || '').toLowerCase() === 'true';
+
   if (!includeDeleted || String(includeDeleted) !== '1') {
     clauses.push(`coalesce(deleted, false) = false`);
   }
@@ -1345,13 +1350,17 @@ app.get('/api/tickets', async (req, res) => {
   let effectiveIterationPath = iterationPath; // Only used if explicitly provided by caller
 
   // Default: only Bug + Product Backlog Item.
-  // Override with ?types=all or ?types=Bug,Product Backlog Item
-  if (!types || String(types).toLowerCase() === 'default') {
+  // Override requires explicit toggle via ?typesOverride=1 and then:
+  //   ?types=all OR ?types=Bug,Product Backlog Item
+  const typesParam = String(types || '')
+    .toLowerCase()
+    .trim();
+  if (!typesOverride || !typesParam || typesParam === 'default') {
     clauses.push(`lower(t.type) in ('bug','product backlog item')`);
-  } else if (String(types).toLowerCase() !== 'all') {
-    const list = String(types)
+  } else if (typesParam !== 'all') {
+    const list = typesParam
       .split(',')
-      .map((s) => s.trim().toLowerCase())
+      .map((s) => s.trim())
       .filter(Boolean);
     if (list.length) {
       // pg will serialize JS array to Postgres text[]
