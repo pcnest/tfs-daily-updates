@@ -39,6 +39,7 @@ const SMTP_HOST = process.env.SMTP_HOST || '';
 const SMTP_PORT = process.env.SMTP_PORT
   ? Number(process.env.SMTP_PORT)
   : undefined;
+const SMTP_SECURE = (process.env.SMTP_SECURE || 'false') === 'true';
 const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.SMTP_PASS || '';
 const SMTP_REQUIRE_TLS = (process.env.SMTP_REQUIRE_TLS || 'false') === 'true';
@@ -51,9 +52,12 @@ function buildMailTransport() {
     return nodemailer.createTransport({
       host: SMTP_HOST,
       port: SMTP_PORT || 587,
-      secure: SMTP_PORT === 465,
+      secure: SMTP_SECURE,
       requireTLS: SMTP_REQUIRE_TLS,
       auth: SMTP_USER ? { user: SMTP_USER, pass: SMTP_PASS } : undefined,
+      connectionTimeout: 10000, // 10 seconds to connect
+      greetingTimeout: 5000, // 5 seconds to receive server greeting
+      socketTimeout: 30000, // 30 seconds of socket inactivity before timeout
     });
   }
   // Default to a safe JSON transport for local testing
