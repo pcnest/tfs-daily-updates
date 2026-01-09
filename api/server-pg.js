@@ -667,11 +667,9 @@ async function buildSnapshotEmail(req, range, { ai = false } = {}) {
   });
   const htmlRaw = await resp.text();
 
-  // Normalize fonts for Outlook/Gmail; attach a PDF version too
+  // Normalize fonts for Outlook/Gmail
   const html = normalizeEmailHTMLFonts(htmlRaw);
-  const pdfBuffer = await htmlToPdfBuffer(html);
 
-  const devSlug = fileSafeSlug(range.developer || 'all');
   const friendlyDev = await resolveDeveloperDisplayName(
     pool,
     range.developer,
@@ -684,13 +682,7 @@ async function buildSnapshotEmail(req, range, { ai = false } = {}) {
   return {
     subject,
     html,
-    attachments: [
-      {
-        filename: `Developer-Snapshot_${devSlug}_${range.from}_to_${range.to}.pdf`,
-        content: pdfBuffer,
-        contentType: 'application/pdf',
-      },
-    ],
+    attachments: [], // PDF removed - users can download via /api/reports/snapshots endpoint
   };
 }
 
@@ -721,43 +713,57 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
     attachments: Array.isArray(attachments) ? attachments : undefined,
   };
 
-  const info = await transporter.sendMail(mail);
+  console.log('[sendEmail] Attempting to send email...');
+  console.log('[sendEmail] MAIL_MODE:', MAIL_MODE);
+  console.log('[sendEmail] SMTP_HOST:', SMTP_HOST);
+  console.log('[sendEmail] From:', mail.from, 'To:', mail.to);
 
-  // Base payload we want to return to callers (UI-friendly)
-  const base = {
-    ok: true,
-    mode: MAIL_MODE, // 'smtp' or 'file'
-    messageId: info?.messageId || null, // RFC-5322 Message-ID
-    to: toList, // array of resolved "to" emails
-    cc: ccList, // array of resolved "cc" emails
-    subject: mail.subject, // final subject line
-  };
+  try {
+    const info = await transporter.sendMail(mail);
+    console.log(
+      '[sendEmail] Email sent successfully, messageId:',
+      info?.messageId
+    );
 
-  // In MAIL_MODE='file' we spool the .eml for local review
-  if (MAIL_MODE === 'file' && info?.message) {
-    const buf = Buffer.isBuffer(info.message)
-      ? info.message
-      : ArrayBuffer.isView(info.message)
-      ? Buffer.from(info.message)
-      : Buffer.from(String(info.message));
+    // Base payload we want to return to callers (UI-friendly)
+    const base = {
+      ok: true,
+      mode: MAIL_MODE, // 'smtp' or 'file'
+      messageId: info?.messageId || null, // RFC-5322 Message-ID
+      to: toList, // array of resolved "to" emails
+      cc: ccList, // array of resolved "cc" emails
+      subject: mail.subject, // final subject line
+    };
 
-    const dir = path.join(EXPORT_DIR, 'emails');
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    const stamp = new Date()
-      .toISOString()
-      .replace(/[:.]/g, '')
-      .replace('T', '_')
-      .slice(0, 15);
-    const fname =
-      fileSafeSlug(`${stamp}_${subject || 'message'}`, 100) + '.eml';
-    const out = path.join(dir, fname);
-    fs.writeFileSync(out, buf);
-    console.log('[mail][spooled]', out);
-    return { ...base, eml: out };
+    // In MAIL_MODE='file' we spool the .eml for local review
+    if (MAIL_MODE === 'file' && info?.message) {
+      const buf = Buffer.isBuffer(info.message)
+        ? info.message
+        : ArrayBuffer.isView(info.message)
+        ? Buffer.from(info.message)
+        : Buffer.from(String(info.message));
+
+      const dir = path.join(EXPORT_DIR, 'emails');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const stamp = new Date()
+        .toISOString()
+        .replace(/[:.]/g, '')
+        .replace('T', '_')
+        .slice(0, 15);
+      const fname =
+        fileSafeSlug(`${stamp}_${subject || 'message'}`, 100) + '.eml';
+      const out = path.join(dir, fname);
+      fs.writeFileSync(out, buf);
+      console.log('[mail][spooled]', out);
+      return { ...base, eml: out };
+    }
+
+    console.log('[mail][sent]', base.messageId, '->', base.to.join(', '));
+    return base;
+  } catch (mailError) {
+    console.error('[sendEmail] Failed to send email:', mailError);
+    throw new Error(`Email send failed: ${mailError.message || mailError}`);
   }
-
-  console.log('[mail][sent]', base.messageId, '->', base.to.join(', '));
-  return base;
 }
 
 function buildBaseUrl(req) {
@@ -2789,6 +2795,7 @@ app.post(
   requirePMOnly,
   async (req, res) => {
     try {
+      console.log('[/api/reports/snapshots/email] Request received');
       const {
         developer = 'all',
         developerLabel = '',
@@ -2801,12 +2808,14 @@ app.post(
       const from = parseDateParam(fromDate, todayISO());
       const to = parseDateParam(toDate, from);
 
+      console.log('[snapshot/email] Building email content...');
       // Build the HTML & PDF via existing helper
       const { subject, html, attachments } = await buildSnapshotEmail(
         req,
         { from, to, developer, developerLabel },
         { ai: String(ai) === '1' }
       );
+      console.log('[snapshot/email] Email content built successfully');
 
       // Resolve main recipient from dev/label using your DB (tfs_users/users)
       const toEmail = await resolveRecipientEmail(
@@ -2820,6 +2829,8 @@ app.post(
       const ccFromEnv = normalizeEmails(SNAPSHOT_CC);
       const ccList = Array.from(new Set([...ccFromEnv, ...ccFromBody]));
 
+      console.log('[snapshot/email] Recipients - to:', toList, 'cc:', ccList);
+
       // If developer=all and no toEmail, just send to CCs (PM/team leads)
       if (!toList.length && !ccList.length) {
         return res.status(400).json({
@@ -2827,6 +2838,7 @@ app.post(
         });
       }
 
+      console.log('[snapshot/email] Sending email via', MAIL_MODE, 'mode...');
       const info = await sendEmail({
         to: toList,
         cc: ccList,
@@ -2834,8 +2846,10 @@ app.post(
         html,
         attachments,
       });
+      console.log('[snapshot/email] Email sent successfully');
       res.json(info);
     } catch (e) {
+      console.error('[snapshot/email] Error:', e);
       res.status(500).json({ error: String(e.message || e) });
     }
   }
