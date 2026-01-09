@@ -43,6 +43,7 @@ const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.SMTP_PASS || '';
 const SMTP_REQUIRE_TLS = (process.env.SMTP_REQUIRE_TLS || 'false') === 'true';
 const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
+const SNAPSHOT_CC = process.env.SNAPSHOT_CC || '';
 
 function buildMailTransport() {
   if (MAIL_MODE === 'smtp' && SMTP_HOST) {
