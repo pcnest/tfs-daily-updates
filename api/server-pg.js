@@ -1664,6 +1664,7 @@ app.get('/api/tickets', async (req, res) => {
         t.area_path   as "areaPath",
         t.iteration_path as "iterationPath",
         t.changed_date   as "changedDate",
+        t.severity,
         t.tags,
         u.code as "lastCode",
         u.note as "lastNote"
@@ -1687,6 +1688,7 @@ app.get('/api/tickets', async (req, res) => {
         t.area_path   as "areaPath",
         t.iteration_path as "iterationPath",
         t.changed_date   as "changedDate",
+        t.severity,
         t.tags
       from tickets t
       ${where}

@@ -655,6 +655,7 @@
             <th style="width:110px">Type</th>
             <th style="width:350px">Title</th>
             <th style="width:120px">State</th>
+            <th style="width:120px">Severity</th>
             <th style="width:75px">Code</th>
             <th>Note</th>
             <th style="width:75px">Action</th>
@@ -1495,7 +1496,7 @@
         tbody.innerHTML = "";
         for (var i = 0; i < 5; i++) {
           var tr = document.createElement('tr'); tr.className = 'skeleton';
-          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
+          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
           tbody.appendChild(tr);
         }
         var url = new URL((API || location.origin) + "/api/tickets");
@@ -1538,6 +1539,7 @@
                 '<td>' + esc(typ || '—') + '</td>' +
                 '<td><i>' + esc(t.title) + '</i></td>' +
                 '<td>' + esc(t.state) + '</td>' +
+                '<td>' + esc(t.severity || '—') + '</td>' +
                 '<td>' + esc(code || '—') + '</td>' +
                 '<td>' + esc(note || '—') + '</td>' +
                 '<td>' + (
@@ -1559,13 +1561,13 @@
 
               tbody.appendChild(tr2);
               var cells = tr2.getElementsByTagName('td');
-              renderCodeBadge(cells[4], code);
+              renderCodeBadge(cells[5], code);
             }
           })
           .catch(function () {
             status.textContent = "Failed to load";
             status.classList.add('err');
-            tbody.innerHTML = '<tr><td colspan="7">Unable to load tickets. Check network or try again.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="8">Unable to load tickets. Check network or try again.</td></tr>';
           })
           .finally(function () { btn.disabled = false; });
       }
@@ -1729,8 +1731,8 @@
               var row = document.querySelector('#ticketsTbl tbody tr[data-id="' + ticket + '"]');
               if (row) {
                 var cells = row.getElementsByTagName('td');
-                if (cells[4]) renderCodeBadge(cells[4], code || '');
-                if (cells[5]) cells[5].textContent = note || '—';
+                if (cells[5]) renderCodeBadge(cells[5], code || '');
+                if (cells[6]) cells[6].textContent = note || '—';
               } else {
                 if (typeof loadTickets === 'function') { loadTickets(); }
               }
@@ -2366,8 +2368,8 @@
         var type = cells[1] ? cells[1].textContent.trim() : '';
         var title = cells[2] ? cells[2].textContent.trim() : '';
         var state = cells[3] ? cells[3].textContent.trim() : '';
-        var lastCode = cells[4] ? cells[4].textContent.trim() : '';
-        var lastNote = cells[5] ? cells[5].textContent.trim() : '';
+        var lastCode = cells[5] ? cells[5].textContent.trim() : '';
+        var lastNote = cells[6] ? cells[6].textContent.trim() : '';
 
         // Optional: try to attach tags if present (your /api/tickets already returns t.tags)
         // We stashed the last loaded items in a weak map for convenience (fallback safe)
