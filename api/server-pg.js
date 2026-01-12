@@ -736,23 +736,26 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
       const sendSmtpEmail = new brevo.SendSmtpEmail();
 
       sendSmtpEmail.sender = { email: SMTP_FROM || SMTP_USER };
-      sendSmtpEmail.to = toList.map(email => ({ email }));
+      sendSmtpEmail.to = toList.map((email) => ({ email }));
       if (ccList.length) {
-        sendSmtpEmail.cc = ccList.map(email => ({ email }));
+        sendSmtpEmail.cc = ccList.map((email) => ({ email }));
       }
       sendSmtpEmail.subject = subject || '(no subject)';
       sendSmtpEmail.htmlContent = html || '';
-      
+
       // Handle attachments if present
       if (attachments && attachments.length > 0) {
-        sendSmtpEmail.attachment = attachments.map(att => ({
+        sendSmtpEmail.attachment = attachments.map((att) => ({
           name: att.filename,
           content: att.content.toString('base64'),
         }));
       }
 
       const result = await apiInstance.sendTransacEmail(sendSmtpEmail);
-      console.log('[sendEmail] Brevo API success, messageId:', result.messageId);
+      console.log(
+        '[sendEmail] Brevo API success, messageId:',
+        result.messageId
+      );
 
       return {
         ok: true,
@@ -771,7 +774,7 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
   // Fallback to SMTP or file mode
   console.log('[sendEmail] MAIL_MODE:', MAIL_MODE);
   console.log('[sendEmail] SMTP_HOST:', SMTP_HOST);
-  
+
   const transporter = buildMailTransport();
   const mail = {
     from: SMTP_FROM || SMTP_USER,
