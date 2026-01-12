@@ -546,8 +546,17 @@ async function todayLocal(pool) {
   return rows[0].d;
 }
 
-// Chase gate: only allow 600_/700_/800_ families
-const BLOCKER_CODE_REGEX = /^(600|700|800)_/;
+// Chase gate: only allow configured blocker code families
+const blockerCodeFamilies = (process.env.BLOCKER_CODE_FAMILIES || '600,700,800')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+const blockerCodePattern = blockerCodeFamilies
+  .map((family) => String(family).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  .join('|');
+const BLOCKER_CODE_REGEX = blockerCodePattern
+  ? new RegExp(`^(${blockerCodePattern})_`)
+  : /$^/;
 function isBlockerCode(code) {
   return BLOCKER_CODE_REGEX.test(String(code || ''));
 }
