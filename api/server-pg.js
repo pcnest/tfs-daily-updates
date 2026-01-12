@@ -50,11 +50,13 @@ const TEST_RECIPIENT = process.env.TEST_RECIPIENT || '';
 
 // Brevo API (alternative to SMTP)
 const BREVO_API_KEY = process.env.BREVO_API_KEY || '';
-let brevoClient = null;
+let brevoApiInstance = null;
 if (BREVO_API_KEY) {
-  brevoClient = brevo.ApiClient.instance;
-  const apiKey = brevoClient.authentications['api-key'];
+  // Initialize Brevo API client
+  const defaultClient = brevo.ApiClient.instance;
+  const apiKey = defaultClient.authentications['api-key'];
   apiKey.apiKey = BREVO_API_KEY;
+  brevoApiInstance = new brevo.TransactionalEmailsApi();
 }
 
 function buildMailTransport() {
@@ -744,10 +746,9 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
   console.log('[sendEmail] To:', toList, 'CC:', ccList);
 
   // Use Brevo API if available (works better on platforms that block SMTP)
-  if (BREVO_API_KEY && brevoClient) {
+  if (BREVO_API_KEY && brevoApiInstance) {
     console.log('[sendEmail] Using Brevo API');
     try {
-      const apiInstance = new brevo.TransactionalEmailsApi();
       const sendSmtpEmail = new brevo.SendSmtpEmail();
 
       sendSmtpEmail.sender = { email: SMTP_FROM || SMTP_USER };
@@ -766,7 +767,7 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
         }));
       }
 
-      const result = await apiInstance.sendTransacEmail(sendSmtpEmail);
+      const result = await brevoApiInstance.sendTransacEmail(sendSmtpEmail);
       console.log(
         '[sendEmail] Brevo API success, messageId:',
         result.messageId
