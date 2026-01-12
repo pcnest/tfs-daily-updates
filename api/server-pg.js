@@ -1999,6 +1999,49 @@ app.get('/api/updates/lock', requireAuth, async (req, res) => {
   });
 });
 
+// --- lock range (current user only)
+app.get('/api/updates/locks/range', requireAuth, async (req, res) => {
+  try {
+    const today = await todayLocal(pool);
+    const from = parseDateParam(req.query.from, today);
+    const to = parseDateParam(req.query.to, today);
+
+    const MAX_DAYS = 90;
+    const spanDays = Math.floor(
+      (Date.parse(to) - Date.parse(from)) / 86400000
+    );
+    if (!Number.isFinite(spanDays) || spanDays < 0 || spanDays > MAX_DAYS) {
+      return res
+        .status(400)
+        .json({ error: `Range too large (max ${MAX_DAYS} days)` });
+    }
+
+    const r = await pool.query(
+      `select date from progress_locks
+       where email=$1 and date between $2::date and $3::date
+       order by date`,
+      [req.userEmail, from, to]
+    );
+
+    const dates = r.rows.map((row) => {
+      const d = row.date;
+      if (d && typeof d.toISOString === 'function')
+        return d.toISOString().slice(0, 10);
+      return String(d).slice(0, 10);
+    });
+
+    res.json({
+      from,
+      to,
+      email: req.userEmail,
+      count: r.rowCount,
+      dates,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // --- collation (enriched)
 app.get('/api/updates/today', async (_req, res) => {
   const date = await todayLocal(pool);

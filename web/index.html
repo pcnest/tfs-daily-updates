@@ -688,6 +688,17 @@
         </thead>
         <tbody></tbody>
       </table>
+      <section class="card thin" id="weeklySummaryCard" aria-labelledby="weeklySummaryHeader"
+        style="margin-top:12px;">
+        <div class="row">
+          <h3 id="weeklySummaryHeader" style="margin:0">Weekly Summary</h3>
+          <div class="toolbar right">
+            <button class="secondary" onclick="loadWeeklySummary()">Refresh</button>
+            <span id="weeklySummaryStatus" class="status" role="status" aria-live="polite"></span>
+          </div>
+        </div>
+        <div id="weeklySummaryBody" class="help">Log in to see your last 7 days of progress.</div>
+      </section>
       <section id="submitCard" aria-labelledby="spHeader">
         <h3 style="margin-top: 1.33rem;">Submit Progress</h3>
 
@@ -880,6 +891,10 @@
       window.__lockedToday = false;
       // Track if any progress updates have been submitted today
       window.__progressCount = 0;
+      // Server-calculated date (YYYY-MM-DD) for today
+      window.__serverToday = '';
+      // Current user email (set after login)
+      window.__meEmail = '';
       // PM-only AI risk rationale
       window.__aiRiskEnabled = false;
       window.__aiRiskMap = null;
@@ -894,6 +909,7 @@
           .then(function (js) {
             window.__lockedToday = !!(js && js.locked);
             window.__progressCount = js.progressCount || 0;
+            if (js && js.date) window.__serverToday = String(js.date).slice(0, 10);
             // Hide the Submit section and disable select buttons when locked
             var sc = byId('submitCard');
             if (sc) sc.classList.toggle('hidden', window.__lockedToday);
@@ -1102,7 +1118,7 @@
       }
 
       function clearForNewSession() {
-        var ids = ['loginStatus', 'loadStatus', 'submitStatus', 'lockStatus', 'exportStatus'];
+        var ids = ['loginStatus', 'loadStatus', 'submitStatus', 'lockStatus', 'exportStatus', 'weeklySummaryStatus'];
         for (var i = 0; i < ids.length; i++) { var el = byId(ids[i]); if (el) el.textContent = ''; }
         var le = byId('loginEmail'); if (le) le.value = '';
         var lp = byId('loginPw'); if (lp) lp.value = '';
@@ -1115,7 +1131,9 @@
         var tbody = document.querySelector('#ticketsTbl tbody'); if (tbody) tbody.innerHTML = '';
         var sec = ['today', 'blockers', 'missing'];
         for (var j = 0; j < sec.length; j++) { var el2 = byId(sec[j]); if (el2) el2.innerHTML = ''; }
+        var ws = byId('weeklySummaryBody'); if (ws) ws.innerHTML = 'Log in to see your last 7 days of progress.';
         setSelectButtonsDisabled(false);
+        window.__serverToday = '';
       }
 
       function setSelectButtonsDisabled(on) {
@@ -1124,6 +1142,7 @@
       }
 
       function setMe(email, name) {
+        window.__meEmail = email || '';
         var assigned = byId("assigned");
         if (assigned && !assigned.value && email) {
           assigned.value = String(email).split("@")[0];
@@ -1148,11 +1167,17 @@
         var ticketsCard = byId('ticketsCard');
         var submitCard = byId('submitCard');
         var pmBox = byId('pm');
+        var weeklyCard = byId('weeklySummaryCard');
 
         if (loginCard) loginCard.classList.add('hidden');
         if (ticketsCard) ticketsCard.classList.remove('hidden');
         if (submitCard) submitCard.classList.toggle('hidden', isPM); // hide for PMs
-        if (!isPM) { checkLockStatus(); }
+        if (weeklyCard) weeklyCard.classList.toggle('hidden', isPM);
+        if (!isPM) {
+          var p = checkLockStatus();
+          if (p && typeof p.then === 'function') p.then(function () { loadWeeklySummary(); });
+          else loadWeeklySummary();
+        }
 
         if (pmBox) pmBox.classList.toggle('hidden', !isPM);
 
@@ -1619,6 +1644,141 @@
           .finally(function () { btn.disabled = false; });
       }
 
+      function loadWeeklySummary() {
+        var body = byId('weeklySummaryBody');
+        var st = byId('weeklySummaryStatus');
+        if (!body) return;
+
+        var tkn = token();
+        if (!tkn) {
+          body.innerHTML = 'Log in to see your last 7 days of progress.';
+          if (st) { st.textContent = ''; st.classList.remove('ok', 'err'); }
+          return;
+        }
+
+        if (st) { st.textContent = 'Loading...'; st.classList.remove('ok', 'err'); }
+        body.innerHTML = '<div class="help">Loading summary...</div>';
+
+        var todayStr = window.__serverToday || ymd(new Date());
+        var fromStr = addDays(todayStr, -6);
+        var assigned = byId('assigned');
+        var assignedVal = (assigned && assigned.value) ? assigned.value.trim() : '';
+        var dev = window.__meEmail || assignedVal;
+
+        var hdrs = { 'Authorization': 'Bearer ' + tkn };
+
+        var url = new URL((API || location.origin) + "/api/updates/range");
+        url.searchParams.set('from', fromStr);
+        url.searchParams.set('to', todayStr);
+        if (dev) url.searchParams.set('developer', dev);
+
+        var lockUrl = new URL((API || location.origin) + "/api/updates/locks/range");
+        lockUrl.searchParams.set('from', fromStr);
+        lockUrl.searchParams.set('to', todayStr);
+
+        var updatesPromise = fetch(url, { headers: hdrs })
+          .then(function (r) { return r.json(); });
+        var locksPromise = fetch(lockUrl, { headers: hdrs })
+          .then(function (r) { return r.json(); })
+          .catch(function () { return null; });
+
+        Promise.all([updatesPromise, locksPromise])
+          .then(function (res) {
+            var js = res[0] || {};
+            var locks = res[1];
+            if (js && js.error) throw new Error(js.error);
+            var items = js.items || [];
+
+            var dayCounts = {};
+            var days = [];
+            for (var i = 0; i < 7; i++) {
+              var d = addDays(fromStr, i);
+              days.push(d);
+              dayCounts[d] = 0;
+            }
+
+            var tickets = {};
+            var codeMix = {};
+            var blockers = 0;
+            for (var k = 0; k < items.length; k++) {
+              var it = items[k] || {};
+              var d2 = String(it.date || '').slice(0, 10);
+              if (d2) {
+                if (dayCounts.hasOwnProperty(d2)) dayCounts[d2] += 1;
+                else dayCounts[d2] = 1;
+              }
+              if (it.ticketId != null) tickets[String(it.ticketId)] = true;
+              var code = it.code ? String(it.code) : '';
+              if (code) {
+                var fam = code.slice(0, 3);
+                codeMix[fam] = (codeMix[fam] || 0) + 1;
+                if (/^(600|700|800)_/.test(code)) blockers += 1;
+              }
+            }
+
+            var updatesCount = items.length;
+            var ticketCount = Object.keys(tickets).length;
+            var activeDays = 0;
+            for (var dk in dayCounts) {
+              if (dayCounts.hasOwnProperty(dk) && dayCounts[dk] > 0) activeDays += 1;
+            }
+
+            var lockCount = null;
+            if (locks && !locks.error && locks.count != null) {
+              var lc = Number(locks.count);
+              lockCount = isNaN(lc) ? null : lc;
+            }
+
+            var families = [];
+            for (var f in codeMix) {
+              if (codeMix.hasOwnProperty(f)) {
+                families.push({ fam: f, count: codeMix[f] });
+              }
+            }
+            families.sort(function (a, b) {
+              return (b.count - a.count) || String(a.fam).localeCompare(String(b.fam));
+            });
+
+            var html = '';
+            html += '<div class="help">Range: ' + esc(fromStr) + ' to ' + esc(todayStr) + '</div>';
+            html += '<div class="toolbar" style="margin-top:6px;">';
+            html += '<span class="badge">Updates: ' + updatesCount + '</span>';
+            html += '<span class="badge">Tickets: ' + ticketCount + '</span>';
+            html += '<span class="badge">Active days: ' + activeDays + '/7</span>';
+            html += '<span class="badge">Blocker updates: ' + blockers + '</span>';
+            html += '<span class="badge">Locked days: ' + (lockCount == null ? '-' : (lockCount + '/7')) + '</span>';
+            html += '</div>';
+
+            html += '<div class="help" style="margin-top:8px;">Daily updates</div>';
+            html += '<div class="toolbar">';
+            for (var di = 0; di < days.length; di++) {
+              var dd = days[di];
+              var label = dd.slice(5);
+              html += '<span class="badge">' + esc(label) + ': ' + (dayCounts[dd] || 0) + '</span>';
+            }
+            html += '</div>';
+
+            html += '<div class="help" style="margin-top:8px;">Code mix</div>';
+            if (families.length) {
+              html += '<div class="toolbar">';
+              for (var fi = 0; fi < families.length && fi < 6; fi++) {
+                var famLabel = families[fi].fam ? (families[fi].fam + '_xx') : '—';
+                html += '<span class="badge">' + esc(famLabel) + ' · ' + families[fi].count + '</span>';
+              }
+              html += '</div>';
+            } else {
+              html += '<div class="help">No codes recorded yet.</div>';
+            }
+
+            body.innerHTML = html;
+            setStatus('weeklySummaryStatus', updatesCount + ' update(s)');
+          })
+          .catch(function () {
+            body.innerHTML = '<div class="help">Unable to load weekly summary.</div>';
+            setStatus('weeklySummaryStatus', 'Failed to load', false);
+          });
+      }
+
       function openSPModal(id) {
         if (window.__role === 'pm') return;
         if (window.__lockedToday) {
@@ -1789,6 +1949,66 @@
           .finally(function () { btn.disabled = false; });
       }
 
+      function runPreLockCheck() {
+        var assigned = byId('assigned');
+        var assignedVal = (assigned && assigned.value) ? assigned.value.trim() : '';
+        if (!assignedVal) return Promise.resolve(null);
+
+        var tkn = token();
+        var hdrs = {};
+        if (tkn) hdrs["Authorization"] = "Bearer " + tkn;
+
+        var todayStr = window.__serverToday || ymd(new Date());
+        var dev = window.__meEmail || assignedVal;
+
+        var ticketsUrl = new URL((API || location.origin) + "/api/tickets");
+        ticketsUrl.searchParams.set('assignedTo', assignedVal);
+
+        var updatesUrl = new URL((API || location.origin) + "/api/updates/range");
+        updatesUrl.searchParams.set('from', todayStr);
+        updatesUrl.searchParams.set('to', todayStr);
+        if (dev) updatesUrl.searchParams.set('developer', dev);
+
+        var ticketsPromise = fetch(ticketsUrl, { headers: hdrs })
+          .then(function (r) { return r.json(); });
+        var updatesPromise = fetch(updatesUrl, { headers: hdrs })
+          .then(function (r) { return r.json(); });
+
+        return Promise.all([ticketsPromise, updatesPromise])
+          .then(function (res) {
+            var tjs = res[0] || {};
+            var ujs = res[1] || {};
+            var items = tjs.items || [];
+            var updates = ujs.items || [];
+
+            var assignedIds = {};
+            for (var i = 0; i < items.length; i++) {
+              var it = items[i];
+              if (it && it.id != null) assignedIds[String(it.id)] = true;
+            }
+
+            var updatedIds = {};
+            for (var j = 0; j < updates.length; j++) {
+              var u = updates[j];
+              if (u && u.ticketId != null) updatedIds[String(u.ticketId)] = true;
+            }
+
+            var missing = [];
+            for (var id in assignedIds) {
+              if (assignedIds.hasOwnProperty(id) && !updatedIds[id]) {
+                missing.push(id);
+              }
+            }
+
+            return {
+              missing: missing,
+              assignedCount: Object.keys(assignedIds).length,
+              updatedCount: Object.keys(updatedIds).length
+            };
+          })
+          .catch(function () { return null; });
+      }
+
       function lockDay() {
         var tkn = token();
         if (!tkn) { setStatus("lockStatus", "Please login first.", false); return; }
@@ -1799,21 +2019,46 @@
           return;
         }
 
-        setStatus("lockStatus", "Submitting day...");
-        req('POST', (API || location.origin) + "/api/updates/lock", null, { "Authorization": "Bearer " + tkn })
-          .then(function (js) {
-            if (js.error) setStatus("lockStatus", js.error, false);
-            else setStatus("lockStatus", js.locked ? "Update submitted (locked)" : "Not locked", !!js.locked);
-            if (js.locked) {
-              window.__lockedToday = true;
-              setSelectButtonsDisabled(true);
-              var sc = byId('submitCard'); if (sc) sc.classList.add('hidden');
-              var badgeEl = byId("me").querySelector('.badge');
-              var txt = badgeEl ? badgeEl.textContent : '';
-              if (txt === 'PM') { loadToday(); loadBlockers(); loadMissing(); }
+        function doLockRequest() {
+          setStatus("lockStatus", "Submitting day...");
+          req('POST', (API || location.origin) + "/api/updates/lock", null, { "Authorization": "Bearer " + tkn })
+            .then(function (js) {
+              if (js.error) setStatus("lockStatus", js.error, false);
+              else setStatus("lockStatus", js.locked ? "Update submitted (locked)" : "Not locked", !!js.locked);
+              if (js.locked) {
+                window.__lockedToday = true;
+                setSelectButtonsDisabled(true);
+                var sc = byId('submitCard'); if (sc) sc.classList.add('hidden');
+                var badgeEl = byId("me").querySelector('.badge');
+                var txt = badgeEl ? badgeEl.textContent : '';
+                if (txt === 'PM') { loadToday(); loadBlockers(); loadMissing(); }
+                if (typeof loadWeeklySummary === 'function') loadWeeklySummary();
+              }
+            })
+            .catch(function () { setStatus("lockStatus", "Network error", false); });
+        }
+
+        setStatus("lockStatus", "Checking for missing updates...");
+        runPreLockCheck()
+          .then(function (res) {
+            if (res && res.missing && res.missing.length) {
+              var preview = res.missing.slice(0, 6);
+              var msg = 'You have ' + res.missing.length + ' assigned ticket(s) with no update today';
+              msg += ': ' + preview.join(', ');
+              if (res.missing.length > preview.length) {
+                msg += ' (+' + (res.missing.length - preview.length) + ' more)';
+              }
+              msg += '.\n\nLock the day anyway?';
+              if (!confirm(msg)) {
+                setStatus("lockStatus", "Lock canceled. Add updates and try again.", false);
+                return;
+              }
             }
+            doLockRequest();
           })
-          .catch(function () { setStatus("lockStatus", "Network error", false); });
+          .catch(function () {
+            doLockRequest();
+          });
       }
 
       function initials(s) {
@@ -1987,6 +2232,12 @@
       }
 
       function ymd(d) { return d.toISOString().slice(0, 10); }
+      function addDays(iso, delta) {
+        var d = new Date(String(iso || '') + 'T00:00:00');
+        if (isNaN(d.getTime())) d = new Date();
+        d.setDate(d.getDate() + delta);
+        return ymd(d);
+      }
 
       function loadReportRange() {
         var fromEl = document.getElementById('repFrom');
@@ -2890,6 +3141,7 @@
       window.login = login;
       window.logout = logout;
       window.loadTickets = loadTickets;
+      window.loadWeeklySummary = loadWeeklySummary;
       window.prefill = prefill;
       window.submitProgress = submitProgress;
       window.lockDay = lockDay;

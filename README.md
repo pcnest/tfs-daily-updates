@@ -60,8 +60,14 @@ Open `web/index.html` in browser or deploy to static hosting.
 - **Presence Sweep**: Automatic detection and tombstoning of moved/deleted tickets
 - **Progress Tracking**: Daily progress updates with code/note system
 - **Role-Based Views**: Separate dev and PM interfaces
+- **Weekly Dev Summary**: Last 7 days rollup (updates, unique tickets, code mix, blockers, lock compliance)
+- **Pre-Lock Check**: Warns about assigned tickets missing updates before locking
 - **AI Integration**: OpenAI-powered triage, chase messages, and next steps
 - **PDF Reports**: Automated developer snapshot generation with email delivery
+
+## Notable API Endpoints
+
+- `GET /api/updates/locks/range?from=YYYY-MM-DD&to=YYYY-MM-DD` (auth; current user only)
 
 ## System Requirements
 
