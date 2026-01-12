@@ -562,9 +562,12 @@ function isBlockerCode(code) {
   return BLOCKER_CODE_REGEX.test(String(code || ''));
 }
 
-const noteRequiredPrefixes = blockerCodeFamilies.map(
-  (family) => `${family}_`
-);
+const noteRequiredPrefixes = (
+  process.env.NOTE_REQUIRED_PREFIXES || '600_,700_,800_'
+)
+  .split(',')
+  .map((prefix) => String(prefix).trim())
+  .filter(Boolean);
 async function isNoteRequired(pool, code) {
   // DB-driven rule
   const r = await pool.query(
