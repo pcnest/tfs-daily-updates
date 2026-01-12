@@ -55,14 +55,17 @@ async function initBrevo() {
   if (!BREVO_API_KEY || brevoApiInstance) return;
   
   try {
-    const brevo = await import('@getbrevo/brevo');
+    const brevoModule = await import('@getbrevo/brevo');
+    const brevo = brevoModule.default || brevoModule;
+    
+    // Initialize API client
     const defaultClient = brevo.ApiClient.instance;
     const apiKey = defaultClient.authentications['api-key'];
     apiKey.apiKey = BREVO_API_KEY;
     brevoApiInstance = new brevo.TransactionalEmailsApi();
     console.log('[brevo] API initialized successfully');
   } catch (err) {
-    console.error('[brevo] Failed to initialize:', err.message);
+    console.error('[brevo] Failed to initialize:', err.message, err.stack);
   }
 }
 
