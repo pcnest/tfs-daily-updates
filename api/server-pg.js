@@ -8,6 +8,7 @@ import fs from 'fs';
 import nodemailer from 'nodemailer';
 import { Pool } from 'pg';
 import OpenAI from 'openai';
+import * as brevo from '@getbrevo/brevo';
 
 // Load environment
 dotenv.config();
@@ -47,8 +48,24 @@ const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
 const SNAPSHOT_CC = process.env.SNAPSHOT_CC || '';
 const TEST_RECIPIENT = process.env.TEST_RECIPIENT || '';
 
+// Brevo API (alternative to SMTP)
+const BREVO_API_KEY = process.env.BREVO_API_KEY || '';
+let brevoClient = null;
+if (BREVO_API_KEY) {
+  brevoClient = brevo.ApiClient.instance;
+  const apiKey = brevoClient.authentications['api-key'];
+  apiKey.apiKey = BREVO_API_KEY;
+}
+
 function buildMailTransport() {
   if (MAIL_MODE === 'smtp' && SMTP_HOST) {
+    console.log('[buildMailTransport] Creating SMTP transport with config:', {
+      host: SMTP_HOST,
+      port: SMTP_PORT || 587,
+      secure: SMTP_SECURE,
+      requireTLS: SMTP_REQUIRE_TLS,
+      hasAuth: !!SMTP_USER,
+    });
     return nodemailer.createTransport({
       host: SMTP_HOST,
       port: SMTP_PORT || 587,
@@ -61,6 +78,13 @@ function buildMailTransport() {
     });
   }
   // Default to a safe JSON transport for local testing
+  console.log(
+    '[buildMailTransport] Using JSON transport (MAIL_MODE:',
+    MAIL_MODE,
+    ', SMTP_HOST:',
+    SMTP_HOST,
+    ')'
+  );
   return nodemailer.createTransport({ jsonTransport: true });
 }
 
@@ -687,9 +711,6 @@ async function buildSnapshotEmail(req, range, { ai = false } = {}) {
 }
 
 async function sendEmail({ to, cc, subject, html, attachments }) {
-  // Reuse your nodemailer transport + helpers already defined above
-  const transporter = buildMailTransport();
-
   const toList = normalizeEmails(to);
   const ccList = normalizeEmails(cc);
 
@@ -704,6 +725,54 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
   }
   if (!toList.length) throw new Error('no_valid_recipients');
 
+  console.log('[sendEmail] Attempting to send email...');
+  console.log('[sendEmail] To:', toList, 'CC:', ccList);
+
+  // Use Brevo API if available (works better on platforms that block SMTP)
+  if (BREVO_API_KEY && brevoClient) {
+    console.log('[sendEmail] Using Brevo API');
+    try {
+      const apiInstance = new brevo.TransactionalEmailsApi();
+      const sendSmtpEmail = new brevo.SendSmtpEmail();
+
+      sendSmtpEmail.sender = { email: SMTP_FROM || SMTP_USER };
+      sendSmtpEmail.to = toList.map(email => ({ email }));
+      if (ccList.length) {
+        sendSmtpEmail.cc = ccList.map(email => ({ email }));
+      }
+      sendSmtpEmail.subject = subject || '(no subject)';
+      sendSmtpEmail.htmlContent = html || '';
+      
+      // Handle attachments if present
+      if (attachments && attachments.length > 0) {
+        sendSmtpEmail.attachment = attachments.map(att => ({
+          name: att.filename,
+          content: att.content.toString('base64'),
+        }));
+      }
+
+      const result = await apiInstance.sendTransacEmail(sendSmtpEmail);
+      console.log('[sendEmail] Brevo API success, messageId:', result.messageId);
+
+      return {
+        ok: true,
+        mode: 'brevo-api',
+        messageId: result.messageId,
+        to: toList,
+        cc: ccList,
+        subject: sendSmtpEmail.subject,
+      };
+    } catch (brevoError) {
+      console.error('[sendEmail] Brevo API error:', brevoError);
+      throw new Error(`Brevo API failed: ${brevoError.message || brevoError}`);
+    }
+  }
+
+  // Fallback to SMTP or file mode
+  console.log('[sendEmail] MAIL_MODE:', MAIL_MODE);
+  console.log('[sendEmail] SMTP_HOST:', SMTP_HOST);
+  
+  const transporter = buildMailTransport();
   const mail = {
     from: SMTP_FROM || SMTP_USER,
     to: toList.join(', '),
@@ -712,11 +781,6 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
     html: html || '',
     attachments: Array.isArray(attachments) ? attachments : undefined,
   };
-
-  console.log('[sendEmail] Attempting to send email...');
-  console.log('[sendEmail] MAIL_MODE:', MAIL_MODE);
-  console.log('[sendEmail] SMTP_HOST:', SMTP_HOST);
-  console.log('[sendEmail] From:', mail.from, 'To:', mail.to);
 
   try {
     const info = await transporter.sendMail(mail);

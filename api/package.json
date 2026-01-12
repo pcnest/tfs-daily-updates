@@ -9,6 +9,7 @@
     "start:render": "npx puppeteer browsers install chrome && node server-pg.js"
   },
   "dependencies": {
+    "@getbrevo/brevo": "^2.2.0",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
