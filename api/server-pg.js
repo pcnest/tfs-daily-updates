@@ -546,13 +546,28 @@ async function todayLocal(pool) {
   return rows[0].d;
 }
 
-// Chase gate: only allow 600_/700_/800_ families
-const BLOCKER_CODE_REGEX = /^(600|700|800)_/;
+// Chase gate: only allow configured blocker code families
+const DEFAULT_BLOCKER_CODE_FAMILIES = ['600', '700', '800'];
+const blockerCodeFamilies = (process.env.BLOCKER_CODE_FAMILIES || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+if (!blockerCodeFamilies.length)
+  blockerCodeFamilies.push(...DEFAULT_BLOCKER_CODE_FAMILIES);
+const blockerCodePattern = blockerCodeFamilies
+  .map((family) => String(family).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+  .join('|');
+const BLOCKER_CODE_REGEX = new RegExp(`^(${blockerCodePattern})_`);
 function isBlockerCode(code) {
   return BLOCKER_CODE_REGEX.test(String(code || ''));
 }
 
-const noteRequiredPrefixes = ['600_', '700_', '800_'];
+const noteRequiredPrefixes = (
+  process.env.NOTE_REQUIRED_PREFIXES || '600_,700_,800_'
+)
+  .split(',')
+  .map((prefix) => String(prefix).trim())
+  .filter(Boolean);
 async function isNoteRequired(pool, code) {
   // DB-driven rule
   const r = await pool.query(
