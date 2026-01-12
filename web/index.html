@@ -613,6 +613,16 @@
       background: #10b981;
       color: #ffffff;
     }
+
+    .muted {
+      color: var(--muted);
+    }
+
+    .ai-rationale {
+      margin-top: 4px;
+      font-size: 12px;
+      color: var(--muted);
+    }
   </style>
 </head>
 
@@ -702,7 +712,13 @@
       <div class="section-grid">
         <!-- (1) Pre-Meeting Updates -->
         <section class="card thin" aria-labelledby="preHeader">
-          <h3 id="preHeader">Pre-Meeting Updates</h3>
+          <div class="row">
+            <h3 id="preHeader" style="margin:0">Pre-Meeting Updates</h3>
+            <div class="toolbar right">
+              <button id="aiRiskToggle" class="secondary" onclick="toggleAiRisk()">AI Risk Rationale</button>
+              <span id="aiRiskStatus" class="status" role="status" aria-live="polite"></span>
+            </div>
+          </div>
           <div id="today"></div>
         </section>
 
@@ -864,6 +880,9 @@
       window.__lockedToday = false;
       // Track if any progress updates have been submitted today
       window.__progressCount = 0;
+      // PM-only AI risk rationale
+      window.__aiRiskEnabled = false;
+      window.__aiRiskMap = null;
 
       function checkLockStatus() {
         var tkn = localStorage.getItem('pocToken') || '';
@@ -1806,6 +1825,58 @@
         return (a + b).toUpperCase();
       }
 
+      function getAiRiskForTicket(id) {
+        if (!window.__aiRiskEnabled || !window.__aiRiskMap) return null;
+        return window.__aiRiskMap[String(id)] || null;
+      }
+
+      function fetchAiRiskForToday() {
+        var st = byId('aiRiskStatus');
+        if (st) { st.textContent = 'Thinking...'; st.classList.remove('ok', 'err'); }
+        var tkn = token();
+        return fetch((API || location.origin) + "/api/updates/today/ai", {
+          headers: { 'Authorization': 'Bearer ' + tkn }
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            if (js && js.error) {
+              if (st) { st.textContent = js.error; st.classList.add('err'); }
+              return null;
+            }
+            var items = (js && js.items) ? js.items : [];
+            var map = {};
+            for (var i = 0; i < items.length; i++) {
+              var it = items[i];
+              if (!it || !it.id) continue;
+              map[String(it.id)] = {
+                riskLevel: it.risk_level || 'low',
+                rationale: it.rationale || ''
+              };
+            }
+            window.__aiRiskMap = map;
+            if (st) { st.textContent = 'Ready'; st.classList.add('ok'); }
+            return map;
+          })
+          .catch(function (e) {
+            if (st) { st.textContent = (e && e.message) ? e.message : 'AI failed'; st.classList.add('err'); }
+            return null;
+          });
+      }
+
+      function toggleAiRisk() {
+        window.__aiRiskEnabled = !window.__aiRiskEnabled;
+        var btn = byId('aiRiskToggle');
+        if (btn) btn.textContent = window.__aiRiskEnabled ? 'AI Risk: On' : 'AI Risk Rationale';
+        if (window.__aiRiskEnabled) {
+          fetchAiRiskForToday().then(function () { loadToday(); });
+        } else {
+          window.__aiRiskMap = null;
+          var st = byId('aiRiskStatus');
+          if (st) st.textContent = '';
+          loadToday();
+        }
+      }
+
       function loadToday() {
         var box = document.getElementById("today");
         fetch((window.API || location.origin) + "/api/updates/today")
@@ -1894,7 +1965,12 @@
                     out.push('<td>' + esc(it2.state || '-') + '</td>');
                     out.push('<td>' + codeBadge + '</td>');
                     out.push('<td>' + riskBadge + '</td>');
-                    out.push('<td>' + esc(it2.note || '') + '</td>');
+                    var ai = getAiRiskForTicket(it2.ticketId);
+                    var aiHtml = '';
+                    if (ai && ai.rationale) {
+                      aiHtml = '<div class="ai-rationale"><span class="badge">AI ' + esc(ai.riskLevel || 'low') + '</span> ' + esc(ai.rationale) + '</div>';
+                    }
+                    out.push('<td>' + esc(it2.note || '') + aiHtml + '</td>');
                     out.push('</tr>');
                   }
 

@@ -332,7 +332,7 @@ async function htmlToPdfBuffer(html) {
 // Strict JSON schema for suggestions
 const TriageSchema = {
   name: 'TriageList',
-  strict: false, // IMPORTANT: keeps optional fields optional (prevents “Missing 'slipRisk'”)
+  strict: false, // IMPORTANT: keeps optional fields optional (prevents "Missing 'slipRisk'")
   schema: {
     type: 'object',
     additionalProperties: false,
@@ -361,6 +361,33 @@ const TriageSchema = {
       },
     },
     required: ['suggestions'],
+  },
+};
+
+const UpdatesRiskSchema = {
+  name: 'UpdatesRisk',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            id: { type: 'string' },
+            risk_level: { type: 'string', enum: ['low', 'medium', 'high'] },
+            rationale: { type: 'string' },
+          },
+          required: ['id', 'risk_level', 'rationale'],
+        },
+        minItems: 0,
+        maxItems: 200,
+      },
+    },
+    required: ['items'],
   },
 };
 
@@ -511,6 +538,60 @@ ${JSON.stringify(trimmed)}`;
   const js = parseOpenAIJson(resp);
   if (!js || !Array.isArray(js.suggestions)) throw new Error('bad_ai_response');
   return js.suggestions;
+}
+
+async function aiRiskForUpdates(items) {
+  if (!openai)
+    throw Object.assign(new Error('AI not configured'), { status: 501 });
+
+  const trimmed = (items || []).slice(0, 40).map((r) => ({
+    id: String(r.ticketId || ''),
+    title: String(r.title || ''),
+    type: String(r.type || ''),
+    state: String(r.state || ''),
+    code: String(r.code || ''),
+    note: String(r.note || ''),
+    severity: String(r.severity || ''),
+    impact_area: String(r.impactArea || ''),
+    assigned_to: String(r.assignedTo || ''),
+    iteration_path: String(r.iterationPath || ''),
+    deterministic_risk: String(r.riskLevel || ''),
+    deterministic_reasons: Array.isArray(r.riskReasons) ? r.riskReasons : [],
+  }));
+
+  const system = `You are a delivery PM reviewing daily progress updates.
+Tag AI risk based on the update text and context, especially:
+- dependency, waiting, blocked language
+- customer-facing impact or high impact areas
+- uncertainty, delays, or missing progress
+Return a concise rationale (1 short sentence) only when meaningful.
+If there is no clear risk signal, set risk_level=low and rationale="".
+Do not invent facts or names not in the input.`;
+
+  const user = `Analyze these updates and return risk tags with rationale.
+Input JSON:
+${JSON.stringify(trimmed)}`;
+
+  const resp = await openai.chat.completions.create({
+    model: OPENAI_MODEL,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        name: UpdatesRiskSchema.name,
+        schema: UpdatesRiskSchema.schema,
+        strict: !!UpdatesRiskSchema.strict,
+      },
+    },
+    max_tokens: 700,
+  });
+
+  const js = parseOpenAIJson(resp);
+  if (!js || !Array.isArray(js.items)) throw new Error('bad_ai_response');
+  return js.items;
 }
 
 // DB pool
@@ -1995,6 +2076,67 @@ app.get('/api/updates/today', async (_req, res) => {
     .sort((a, b) => a.email.localeCompare(b.email));
 
   res.json({ date, users });
+});
+
+// --- AI risk rationale (PM only)
+app.get('/api/updates/today/ai', requireAuth, async (req, res) => {
+  try {
+    // PMs only
+    const me = await pool.query('select role from users where email=$1', [
+      req.userEmail,
+    ]);
+    if (me.rows[0]?.role !== 'pm')
+      return res.status(403).json({ error: 'pm only' });
+
+    if (!openai) return res.status(501).json({ error: 'ai_not_configured' });
+
+    const date = await todayLocal(pool);
+    const updates = await pool.query(
+      `select u.ticket_id as "ticketId", u.email, u.code, u.note, u.risk_level as "riskLevel",
+              u.impact_area as "impactArea", u.at,
+              t.title, t.state, t.type, t.severity,
+              t.state_change_date as "stateChangeDate",
+              t.assigned_to as "assignedTo", t.iteration_path as "iterationPath"
+       from progress_updates u
+       left join tickets t on t.id = u.ticket_id
+       where u.date = $1`,
+      [date]
+    );
+
+    const latest = new Map();
+    for (const r of updates.rows) {
+      const key = `${r.email}|${r.ticketId}`;
+      const prev = latest.get(key);
+      if (!prev || r.at > prev.at) {
+        const derived = deriveRiskForUpdate(r);
+        r.riskLevel = derived.riskLevel;
+        r.riskReasons = derived.riskReasons;
+        r.riskStaleDays = derived.staleDays;
+        latest.set(key, r);
+      }
+    }
+
+    const items = Array.from(latest.values());
+    if (!items.length) return res.json({ date, items: [] });
+
+    const aiItems = await aiRiskForUpdates(items);
+    res.json({ date, count: aiItems.length, items: aiItems });
+  } catch (e) {
+    const http = e?.status || e?.response?.status || 500;
+    console.error('[ai/today-risk] error:', {
+      status: http,
+      code: e?.code,
+      message: e?.message,
+      data: e?.response?.data,
+      raw: e?.error || null,
+    });
+    res.status(http).json({
+      status: 'error',
+      error: e?.message || 'server_error',
+      code: e?.code || null,
+      openai: e?.response?.data || e?.error || null,
+    });
+  }
 });
 
 // show a green dot when db_up is true and counts.last7 > 0
