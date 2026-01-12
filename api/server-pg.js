@@ -47,27 +47,8 @@ const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
 const SNAPSHOT_CC = process.env.SNAPSHOT_CC || '';
 const TEST_RECIPIENT = process.env.TEST_RECIPIENT || '';
 
-// Brevo API (alternative to SMTP) - dynamic import to avoid startup errors
+// Brevo API key for sending emails via REST API
 const BREVO_API_KEY = process.env.BREVO_API_KEY || '';
-let brevoApiInstance = null;
-
-async function initBrevo() {
-  if (!BREVO_API_KEY || brevoApiInstance) return;
-  
-  try {
-    const brevoModule = await import('@getbrevo/brevo');
-    const brevo = brevoModule.default || brevoModule;
-    
-    // Initialize API client
-    const defaultClient = brevo.ApiClient.instance;
-    const apiKey = defaultClient.authentications['api-key'];
-    apiKey.apiKey = BREVO_API_KEY;
-    brevoApiInstance = new brevo.TransactionalEmailsApi();
-    console.log('[brevo] API initialized successfully');
-  } catch (err) {
-    console.error('[brevo] Failed to initialize:', err.message, err.stack);
-  }
-}
 
 function buildMailTransport() {
   if (MAIL_MODE === 'smtp' && SMTP_HOST) {
@@ -755,52 +736,59 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
   console.log('[sendEmail] Attempting to send email...');
   console.log('[sendEmail] To:', toList, 'CC:', ccList);
 
-  // Use Brevo API if available (works better on platforms that block SMTP)
+  // Use Brevo REST API if available (works better on platforms that block SMTP)
   if (BREVO_API_KEY) {
-    if (!brevoApiInstance) {
-      await initBrevo();
-    }
-    
-    if (brevoApiInstance) {
-      console.log('[sendEmail] Using Brevo API');
-      try {
-        const brevo = await import('@getbrevo/brevo');
-        const sendSmtpEmail = new brevo.SendSmtpEmail();
+    console.log('[sendEmail] Using Brevo REST API');
+    try {
+      const payload = {
+        sender: { email: SMTP_FROM || SMTP_USER },
+        to: toList.map((email) => ({ email })),
+        subject: subject || '(no subject)',
+        htmlContent: html || '',
+      };
 
-        sendSmtpEmail.sender = { email: SMTP_FROM || SMTP_USER };
-        sendSmtpEmail.to = toList.map((email) => ({ email }));
-        if (ccList.length) {
-          sendSmtpEmail.cc = ccList.map((email) => ({ email }));
-        }
-        sendSmtpEmail.subject = subject || '(no subject)';
-        sendSmtpEmail.htmlContent = html || '';
-
-        // Handle attachments if present
-        if (attachments && attachments.length > 0) {
-          sendSmtpEmail.attachment = attachments.map((att) => ({
-            name: att.filename,
-            content: att.content.toString('base64'),
-          }));
-        }
-
-        const result = await brevoApiInstance.sendTransacEmail(sendSmtpEmail);
-        console.log(
-          '[sendEmail] Brevo API success, messageId:',
-          result.messageId
-        );
-
-        return {
-          ok: true,
-          mode: 'brevo-api',
-          messageId: result.messageId,
-          to: toList,
-          cc: ccList,
-          subject: sendSmtpEmail.subject,
-        };
-      } catch (brevoError) {
-        console.error('[sendEmail] Brevo API error:', brevoError);
-        throw new Error(`Brevo API failed: ${brevoError.message || brevoError}`);
+      if (ccList.length) {
+        payload.cc = ccList.map((email) => ({ email }));
       }
+
+      // Handle attachments if present
+      if (attachments && attachments.length > 0) {
+        payload.attachment = attachments.map((att) => ({
+          name: att.filename,
+          content: att.content.toString('base64'),
+        }));
+      }
+
+      const _fetch = globalThis.fetch || (await import('node-fetch')).default;
+      const response = await _fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'accept': 'application/json',
+          'api-key': BREVO_API_KEY,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.text();
+        throw new Error(`Brevo API error: ${response.status} - ${errorData}`);
+      }
+
+      const result = await response.json();
+      console.log('[sendEmail] Brevo API success, messageId:', result.messageId);
+
+      return {
+        ok: true,
+        mode: 'brevo-api',
+        messageId: result.messageId,
+        to: toList,
+        cc: ccList,
+        subject: payload.subject,
+      };
+    } catch (brevoError) {
+      console.error('[sendEmail] Brevo API error:', brevoError);
+      throw new Error(`Brevo API failed: ${brevoError.message || brevoError}`);
     }
   }
 
