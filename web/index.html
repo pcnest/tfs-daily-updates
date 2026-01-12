@@ -584,6 +584,21 @@
       color: #ffffff;
     }
 
+    .badge.risk-low {
+      background: #dcfce7;
+      color: #166534;
+    }
+
+    .badge.risk-medium {
+      background: #fef3c7;
+      color: #92400e;
+    }
+
+    .badge.risk-high {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
     .badge.slip-high {
       background: #ef4444;
       color: #ffffff;
@@ -779,6 +794,7 @@
                   <th style="width:350px">Title</th>
                   <th style="width:120px">State</th>
                   <th style="width:100px">Code</th>
+                  <th style="width:90px">Risk</th>
                   <th>Note</th>
                   <th style="width:180px">Iteration</th>
                   <th style="width:110px">AI</th>
@@ -921,6 +937,18 @@
         var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
         s = (s == null) ? "" : String(s);
         return s.replace(/[&<>"']/g, function (c) { return map[c]; });
+      }
+
+      function riskBadgeHtml(level, reasons) {
+        var l = String(level || 'low').toLowerCase();
+        if (l !== 'high' && l !== 'medium' && l !== 'low') l = 'low';
+        var label = l.charAt(0).toUpperCase() + l.slice(1);
+        var title = '';
+        if (reasons) {
+          if (Array.isArray(reasons)) title = reasons.join('; ');
+          else title = String(reasons);
+        }
+        return '<span class="badge risk-' + l + '"' + (title ? (' title="' + esc(title) + '"') : '') + '>' + label + '</span>';
       }
 
       // --- report inputs persistence ---
@@ -1846,6 +1874,7 @@
                   out.push('<th style="width:350px">Title</th>');
                   out.push('<th style="width:120px">State</th>');
                   out.push('<th style="width:75px">Code</th>');
+                  out.push('<th style="width:90px">Risk</th>');
                   out.push('<th>Note</th>');
                   out.push('</tr></thead><tbody>');
 
@@ -1855,14 +1884,16 @@
                     var fam = (it2.code ? String(it2.code).slice(0, 3) : null);
                     var codeBadge = it2.code
                       ? '<span class="badge code-' + fam + '">' + esc(it2.code) + '</span>'
-                      : '—';
+                      : '-';
+                    var riskBadge = riskBadgeHtml(it2.riskLevel, it2.riskReasons);
 
                     out.push('<tr>');
                     out.push('<td>' + esc(it2.ticketId) + '</td>');
-                    out.push('<td>' + esc(typ2 || '—') + '</td>');
+                    out.push('<td>' + esc(typ2 || '-') + '</td>');
                     out.push('<td><i>' + esc(it2.title || '') + '</i></td>');
-                    out.push('<td>' + esc(it2.state || '—') + '</td>');
+                    out.push('<td>' + esc(it2.state || '-') + '</td>');
                     out.push('<td>' + codeBadge + '</td>');
+                    out.push('<td>' + riskBadge + '</td>');
                     out.push('<td>' + esc(it2.note || '') + '</td>');
                     out.push('</tr>');
                   }
@@ -2015,7 +2046,7 @@
         for (var i = 0; i < 4; i++) {
           var tr = document.createElement('tr');
           tr.className = 'skeleton';
-          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
+          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
           tbody.appendChild(tr);
         }
 
@@ -2036,14 +2067,19 @@
               if (String(c).indexOf('800_') === 0) return 2;
               return 3;
             }
+            function riskRank(level) {
+              var l = String(level || '').toLowerCase();
+              return l === 'high' ? 3 : l === 'medium' ? 2 : l === 'low' ? 1 : 0;
+            }
             items.sort(function (a, b) {
-              return sev(a.code) - sev(b.code)
+              return riskRank(b.riskLevel) - riskRank(a.riskLevel)
+                || sev(a.code) - sev(b.code)
                 || String(a.assignedTo || '').localeCompare(String(b.assignedTo || ''))
                 || String(b.at || '').localeCompare(String(a.at || ''));
             });
 
             if (!items.length) {
-              tbody.innerHTML = '<tr><td colspan="8"><em>No blockers detected today.</em></td></tr>';
+              tbody.innerHTML = '<tr><td colspan="9"><em>No blockers detected today.</em></td></tr>';
               return;
             }
 
@@ -2051,14 +2087,16 @@
             for (var j = 0; j < items.length; j++) {
               var h = items[j];
               var typ = h.type || h.workItemType || h.itemType || h.kind || '';
+              var riskBadge = riskBadgeHtml(h.riskLevel, h.riskReasons);
               // inside the loop that builds each row (loadBlockers)
               html += ''
                 + '<tr data-id="' + esc(h.ticketId) + '">'
                 + '<td>' + esc(h.ticketId) + '</td>'
-                + '<td>' + esc(typ || '—') + '</td>'
+                + '<td>' + esc(typ || '-') + '</td>'
                 + '<td><i>' + esc(h.title || '') + '</i></td>'
                 + '<td>' + esc(h.state || '') + '</td>'
-                + '<td>' + esc(h.code || '—') + '</td>'
+                + '<td>' + esc(h.code || '-') + '</td>'
+                + '<td>' + riskBadge + '</td>'
                 + '<td>' + esc(h.note || '') + '</td>'
                 + '<td>' + esc(h.iterationPath || '') + '</td>'
                 + '<td><button class="secondary assist-btn" onclick="aiAssistRow(this)">Assist</button></td>'
@@ -2077,7 +2115,7 @@
             }
           })
           .catch(function () {
-            tbody.innerHTML = '<tr><td colspan="7">Failed to load blockers.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9">Failed to load blockers.</td></tr>';
           });
       }
 

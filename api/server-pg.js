@@ -607,6 +607,108 @@ const blockerKeywords = (
   .map((s) => s.trim())
   .filter(Boolean);
 
+const RISK_STALE_HIGH_DAYS = Math.max(
+  0,
+  parseInt(process.env.RISK_STALE_HIGH_DAYS || '4', 10) || 4
+);
+const RISK_STALE_MEDIUM_DAYS = Math.max(
+  0,
+  parseInt(process.env.RISK_STALE_MEDIUM_DAYS || '2', 10) || 2
+);
+
+function daysSince(ts, now = Date.now()) {
+  const t = ts ? Date.parse(ts) : NaN;
+  return Number.isFinite(t)
+    ? Math.max(0, Math.floor((now - t) / 86400000))
+    : null;
+}
+
+function normalizeSeverity(s) {
+  const v = String(s || '').toLowerCase();
+  if (!v) return '';
+  if (v.includes('critical') || v.includes('sev1') || v === '1')
+    return 'critical';
+  if (v.includes('high') || v.includes('sev2') || v === '2') return 'high';
+  if (v.includes('medium') || v.includes('sev3') || v === '3') return 'medium';
+  if (v.includes('low') || v.includes('sev4') || v === '4') return 'low';
+  return '';
+}
+
+function normalizeRiskLevel(level) {
+  const v = String(level || '').toLowerCase();
+  return v === 'high' || v === 'medium' || v === 'low' ? v : '';
+}
+
+function riskRank(level) {
+  return level === 'high'
+    ? 3
+    : level === 'medium'
+    ? 2
+    : level === 'low'
+    ? 1
+    : 0;
+}
+
+function maxRisk(a, b) {
+  return riskRank(a) >= riskRank(b) ? a : b;
+}
+
+function blockerKeywordHit(code, note) {
+  const txt = `${code || ''} ${note || ''}`.toLowerCase();
+  for (const k of blockerKeywords) {
+    if (k && txt.includes(String(k).toLowerCase())) return k;
+  }
+  return '';
+}
+
+function deriveRiskForUpdate(row) {
+  const now = Date.now();
+  const reasons = [];
+  let level = 'low';
+
+  const keyword = blockerKeywordHit(row.code, row.note);
+  const isBlocker = isBlockerCode(row.code) || !!keyword;
+  if (isBlocker) {
+    level = 'high';
+    reasons.push(
+      keyword ? `blocker keyword: ${keyword}` : 'blocker code family'
+    );
+  }
+
+  const sev = normalizeSeverity(row.severity);
+  if (sev === 'critical' || sev === 'high') {
+    level = 'high';
+    reasons.push(`severity ${sev}`);
+  }
+
+  const staleDays = daysSince(row.at, now);
+  if (staleDays != null) {
+    if (staleDays >= RISK_STALE_HIGH_DAYS) {
+      level = 'high';
+      reasons.push(`stale update ${staleDays}d`);
+    } else if (staleDays >= RISK_STALE_MEDIUM_DAYS) {
+      level = maxRisk(level, 'medium');
+      reasons.push(`stale update ${staleDays}d`);
+    }
+  }
+
+  const stateChanged = row.stateChangeDate || row.state_change_date;
+  const at = row.at;
+  if (stateChanged && at) {
+    const sc = Date.parse(stateChanged);
+    const atMs = Date.parse(at);
+    if (Number.isFinite(sc) && Number.isFinite(atMs) && sc > atMs) {
+      level = maxRisk(level, 'medium');
+      reasons.push('status changed since last update');
+    }
+  }
+
+  const manual = normalizeRiskLevel(row.riskLevel);
+  const finalLevel = manual ? maxRisk(manual, level) : level;
+
+  return { riskLevel: finalLevel, riskReasons: reasons, staleDays };
+}
+
 function hashPassword(pw, salt = crypto.randomBytes(16)) {
   const hash = crypto.scryptSync(pw, salt, 32);
   return `${salt.toString('base64')}:${hash.toString('base64')}`;
@@ -763,7 +865,7 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
       const response = await _fetch('https://api.brevo.com/v3/smtp/email', {
         method: 'POST',
         headers: {
-          'accept': 'application/json',
+          accept: 'application/json',
           'api-key': BREVO_API_KEY,
           'content-type': 'application/json',
         },
@@ -776,7 +878,10 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
       }
 
       const result = await response.json();
-      console.log('[sendEmail] Brevo API success, messageId:', result.messageId);
+      console.log(
+        '[sendEmail] Brevo API success, messageId:',
+        result.messageId
+      );
 
       return {
         ok: true,
@@ -1820,7 +1925,9 @@ app.get('/api/updates/today', async (_req, res) => {
   const updates = await pool.query(
     `select u.ticket_id as "ticketId", u.email, u.code, u.note, u.risk_level as "riskLevel",
             u.impact_area as "impactArea", u.at,
-            t.title, t.state, t.type, t.assigned_to as "assignedTo", t.iteration_path as "iterationPath"
+            t.title, t.state, t.type, t.severity,
+            t.state_change_date as "stateChangeDate",
+            t.assigned_to as "assignedTo", t.iteration_path as "iterationPath"
      from progress_updates u
      left join tickets t on t.id = u.ticket_id
      where u.date = $1`,
@@ -1835,6 +1942,11 @@ app.get('/api/updates/today', async (_req, res) => {
   // keep latest per (email,ticket)
   const byUser = new Map();
   for (const r of updates.rows) {
+    const derived = deriveRiskForUpdate(r);
+    r.riskLevel = derived.riskLevel;
+    r.riskReasons = derived.riskReasons;
+    r.riskStaleDays = derived.staleDays;
+
     const email = r.email;
     if (!byUser.has(email))
       byUser.set(email, {
@@ -2949,8 +3061,10 @@ app.post(
 app.get('/api/updates/blockers', async (_req, res) => {
   const date = await todayLocal(pool);
   const r = await pool.query(
-    `select u.ticket_id as "ticketId", u.email, u.code, u.note, u.at,
-         t.title, t.state, t.type, t.assigned_to as "assignedTo", t.iteration_path as "iterationPath"
+    `select u.ticket_id as "ticketId", u.email, u.code, u.note, u.at, u.risk_level as "riskLevel",
+         t.title, t.state, t.type, t.severity,
+         t.state_change_date as "stateChangeDate",
+         t.assigned_to as "assignedTo", t.iteration_path as "iterationPath"
      from progress_updates u
      left join tickets t on t.id = u.ticket_id
      where u.date = $1`,
@@ -2961,8 +3075,13 @@ app.get('/api/updates/blockers', async (_req, res) => {
   for (const x of r.rows) {
     const txt = `${x.code} ${x.note || ''}`.toLowerCase();
     const kw = blockerKeywords.find((k) => k && txt.includes(k));
-    if (isBlockerCode(x.code) || kw)
+    if (isBlockerCode(x.code) || kw) {
+      const derived = deriveRiskForUpdate(x);
+      x.riskLevel = derived.riskLevel;
+      x.riskReasons = derived.riskReasons;
+      x.riskStaleDays = derived.staleDays;
       hits.push({ ...x, keyword: isBlockerCode(x.code) ? 'code' : kw || '' });
+    }
   }
   // latest per ticket
   const byTicket = new Map();
