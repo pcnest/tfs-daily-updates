@@ -2702,6 +2702,10 @@ app.get(
             const got = await aiSnapshotInsightsForDev({
               periodLabel,
               metrics: r,
+              fromISO,
+              toISO,
+              devEmail: String(r.email || '').toLowerCase(),
+              devLocal: toLocalPart(String(r.email || '').toLowerCase()),
             });
             insightsByEmail.set(String(r.email || '').toLowerCase(), got);
           } catch (e) {
@@ -3466,9 +3470,18 @@ const SnapshotInsightsSchema = {
     required: ['key_findings', 'strengths', 'focus_areas', 'risk'],
   },
 };
+const SNAPSHOT_PROMPT_VERSION = 'snapshot_v3_rag_delta_2025-03-08';
+const SNAPSHOT_EVIDENCE_MAX_TICKETS = 12;
 
-// Minimal helper to call OpenAI for one developer's metrics
-async function aiSnapshotInsightsForDev({ periodLabel, metrics }) {
+// Minimal helper to call OpenAI for one developer's metrics + evidence
+async function aiSnapshotInsightsForDev({
+  periodLabel,
+  metrics,
+  fromISO,
+  toISO,
+  devEmail,
+  devLocal,
+}) {
   if (!openai)
     throw Object.assign(new Error('AI not configured'), { status: 501 });
 
@@ -3486,6 +3499,35 @@ async function aiSnapshotInsightsForDev({ periodLabel, metrics }) {
   const totH = famKeys.reduce((s, k) => s + (fams[k]?.hours_sum || 0), 0);
   const totT = famKeys.reduce((s, k) => s + (fams[k]?.transitions || 0), 0);
   const overallAvg = totT ? +(totH / totT).toFixed(2) : 0;
+  const metricsSummary = summarizeSnapshotMetrics(metrics, overallAvg);
+
+  const emailKey = String(devEmail || metrics.email || '').toLowerCase();
+  const localKey = String(devLocal || toLocalPart(emailKey) || '').toLowerCase();
+  let evidence = null;
+  let priorInsights = null;
+  let deltaSummary = null;
+  if (fromISO && toISO && (emailKey || localKey)) {
+    evidence = await buildSnapshotEvidence({
+      fromISO,
+      toISO,
+      devEmail: emailKey || null,
+      devLocal: localKey || null,
+    });
+    const history = await loadSnapshotHistory(emailKey, fromISO);
+    const priorAny = history.priorAny ? history.priorAny : null;
+    const priorPeriod = history.priorPeriod ? history.priorPeriod : null;
+    if (priorAny?.ai_output) {
+      priorInsights = trimSnapshotInsights(parseJsonMaybe(priorAny.ai_output));
+    }
+    if (priorPeriod?.metrics_summary) {
+      const prevMetrics = parseJsonMaybe(priorPeriod.metrics_summary);
+      deltaSummary = buildSnapshotDelta(
+        metricsSummary,
+        prevMetrics,
+        priorPeriod.period_label
+      );
+    }
+  }
 
   // Keep payload tidy and grounded on your computed aggregates
   const trimmed = {
@@ -3495,24 +3537,38 @@ async function aiSnapshotInsightsForDev({ periodLabel, metrics }) {
     completion_pct: Number(metrics.completion_pct || 0),
     stalled_tickets: Number(metrics.stalled_tickets || 0),
     families: metrics.families || {}, // { '100_xx': { transitions, hours_sum, hours_avg }, ... }
-    overall_avg_cycle_time: overallAvg, // <- NEW
+    overall_avg_cycle_time: overallAvg,
   };
 
   const system = `You are a delivery PM analyzing a developer's progress snapshot.
-You receive per-family metrics (100_xx..800_xx: transitions, hours_sum, hours_avg), ticket_volume, completion_pct, stalled_tickets.
+You receive per-family metrics (100_xx..800_xx: transitions, hours_sum, hours_avg), ticket_volume, completion_pct, stalled_tickets,
+plus evidence_summary (top tickets + last updates + blocker themes), delta_summary (changes vs prior snapshot), and prior_insights.
+
 Write concise outputs:
 - key_findings: 3-5 bullets (throughput, bottlenecks, balance across 100/200/300/400/500, blocker footprint 600/800).
 - strengths: 2-5 bullets.
 - focus_areas: 1-5 (each with <focus>, optional <why>, and concrete <action> for next month).
-- suggested_kpis: ≤5 compact KPI statements (e.g., "Reduce 800_xx transitions by 25%").
+- suggested_kpis: <=5 compact KPI statements (e.g., "Reduce 800_xx transitions by 25%").
 - risk: stall_risk & slip_risk = low/medium/high inferred from metrics, plus stall_why and slip_why (one-line, data-grounded reasons).
-- support_from_team_leads: 1-3 bullets, written as actions for the team lead/manager (not the developer), each ≤20 words, concrete, next-week scope (cadence, escalations, pairing, env access, PR gates, 10–15 min unblock huddles).
-You also receive overall_avg_cycle_time (weighted across all families). Prefer it when summarizing “Cycle-time signals” and risk rationales.
+- support_from_team_leads: 1-3 bullets, written as actions for the team lead/manager (not the developer), each <=20 words, concrete, next-week scope (cadence, escalations, pairing, env access, PR gates, 10-15 min unblock huddles).
+
+Grounding rules (strict):
+- If you mention a specific ticket, include its ID in parentheses.
+- Use evidence_summary or metrics; do NOT invent facts.
+- Use delta_summary to highlight changes; avoid repeating prior_insights unless a metric regressed or a ticket remains stalled.
+- If evidence is thin, say so briefly and focus on metrics only.
+
+You also receive overall_avg_cycle_time (weighted across all families). Prefer it when summarizing "Cycle-time signals" and risk rationales.
 Keep outputs brief and practical, using the team's progress families.`;
 
   const user = `Developer period: ${trimmed.period}
 Input JSON:
-${JSON.stringify(trimmed)}`;
+${JSON.stringify({
+  metrics: trimmed,
+  evidence_summary: evidence,
+  delta_summary: deltaSummary,
+  prior_insights: priorInsights,
+})}`;
 
   const resp = await openai.chat.completions.create({
     model: OPENAI_MODEL,
@@ -3533,15 +3589,385 @@ ${JSON.stringify(trimmed)}`;
 
   const js = parseOpenAIJson(resp);
   if (!js) throw new Error('bad_ai_response');
+  if (emailKey && fromISO && toISO) {
+    try {
+      await pool.query(
+        `insert into ai_snapshot_runs
+          (dev_email, period_start, period_end, period_label, prompt_version, metrics_summary, evidence_summary, ai_output)
+         values
+          ($1, $2::date, $3::date, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb)`,
+        [
+          emailKey,
+          fromISO,
+          toISO,
+          periodLabel,
+          SNAPSHOT_PROMPT_VERSION,
+          JSON.stringify(metricsSummary || {}),
+          JSON.stringify(evidence || {}),
+          JSON.stringify(js || {}),
+        ]
+      );
+    } catch (e) {
+      console.warn('[snapshots][ai] failed to store snapshot run:', e.message);
+    }
+  }
   return js;
 }
-
 // Normalize & clamp free-form strings to keep prompts tidy
 function clampText(s, max = 600) {
   s = String(s == null ? '' : s).trim();
   if (!s) return '';
   if (s.length <= max) return s;
   return s.slice(0, max - 3) + '...';
+}
+const SNAPSHOT_STOPWORDS = new Set([
+  'a',
+  'an',
+  'and',
+  'are',
+  'as',
+  'at',
+  'be',
+  'but',
+  'by',
+  'for',
+  'from',
+  'has',
+  'have',
+  'he',
+  'her',
+  'his',
+  'i',
+  'in',
+  'into',
+  'is',
+  'it',
+  'its',
+  'me',
+  'my',
+  'not',
+  'of',
+  'on',
+  'or',
+  'our',
+  'she',
+  'so',
+  'that',
+  'the',
+  'their',
+  'them',
+  'they',
+  'this',
+  'to',
+  'us',
+  'was',
+  'we',
+  'were',
+  'with',
+  'you',
+  'your',
+]);
+function toLocalPart(email) {
+  const e = String(email || '').toLowerCase();
+  const at = e.indexOf('@');
+  return at > 0 ? e.slice(0, at) : e;
+}
+function topTermsFromNotes(notes, max = 6) {
+  const freq = new Map();
+  for (const raw of notes || []) {
+    const text = String(raw || '').toLowerCase();
+    const tokens = text.match(/[a-z0-9_]+/g) || [];
+    for (const t of tokens) {
+      if (t.length < 3) continue;
+      if (SNAPSHOT_STOPWORDS.has(t)) continue;
+      if (/^\d+$/.test(t)) continue;
+      freq.set(t, (freq.get(t) || 0) + 1);
+    }
+  }
+  return Array.from(freq.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, max)
+    .map(([w]) => w);
+}
+function topKeywordHits(notes, keywords, max = 6) {
+  const freq = new Map();
+  const pool = (notes || []).map((n) => String(n || '').toLowerCase());
+  for (const raw of keywords || []) {
+    const kw = String(raw || '').toLowerCase().trim();
+    if (!kw) continue;
+    let count = 0;
+    for (const note of pool) {
+      if (note.includes(kw)) count += 1;
+    }
+    if (count) freq.set(kw, count);
+  }
+  return Array.from(freq.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, max)
+    .map(([k]) => k);
+}
+function summarizeSnapshotMetrics(metrics, overallAvg) {
+  const famKeys = [
+    '100_xx',
+    '200_xx',
+    '300_xx',
+    '400_xx',
+    '500_xx',
+    '600_xx',
+    '700_xx',
+    '800_xx',
+  ];
+  const families = metrics.families || {};
+  const outFamilies = {};
+  for (const k of famKeys) {
+    const f = families[k] || {};
+    outFamilies[k] = {
+      transitions: Number(f.transitions || 0),
+      hours_avg: Number(f.hours_avg || 0),
+    };
+  }
+  return {
+    ticket_volume: Number(metrics.ticket_volume || 0),
+    completion_pct: Number(metrics.completion_pct || 0),
+    stalled_tickets: Number(metrics.stalled_tickets || 0),
+    overall_avg_cycle_time: Number(overallAvg || 0),
+    families: outFamilies,
+  };
+}
+function buildSnapshotDelta(current, previous, priorLabel) {
+  if (!current || !previous) return null;
+  const round1 = (n) => Math.round((Number(n) || 0) * 10) / 10;
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const famKeys = Object.keys(current.families || {});
+  const famChanges = [];
+  for (const k of famKeys) {
+    const c = current.families[k] || {};
+    const p = (previous.families || {})[k] || {};
+    const tDelta = (Number(c.transitions) || 0) - (Number(p.transitions) || 0);
+    const hDelta = round2((Number(c.hours_avg) || 0) - (Number(p.hours_avg) || 0));
+    if (tDelta !== 0 || Math.abs(hDelta) >= 0.25) {
+      famChanges.push({ family: k, transitions_delta: tDelta, hours_avg_delta: hDelta });
+    }
+  }
+  famChanges.sort((a, b) => {
+    const aScore = Math.abs(a.transitions_delta) + Math.abs(a.hours_avg_delta);
+    const bScore = Math.abs(b.transitions_delta) + Math.abs(b.hours_avg_delta);
+    return bScore - aScore;
+  });
+  const delta = {
+    prior_period_label: priorLabel || '',
+    ticket_volume_delta: (Number(current.ticket_volume) || 0) - (Number(previous.ticket_volume) || 0),
+    completion_pct_delta: round1((Number(current.completion_pct) || 0) - (Number(previous.completion_pct) || 0)),
+    stalled_tickets_delta: (Number(current.stalled_tickets) || 0) - (Number(previous.stalled_tickets) || 0),
+    overall_avg_cycle_time_delta: round2(
+      (Number(current.overall_avg_cycle_time) || 0) - (Number(previous.overall_avg_cycle_time) || 0)
+    ),
+    family_deltas: famChanges.slice(0, 6),
+  };
+  const hasDelta =
+    delta.ticket_volume_delta !== 0 ||
+    delta.completion_pct_delta !== 0 ||
+    delta.stalled_tickets_delta !== 0 ||
+    delta.overall_avg_cycle_time_delta !== 0 ||
+    delta.family_deltas.length > 0;
+  return hasDelta ? delta : null;
+}
+function trimSnapshotInsights(output) {
+  if (!output) return null;
+  const clampArr = (arr, max) =>
+    Array.isArray(arr)
+      ? arr.slice(0, max).map((s) => clampText(s, 180))
+      : [];
+  const focus =
+    Array.isArray(output.focus_areas) && output.focus_areas.length
+      ? output.focus_areas.slice(0, 3).map((f) => ({
+          focus: clampText(f.focus || '', 120),
+          why: clampText(f.why || '', 160),
+          action: clampText(f.action || '', 160),
+        }))
+      : [];
+  return {
+    key_findings: clampArr(output.key_findings, 3),
+    strengths: clampArr(output.strengths, 2),
+    focus_areas: focus,
+    risk: output.risk || null,
+  };
+}
+function parseJsonMaybe(v) {
+  if (!v) return null;
+  if (typeof v === 'string') {
+    try {
+      return JSON.parse(v);
+    } catch (_e) {
+      return null;
+    }
+  }
+  return v;
+}
+async function loadSnapshotHistory(devEmail, fromISO) {
+  const email = String(devEmail || '').toLowerCase();
+  if (!email) return { priorAny: null, priorPeriod: null };
+  const anyRes = await pool.query(
+    `select period_start, period_end, period_label, metrics_summary, ai_output
+       from ai_snapshot_runs
+      where lower(dev_email) = $1
+      order by created_at desc
+      limit 1`,
+    [email]
+  );
+  const periodRes = await pool.query(
+    `select period_start, period_end, period_label, metrics_summary, ai_output
+       from ai_snapshot_runs
+      where lower(dev_email) = $1
+        and period_end < $2::date
+      order by period_end desc
+      limit 1`,
+    [email, fromISO]
+  );
+  return {
+    priorAny: anyRes.rowCount ? anyRes.rows[0] : null,
+    priorPeriod: periodRes.rowCount ? periodRes.rows[0] : null,
+  };
+}
+async function buildSnapshotEvidence({
+  fromISO,
+  toISO,
+  devEmail,
+  devLocal,
+  maxTickets = SNAPSHOT_EVIDENCE_MAX_TICKETS,
+}) {
+  const email = devEmail ? String(devEmail).toLowerCase() : null;
+  const local = devLocal ? String(devLocal).toLowerCase() : null;
+  if (!email && !local) {
+    return {
+      window: { from: fromISO, to: toISO },
+      totals: { update_count: 0, ticket_count: 0, blocker_updates: 0, high_risk_updates: 0 },
+      blocker_keywords: [],
+      top_terms: [],
+      top_tickets: [],
+      stale_ticket_count: 0,
+    };
+  }
+
+  const updatesSql = `
+    with updates as (
+      select
+        u.ticket_id as "ticketId",
+        u.code,
+        u.note,
+        u.risk_level as "riskLevel",
+        u.impact_area as "impactArea",
+        u.at,
+        t.title,
+        t.type,
+        t.state,
+        t.assigned_to as "assignedTo",
+        count(*) over (partition by u.ticket_id) as "updateCount"
+      from progress_updates u
+      left join tickets t on t.id = u.ticket_id
+      where u.at >= $1::timestamptz
+        and u.at < ($2::timestamptz + interval '1 day')
+        and (
+          ($3::text is null and $4::text is null)
+          or lower(u.email) = $3::text
+          or split_part(lower(u.email),'@',1) = $4::text
+        )
+    )
+    select distinct on ("ticketId") *
+      from updates
+     order by "ticketId", at desc
+  `;
+
+  const totalsSql = `
+    select
+      count(*) as update_count,
+      count(distinct ticket_id) as ticket_count,
+      sum(case when split_part(code,'_',1) in ('600','800') then 1 else 0 end) as blocker_updates,
+      sum(case when lower(risk_level) = 'high' then 1 else 0 end) as high_risk_updates
+    from progress_updates
+    where at >= $1::timestamptz
+      and at < ($2::timestamptz + interval '1 day')
+      and (
+        ($3::text is null and $4::text is null)
+        or lower(email) = $3::text
+        or split_part(lower(email),'@',1) = $4::text
+      )
+  `;
+
+  const [updatesRes, totalsRes] = await Promise.all([
+    pool.query(updatesSql, [fromISO, toISO, email, local]),
+    pool.query(totalsSql, [fromISO, toISO, email, local]),
+  ]);
+
+  const updates = updatesRes.rows || [];
+  const totals = totalsRes.rows?.[0] || {};
+
+  const notes = [];
+  const tickets = updates.map((r) => {
+    const note = clampText(scrub(r.note || ''), 240);
+    if (note) notes.push(note);
+    const lastAt =
+      r.at && typeof r.at.toISOString === 'function' ? r.at.toISOString() : String(r.at || '');
+    const stalenessDays = daysSince(r.at);
+    const code = clampText(r.code || '', 32);
+    const noteLc = note.toLowerCase();
+    const blockerHit = blockerKeywords.some((k) => k && noteLc.includes(k.toLowerCase()));
+    return {
+      id: String(r.ticketId || ''),
+      title: clampText(r.title || '', 120),
+      type: clampText(r.type || '', 40),
+      state: clampText(r.state || '', 40),
+      assigned_to: clampText(r.assignedTo || '', 80),
+      last_code: code,
+      last_note: note,
+      last_update_at: lastAt,
+      update_count: Number(r.updateCount || 0),
+      risk_level: clampText(r.riskLevel || '', 16),
+      impact_area: clampText(r.impactArea || '', 40),
+      staleness_days: stalenessDays,
+      blocker_hint: isBlockerCode(code) || blockerHit,
+    };
+  });
+
+  const staleTicketCount = tickets.filter((t) => t.staleness_days != null && t.staleness_days >= 7).length;
+  const topTerms = topTermsFromNotes(notes, 6);
+  const blockerHits = topKeywordHits(notes, blockerKeywords, 6);
+
+  const scored = tickets.map((t) => {
+    let score = 0;
+    if (isBlockerCode(t.last_code)) score += 3;
+    const risk = String(t.risk_level || '').toLowerCase();
+    if (risk === 'high') score += 2;
+    if (risk === 'medium') score += 1;
+    if (t.blocker_hint) score += 1;
+    if (t.update_count >= 3) score += 1;
+    if (t.staleness_days != null) {
+      if (t.staleness_days <= 2) score += 2;
+      else if (t.staleness_days <= 7) score += 1;
+    }
+    return { ...t, _score: score };
+  });
+
+  scored.sort((a, b) => {
+    if (b._score !== a._score) return b._score - a._score;
+    return String(b.last_update_at || '').localeCompare(String(a.last_update_at || ''));
+  });
+
+  const topTickets = scored.slice(0, maxTickets).map(({ _score, ...t }) => t);
+
+  return {
+    window: { from: fromISO, to: toISO },
+    totals: {
+      update_count: Number(totals.update_count || 0),
+      ticket_count: Number(totals.ticket_count || 0),
+      blocker_updates: Number(totals.blocker_updates || 0),
+      high_risk_updates: Number(totals.high_risk_updates || 0),
+    },
+    blocker_keywords: blockerHits,
+    top_terms: topTerms,
+    top_tickets: topTickets,
+    stale_ticket_count: staleTicketCount,
+  };
 }
 // --- explicit "who" extractor (from notes/tags) -----------------------------
 function extractExplicitWho({ currentNote = '', lastNote = '', tags = '' }) {
@@ -3877,4 +4303,34 @@ pool
   })
   .catch((e) => {
     console.error('[boot] meta table ensure failed:', e);
+  });
+
+// --- boot: ensure ai_snapshot_runs table exists (history for RAG deltas) ---
+pool
+  .query(
+    `
+  create table if not exists ai_snapshot_runs (
+    id bigserial primary key,
+    dev_email text not null,
+    period_start date not null,
+    period_end date not null,
+    period_label text,
+    prompt_version text,
+    metrics_summary jsonb,
+    evidence_summary jsonb,
+    ai_output jsonb,
+    created_at timestamptz default now()
+  )
+`
+  )
+  .then(() =>
+    pool.query(
+      `create index if not exists ai_snapshot_runs_dev_period on ai_snapshot_runs (dev_email, period_end)`
+    )
+  )
+  .then(() => {
+    console.log('[boot] ai_snapshot_runs table is ready');
+  })
+  .catch((e) => {
+    console.error('[boot] ai_snapshot_runs table ensure failed:', e);
   });
