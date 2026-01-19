@@ -390,6 +390,57 @@
       color: #ffffff
     }
 
+    .weekly-summary-head {
+      grid-template-columns: 1fr auto;
+      align-items: center;
+    }
+
+    .weekly-summary-title {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .badge.range {
+      background: var(--table-head);
+      color: var(--fg);
+      border: 1px solid var(--border);
+      font-weight: 600;
+    }
+
+    .summary-stats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    .summary-stat {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 6px 10px;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: 0 1px 0 rgba(0, 0, 0, .04);
+      font-size: 12px;
+      line-height: 1.2;
+      min-width: 150px;
+    }
+
+    .summary-stat .label {
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .summary-stat .value {
+      color: var(--fg);
+      font-weight: 700;
+    }
+
     /* Code family badges */
     .badge.code-100,
     .badge.code-200,
@@ -690,8 +741,11 @@
       </table>
       <section class="card thin" id="weeklySummaryCard" aria-labelledby="weeklySummaryHeader"
         style="margin-top:12px;">
-        <div class="row">
-          <h3 id="weeklySummaryHeader" style="margin:0">Weekly Summary</h3>
+        <div class="row weekly-summary-head">
+          <div class="weekly-summary-title">
+            <h3 id="weeklySummaryHeader" style="margin:0">Weekly Summary</h3>
+            <span id="weeklySummaryRange" class="badge range" title="7-day range">-</span>
+          </div>
           <div class="toolbar right">
             <button class="secondary" onclick="loadWeeklySummary()">Refresh</button>
             <span id="weeklySummaryStatus" class="status" role="status" aria-live="polite"></span>
@@ -1647,12 +1701,14 @@
       function loadWeeklySummary() {
         var body = byId('weeklySummaryBody');
         var st = byId('weeklySummaryStatus');
+        var rangeBadge = byId('weeklySummaryRange');
         if (!body) return;
 
         var tkn = token();
         if (!tkn) {
           body.innerHTML = 'Log in to see your last 7 days of progress.';
           if (st) { st.textContent = ''; st.classList.remove('ok', 'err'); }
+          if (rangeBadge) rangeBadge.textContent = '-';
           return;
         }
 
@@ -1664,6 +1720,7 @@
         var assigned = byId('assigned');
         var assignedVal = (assigned && assigned.value) ? assigned.value.trim() : '';
         var dev = window.__meEmail || assignedVal;
+        if (rangeBadge) rangeBadge.textContent = fromStr + ' to ' + todayStr;
 
         var hdrs = { 'Authorization': 'Bearer ' + tkn };
 
@@ -1740,22 +1797,12 @@
             });
 
             var html = '';
-            html += '<div class="help">Range: ' + esc(fromStr) + ' to ' + esc(todayStr) + '</div>';
-            html += '<div class="toolbar" style="margin-top:6px;">';
-            html += '<span class="badge">Updates: ' + updatesCount + '</span>';
-            html += '<span class="badge">Tickets: ' + ticketCount + '</span>';
-            html += '<span class="badge">Active days: ' + activeDays + '/7</span>';
-            html += '<span class="badge">Blocker updates: ' + blockers + '</span>';
-            html += '<span class="badge">Locked days: ' + (lockCount == null ? '-' : (lockCount + '/7')) + '</span>';
-            html += '</div>';
-
-            html += '<div class="help" style="margin-top:8px;">Daily updates</div>';
-            html += '<div class="toolbar">';
-            for (var di = 0; di < days.length; di++) {
-              var dd = days[di];
-              var label = dd.slice(5);
-              html += '<span class="badge">' + esc(label) + ': ' + (dayCounts[dd] || 0) + '</span>';
-            }
+            html += '<div class="summary-stats">';
+            html += '<div class="summary-stat"><span class="label">Updates</span><span class="value">' + updatesCount + '</span></div>';
+            html += '<div class="summary-stat"><span class="label">Tickets</span><span class="value">' + ticketCount + '</span></div>';
+            html += '<div class="summary-stat"><span class="label">Active days</span><span class="value">' + activeDays + '/7</span></div>';
+            html += '<div class="summary-stat"><span class="label">Blocker updates</span><span class="value">' + blockers + '</span></div>';
+            html += '<div class="summary-stat"><span class="label">Locked days</span><span class="value">' + (lockCount == null ? '-' : (lockCount + '/7')) + '</span></div>';
             html += '</div>';
 
             html += '<div class="help" style="margin-top:8px;">Code mix</div>';
@@ -1776,6 +1823,7 @@
           .catch(function () {
             body.innerHTML = '<div class="help">Unable to load weekly summary.</div>';
             setStatus('weeklySummaryStatus', 'Failed to load', false);
+            if (rangeBadge) rangeBadge.textContent = '-';
           });
       }
 
