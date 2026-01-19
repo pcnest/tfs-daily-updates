@@ -62,8 +62,13 @@ Open `web/index.html` in browser or deploy to static hosting.
 - **Role-Based Views**: Separate dev and PM interfaces
 - **Weekly Dev Summary**: Last 7 days rollup (updates, unique tickets, code mix, blockers, lock compliance)
 - **Pre-Lock Check**: Warns about assigned tickets missing updates before locking
-- **AI Integration**: OpenAI-powered triage, chase messages, and next steps
+- **AI Integration**: OpenAI-powered triage, chase messages, next steps, and RAG-backed snapshot insights (stored in `ai_snapshot_runs`)
 - **PDF Reports**: Automated developer snapshot generation with email delivery
+
+## AI Snapshot History
+
+- Snapshot runs are stored in `ai_snapshot_runs` for grounding and delta comparisons.
+- Retention is controlled by `SNAPSHOT_RUN_RETENTION` (default: 50 runs per developer).
 
 ## Notable API Endpoints
 

@@ -3472,6 +3472,10 @@ const SnapshotInsightsSchema = {
 };
 const SNAPSHOT_PROMPT_VERSION = 'snapshot_v3_rag_delta_2025-03-08';
 const SNAPSHOT_EVIDENCE_MAX_TICKETS = 12;
+const SNAPSHOT_RUN_RETENTION = Math.max(
+  0,
+  parseInt(process.env.SNAPSHOT_RUN_RETENTION || '50', 10) || 50
+);
 
 // Minimal helper to call OpenAI for one developer's metrics + evidence
 async function aiSnapshotInsightsForDev({
@@ -3587,8 +3591,20 @@ ${JSON.stringify({
     max_tokens: 600,
   });
 
-  const js = parseOpenAIJson(resp);
-  if (!js) throw new Error('bad_ai_response');
+  let js = parseOpenAIJson(resp);
+  if (!js) {
+    console.warn('[snapshots][ai] invalid JSON response; using fallback');
+    js = buildSnapshotFallbackInsights({ metrics: trimmed, evidence });
+  } else {
+    const validation = validateSnapshotInsights(js, evidence);
+    if (!validation.ok) {
+      console.warn('[snapshots][ai] invalid insight output; using fallback', {
+        reason: validation.reason,
+        detail: validation.detail || null,
+      });
+      js = buildSnapshotFallbackInsights({ metrics: trimmed, evidence });
+    }
+  }
   if (emailKey && fromISO && toISO) {
     try {
       await pool.query(
@@ -3607,6 +3623,20 @@ ${JSON.stringify({
           JSON.stringify(js || {}),
         ]
       );
+      if (SNAPSHOT_RUN_RETENTION > 0) {
+        await pool.query(
+          `with to_delete as (
+             select id
+               from ai_snapshot_runs
+              where dev_email = $1
+              order by created_at desc
+              offset $2
+           )
+           delete from ai_snapshot_runs
+            where id in (select id from to_delete)`,
+          [emailKey, SNAPSHOT_RUN_RETENTION]
+        );
+      }
     } catch (e) {
       console.warn('[snapshots][ai] failed to store snapshot run:', e.message);
     }
@@ -3771,6 +3801,243 @@ function buildSnapshotDelta(current, previous, priorLabel) {
     delta.overall_avg_cycle_time_delta !== 0 ||
     delta.family_deltas.length > 0;
   return hasDelta ? delta : null;
+}
+function extractSnapshotText(output) {
+  const parts = [];
+  const pushArr = (arr) => {
+    if (Array.isArray(arr)) {
+      for (const item of arr) parts.push(String(item || ''));
+    }
+  };
+  pushArr(output?.key_findings);
+  pushArr(output?.strengths);
+  pushArr(output?.suggested_kpis);
+  pushArr(output?.support_from_team_leads);
+  if (Array.isArray(output?.focus_areas)) {
+    for (const f of output.focus_areas) {
+      parts.push(String(f?.focus || ''));
+      parts.push(String(f?.why || ''));
+      parts.push(String(f?.action || ''));
+    }
+  }
+  if (output?.risk) {
+    parts.push(String(output.risk.stall_why || ''));
+    parts.push(String(output.risk.slip_why || ''));
+  }
+  return parts.join(' ');
+}
+function extractSnapshotIds(text) {
+  const matches = String(text || '').match(/\b#?\d{4,}\b/g) || [];
+  return matches.map((m) => m.replace('#', ''));
+}
+function isLikelyYear(id) {
+  const n = parseInt(id, 10);
+  return Number.isFinite(n) && n >= 1900 && n <= 2100;
+}
+function validateSnapshotInsights(output, evidence) {
+  if (!output || typeof output !== 'object') {
+    return { ok: false, reason: 'not_object' };
+  }
+
+  const reqArr = [
+    ['key_findings', 3],
+    ['strengths', 1],
+    ['focus_areas', 1],
+    ['suggested_kpis', 1],
+  ];
+  for (const [key, min] of reqArr) {
+    const arr = output[key];
+    if (!Array.isArray(arr) || arr.length < min) {
+      return { ok: false, reason: `missing_${key}` };
+    }
+    if (arr.some((s) => !String(s || '').trim())) {
+      return { ok: false, reason: `empty_${key}` };
+    }
+  }
+
+  const risk = output.risk || {};
+  const allowed = new Set(['low', 'medium', 'high']);
+  if (!allowed.has(String(risk.stall_risk || '').toLowerCase())) {
+    return { ok: false, reason: 'bad_stall_risk' };
+  }
+  if (!allowed.has(String(risk.slip_risk || '').toLowerCase())) {
+    return { ok: false, reason: 'bad_slip_risk' };
+  }
+
+  if (Array.isArray(output.focus_areas)) {
+    for (const f of output.focus_areas) {
+      if (!String(f?.focus || '').trim() || !String(f?.action || '').trim()) {
+        return { ok: false, reason: 'invalid_focus_area' };
+      }
+    }
+  }
+
+  const text = extractSnapshotText(output).toLowerCase();
+  if (text.includes('undefined') || text.includes('[object object]')) {
+    return { ok: false, reason: 'bad_tokens' };
+  }
+
+  if (Array.isArray(evidence?.top_tickets) && evidence.top_tickets.length) {
+    const allowedIds = new Set(
+      evidence.top_tickets.map((t) => String(t.id || '')).filter(Boolean)
+    );
+    const ids = extractSnapshotIds(text);
+    const unknown = ids.filter(
+      (id) => !allowedIds.has(id) && !isLikelyYear(id)
+    );
+    if (unknown.length) {
+      return { ok: false, reason: 'unknown_ticket_id', detail: unknown[0] };
+    }
+  }
+
+  return { ok: true };
+}
+function buildSnapshotFallbackInsights({ metrics, evidence }) {
+  const fam = metrics?.families || {};
+  const num = (v) => (Number.isFinite(+v) ? +v : 0);
+  const get = (code, field) => num(fam?.[code]?.[field]);
+
+  const starts = get('100_xx', 'transitions');
+  const finishes = get('500_xx', 'transitions');
+  const inprog = get('200_xx', 'transitions');
+  const blockers = get('600_xx', 'transitions') + get('800_xx', 'transitions');
+  const reviews = get('400_xx', 'transitions');
+  const testing = get('300_xx', 'transitions');
+  const avg200 = get('200_xx', 'hours_avg');
+  const overallAvg = num(metrics?.overall_avg_cycle_time);
+  const completionPct = num(metrics?.completion_pct);
+  const stalled = num(metrics?.stalled_tickets);
+  const staleTickets = num(evidence?.stale_ticket_count);
+
+  const fmtPct = (v) => `${num(v).toFixed(1)}%`;
+  const fmtH = (v) => `${num(v).toFixed(2)}h`;
+
+  const key_findings = [];
+  key_findings.push(
+    `Starts vs finishes: ${starts} vs ${finishes}; completion ${fmtPct(
+      completionPct
+    )}.`
+  );
+  key_findings.push(
+    `Blocked/delays footprint: ${blockers} transitions (600/800); stalled tickets ${stalled}.`
+  );
+  key_findings.push(
+    overallAvg > 0
+      ? `Cycle-time signals: overall avg ${fmtH(overallAvg)}; 200_xx avg ${fmtH(
+          avg200
+        )}.`
+      : 'Cycle-time signals: insufficient timing data in this window.'
+  );
+  key_findings.push(
+    `Reviews/testing: ${reviews} review transitions, ${testing} testing transitions.`
+  );
+  if (inprog > 0) {
+    key_findings.push(`WIP/flow: ${inprog} in-progress (200_xx) transitions.`);
+  }
+
+  const strengths = [];
+  if (finishes > 0) strengths.push(`Completions recorded (${finishes} in 500_xx).`);
+  if (reviews + testing > 0)
+    strengths.push(`Quality loop visible (${testing} testing, ${reviews} review).`);
+  if (blockers === 0)
+    strengths.push('No blocker transitions recorded (600/800).');
+  if (!strengths.length) {
+    strengths.push(
+      `Updates logged across ${num(metrics?.ticket_volume)} tickets.`
+    );
+  }
+
+  const focus_areas = [];
+  if (blockers > 0 || stalled >= 2) {
+    const why =
+      stalled > 0 || blockers > 0
+        ? `Blocker transitions ${blockers} with ${stalled} stalled tickets.`
+        : 'Blocker signals present in the period.';
+    focus_areas.push({
+      focus: 'Unblock delays faster',
+      why,
+      action: 'Run daily unblock check and chase owners; reduce 600/800 transitions.',
+    });
+  }
+  if (avg200 >= 8 || inprog > finishes) {
+    focus_areas.push({
+      focus: 'Reduce 200_xx cycle time',
+      why: `200_xx avg ${fmtH(avg200)} with ${inprog} transitions indicates extended WIP.`,
+      action: 'Limit WIP and split work; target a 20% drop in 200_xx avg.',
+    });
+  }
+  if (reviews + testing === 0) {
+    focus_areas.push({
+      focus: 'Make reviews/testing visible',
+      why: 'No 300_xx or 400_xx transitions recorded.',
+      action: 'Post PR/test links and log review/testing updates.',
+    });
+  }
+  if (!focus_areas.length) {
+    focus_areas.push({
+      focus: 'Maintain steady delivery',
+      why: 'Current metrics are stable across the window.',
+      action: 'Keep cadence and surface any new blockers early.',
+    });
+  }
+
+  const suggested_kpis = [];
+  if (blockers > 0) suggested_kpis.push('Reduce 800_xx transitions by 20%.');
+  if (avg200 > 0) {
+    const target = Math.max(4, Math.round(avg200 * 0.7));
+    suggested_kpis.push(`Lower 200_xx avg cycle time to <= ${target}h.`);
+  }
+  if (reviews + testing === 0) {
+    suggested_kpis.push('Add at least 1 review/testing transition per completed ticket.');
+  }
+  if (!suggested_kpis.length) {
+    suggested_kpis.push(`Increase completion rate to ${Math.min(90, completionPct + 15).toFixed(1)}%.`);
+  }
+
+  let stall_risk = 'low';
+  if (stalled >= 5 || blockers >= 4 || avg200 >= 24) stall_risk = 'high';
+  else if (stalled >= 2 || blockers >= 2 || avg200 >= 12) stall_risk = 'medium';
+
+  let slip_risk = 'low';
+  if (completionPct < 30 || finishes + 2 < starts) slip_risk = 'high';
+  else if (completionPct < 45 || finishes < starts) slip_risk = 'medium';
+
+  const stallWhyParts = [];
+  if (blockers > 0) stallWhyParts.push(`blocker transitions ${blockers}`);
+  if (stalled > 0) stallWhyParts.push(`${stalled} stalled tickets`);
+  if (staleTickets > 0) stallWhyParts.push(`${staleTickets} stale updates`);
+  const stall_why = stallWhyParts.length
+    ? `Signals: ${stallWhyParts.join(', ')}.`
+    : 'No strong stall signals in the window.';
+
+  const slip_why = `Completion ${fmtPct(completionPct)} with starts ${starts} vs finishes ${finishes}.`;
+
+  const support_from_team_leads = [];
+  if (blockers > 0 || stalled >= 2) {
+    support_from_team_leads.push(
+      'Run 15-min unblock huddles and assign owners for stalled tickets.'
+    );
+  }
+  if (reviews + testing === 0) {
+    support_from_team_leads.push('Require PR/review links in updates and track 400_xx activity.');
+  }
+  if (!support_from_team_leads.length) {
+    support_from_team_leads.push('Maintain a weekly cadence to review WIP and blockers.');
+  }
+
+  return {
+    key_findings: key_findings.slice(0, 5),
+    strengths: strengths.slice(0, 5),
+    focus_areas: focus_areas.slice(0, 5),
+    suggested_kpis: suggested_kpis.slice(0, 5),
+    risk: {
+      stall_risk,
+      slip_risk,
+      stall_why,
+      slip_why,
+    },
+    support_from_team_leads: support_from_team_leads.slice(0, 3),
+  };
 }
 function trimSnapshotInsights(output) {
   if (!output) return null;
