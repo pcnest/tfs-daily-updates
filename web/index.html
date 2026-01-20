@@ -844,6 +844,7 @@
                   <th style="width:110px">Type</th>
                   <th>Title</th>
                   <th style="width:120px">State</th>
+                  <th style="width:120px">Severity</th>
                   <th style="width:120px">Code</th>
                   <th>Note</th>
                 </tr>
@@ -873,6 +874,7 @@
                   <th style="width:110px">Type</th>
                   <th style="width:350px">Title</th>
                   <th style="width:120px">State</th>
+                  <th style="width:120px">Severity</th>
                   <th style="width:100px">Code</th>
                   <th style="width:90px">Risk</th>
                   <th>Note</th>
@@ -2236,6 +2238,7 @@
                   out.push('<th style="width:110px">Type</th>');
                   out.push('<th style="width:350px">Title</th>');
                   out.push('<th style="width:120px">State</th>');
+                  out.push('<th style="width:120px">Severity</th>');
                   out.push('<th style="width:75px">Code</th>');
                   out.push('<th style="width:90px">Risk</th>');
                   out.push('<th>Note</th>');
@@ -2255,6 +2258,7 @@
                     out.push('<td>' + esc(typ2 || '-') + '</td>');
                     out.push('<td><i>' + esc(it2.title || '') + '</i></td>');
                     out.push('<td>' + esc(it2.state || '-') + '</td>');
+                    out.push('<td>' + esc(it2.severity || '-') + '</td>');
                     out.push('<td>' + codeBadge + '</td>');
                     out.push('<td>' + riskBadge + '</td>');
                     var ai = getAiRiskForTicket(it2.ticketId);
@@ -2326,15 +2330,16 @@
                 '<td>' + esc(typ3 || '') + '</td>' +
                 '<td><i>' + esc(it.title || '') + '</i></td>' +
                 '<td>' + esc(it.state || '') + '</td>' +
+                '<td>' + esc(it.severity || '') + '</td>' +
                 '<td>' + esc(it.code || '') + '</td>' +
                 '<td>' + esc(it.note || '') + '</td>' +
                 '</tr>';
             }
-            tb.innerHTML = html || '<tr><td colspan="8"><em>No rows for the selected range.</em></td></tr>';
+            tb.innerHTML = html || '<tr><td colspan="9"><em>No rows for the selected range.</em></td></tr>';
           })
           .catch(function () {
             var tb = document.querySelector('#reportTbl tbody');
-            if (tb) tb.innerHTML = '<tr><td colspan="8">Failed to load range.</td></tr>';
+            if (tb) tb.innerHTML = '<tr><td colspan="9">Failed to load range.</td></tr>';
           });
       }
 
@@ -2420,7 +2425,7 @@
         for (var i = 0; i < 4; i++) {
           var tr = document.createElement('tr');
           tr.className = 'skeleton';
-          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
+          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
           tbody.appendChild(tr);
         }
 
@@ -2453,7 +2458,7 @@
             });
 
             if (!items.length) {
-              tbody.innerHTML = '<tr><td colspan="9"><em>No blockers detected today.</em></td></tr>';
+              tbody.innerHTML = '<tr><td colspan="10"><em>No blockers detected today.</em></td></tr>';
               return;
             }
 
@@ -2469,6 +2474,7 @@
                 + '<td>' + esc(typ || '-') + '</td>'
                 + '<td><i>' + esc(h.title || '') + '</i></td>'
                 + '<td>' + esc(h.state || '') + '</td>'
+                + '<td>' + esc(h.severity || '-') + '</td>'
                 + '<td>' + esc(h.code || '-') + '</td>'
                 + '<td>' + riskBadge + '</td>'
                 + '<td>' + esc(h.note || '') + '</td>'
@@ -2482,14 +2488,14 @@
             var rows = tbody.querySelectorAll('tr');
             for (var r = 0; r < rows.length; r++) {
               var cells = rows[r].getElementsByTagName('td');
-              if (cells[4]) {
-                var raw = cells[4].textContent;
-                renderCodeBadge(cells[4], raw);
+              if (cells[5]) {
+                var raw = cells[5].textContent;
+                renderCodeBadge(cells[5], raw);
               }
             }
           })
           .catch(function () {
-            tbody.innerHTML = '<tr><td colspan="9">Failed to load blockers.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10">Failed to load blockers.</td></tr>';
           });
       }
 
