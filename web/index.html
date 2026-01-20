@@ -49,7 +49,7 @@
     }
 
     .container {
-      max-width: min(1400px, 96vw);
+      max-width: min(75vw, 96vw);
       margin: 0 auto;
       padding: 20px;
     }
@@ -739,8 +739,7 @@
         </thead>
         <tbody></tbody>
       </table>
-      <section class="card thin" id="weeklySummaryCard" aria-labelledby="weeklySummaryHeader"
-        style="margin-top:12px;">
+      <section class="card thin" id="weeklySummaryCard" aria-labelledby="weeklySummaryHeader" style="margin-top:12px;">
         <div class="row weekly-summary-head">
           <div class="weekly-summary-title">
             <h3 id="weeklySummaryHeader" style="margin:0">Weekly Summary</h3>
@@ -3214,6 +3213,7 @@
       window.renderDevAssistInModal = renderDevAssistInModal;
       window.openSnapshots = openSnapshots;
       window.emailSnapshots = emailSnapshots;
+      window.toggleAiRisk = toggleAiRisk;
 
 
     })();
