@@ -965,9 +965,12 @@
             window.__lockedToday = !!(js && js.locked);
             window.__progressCount = js.progressCount || 0;
             if (js && js.date) window.__serverToday = String(js.date).slice(0, 10);
-            // Hide the Submit section and disable select buttons when locked
+            // Hide the Submit section for PMs or when locked; disable select buttons when locked.
             var sc = byId('submitCard');
-            if (sc) sc.classList.toggle('hidden', window.__lockedToday);
+            if (sc) {
+              if (window.__role === 'pm') sc.classList.add('hidden');
+              else sc.classList.toggle('hidden', window.__lockedToday);
+            }
             if (window.__lockedToday) setSelectButtonsDisabled(true);
             // Update lock button state based on progress count
             updateLockButtonState();
