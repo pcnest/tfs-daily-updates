@@ -380,6 +380,28 @@
       color: #111827;
     }
 
+    /* Inline insight accordion rows */
+    .insight-row td {
+      background: var(--table-head);
+      border-top: 1px solid var(--border);
+      font-size: 13px;
+      line-height: 1.4;
+    }
+    .insight-row td .muted {
+      color: var(--muted);
+    }
+    .insight-row .insight-body {
+      display: grid;
+      gap: 6px;
+    }
+    .insight-row .insight-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 4px;
+    }
+
     .badge.off {
       background: #ef4444;
       color: #ffffff;
@@ -794,7 +816,45 @@
             <button onclick="loadMissing()">Refresh</button>
           </div>
         </section>
+        <!-- (3) Top performers (Admin-only) -->
+        <section class="card thin" id="topDevsCard" aria-labelledby="topDevsHeader">
+          <div class="row">
+            <h3 id="topDevsHeader" style="margin:0;">Top performers (last 4 sprints or 28 days)</h3>
+            <div class="toolbar right">
+              <label for="topMode" style="display:flex;gap:6px;align-items:center;">
+                Scope
+                <select id="topMode" aria-label="Window mode">
+                  <option value="iterations">Last 4 sprints</option>
+                  <option value="weeks">Last 4 weeks</option>
+                </select>
+              </label>
+              <button onclick="loadTopDevs()">Refresh</button>
+              <span id="topDevsStatus" class="status" aria-live="polite"></span>
+            </div>
+          </div>
 
+          <div class="table-wrap" style="overflow:auto;">
+            <table id="topDevsTbl">
+              <thead>
+                <tr>
+                  <th>#</th>
+                  <th>Dev</th>
+                  <th>Score</th>
+                  <th>Throughput</th>
+                  <th>Completion %</th>
+                  <th>Cycle time (h)</th>
+                  <th>Blocker rate</th>
+                  <th>Consistency σ</th>
+                  <th>Update coverage</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr><td colspan="10"><em>Loading...</em></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
 
         <!-- Report -->
         <section class="card thin" aria-labelledby="reportsHeader">
@@ -1220,29 +1280,34 @@
 
       function setRoleUI(role) {
         var isPM = (role === 'pm');
+        var isAdmin = (role === 'admin');
+        var isDev = (role === 'dev');
+        var isManager = isPM || isAdmin; // PM-like capabilities
         window.__role = role;
         var loginCard = byId('loginCard');
         var ticketsCard = byId('ticketsCard');
         var submitCard = byId('submitCard');
         var pmBox = byId('pm');
         var weeklyCard = byId('weeklySummaryCard');
+        var topDevsCard = byId('topDevsCard');
 
         if (loginCard) loginCard.classList.add('hidden');
         if (ticketsCard) ticketsCard.classList.remove('hidden');
-        if (submitCard) submitCard.classList.toggle('hidden', isPM); // hide for PMs
-        if (weeklyCard) weeklyCard.classList.toggle('hidden', isPM);
-        if (!isPM) {
+        if (submitCard) submitCard.classList.toggle('hidden', isManager); // hide for PM/Admin
+        if (weeklyCard) weeklyCard.classList.toggle('hidden', isManager);
+        if (isDev) {
           var p = checkLockStatus();
           if (p && typeof p.then === 'function') p.then(function () { loadWeeklySummary(); });
           else loadWeeklySummary();
         }
 
-        if (pmBox) pmBox.classList.toggle('hidden', !isPM);
+        if (pmBox) pmBox.classList.toggle('hidden', !isManager);
+        if (topDevsCard) topDevsCard.classList.toggle('hidden', !isAdmin); // admin-only card
 
         if (pmBox) {
           var controls = pmBox.querySelectorAll('button, a');
           for (var i = 0; i < controls.length; i++) {
-            if (!isPM) controls[i].setAttribute('disabled', 'disabled');
+            if (!isManager) controls[i].setAttribute('disabled', 'disabled');
             else controls[i].removeAttribute('disabled');
           }
         }
@@ -1253,18 +1318,19 @@
           me.innerHTML = esc(txt);
           var badge = document.createElement('span');
           badge.className = 'badge';
-          badge.textContent = isPM ? 'PM' : 'DEV';
+          badge.textContent = isAdmin ? 'ADMIN' : (isPM ? 'PM' : 'DEV');
           me.appendChild(document.createTextNode(' '));
           me.appendChild(badge);
         }
 
         var filters = byId('findFilters');
-        if (isPM) {
+        if (isManager) {
           ensureAssignedDropdownForPM();
           ensureSnapshotDevDropdown();
 
           if (filters) filters.style.display = '';
           loadToday(); loadBlockers(); loadMissing();
+          if (isAdmin) loadTopDevs(); // admin-only
 
           presetReportThisWeek(false);
           if (!window.__exportTimer) {
@@ -2600,6 +2666,183 @@
           });
       }
 
+      // --- Top performers insights (accordion) -------------------------------
+      var __topInsightOpen = null; // email of currently open accordion
+      var __topWindow = null; // last window used (for snapshot links)
+      var __topMode = 'iterations';
+
+      function closeInsightRows() {
+        var open = document.querySelectorAll('.insight-row');
+        for (var i = 0; i < open.length; i++) open[i].remove();
+        __topInsightOpen = null;
+      }
+
+      function insertAfter(newNode, ref) {
+        if (ref && ref.parentNode) {
+          if (ref.nextSibling) ref.parentNode.insertBefore(newNode, ref.nextSibling);
+          else ref.parentNode.appendChild(newNode);
+        }
+      }
+
+      function toggleInsight(email) {
+        email = String(email || '').trim();
+        var rows = document.querySelectorAll('#topDevsTbl tr[data-email]');
+        var anchor = null;
+        for (var i = 0; i < rows.length; i++) {
+          if (String(rows[i].getAttribute('data-email') || '').toLowerCase() === email.toLowerCase()) {
+            anchor = rows[i];
+            break;
+          }
+        }
+        if (!anchor) return;
+
+        if (__topInsightOpen && __topInsightOpen === email) {
+          closeInsightRows();
+          return;
+        }
+        closeInsightRows();
+        renderInsightRow(email, __topMode, anchor);
+      }
+
+      function renderInsightRow(email, mode, anchorRow) {
+        var tr = document.createElement('tr');
+        tr.className = 'insight-row';
+        var td = document.createElement('td');
+        td.colSpan = 10;
+        td.innerHTML = '<div class="insight-body"><div class="muted">Loading insight...</div></div>';
+        tr.appendChild(td);
+        insertAfter(tr, anchorRow);
+        __topInsightOpen = email;
+
+        var hdrs = { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') };
+        var url = new URL((API || location.origin) + '/api/reports/top-devs/insight');
+        url.searchParams.set('developer', email);
+        url.searchParams.set('mode', mode || 'iterations');
+
+        fetch(url, { headers: hdrs })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            if (js.error) throw js;
+            var insight = Array.isArray(js.insight) ? js.insight : [];
+            var windowUsed = js.windowUsed || __topWindow || {};
+            var badge = '';
+            if (js.item && js.item.lowSample) badge += '<span class="badge muted">low sample</span> ';
+            if (js.item && js.item.metrics && js.item.metrics.update_coverage < 0.5) badge += '<span class="badge muted">low coverage</span> ';
+            var snapLink = '';
+            if (windowUsed.from && windowUsed.to) {
+              var base = (API || location.origin) + '/api/reports/snapshots?format=html';
+              snapLink = '<a class="secondary" target="_blank" rel="noopener" href="' + esc(base + '&developer=' + encodeURIComponent(email) + '&from=' + encodeURIComponent(windowUsed.from) + '&to=' + encodeURIComponent(windowUsed.to)) + '">Open snapshot (HTML)</a>';
+            }
+
+            var bullets = insight.length
+              ? '<ul style="margin:0;padding-left:18px;">' + insight.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ul>'
+              : '<div class="muted">No insight available.</div>';
+
+            td.innerHTML =
+              '<div class="insight-body">' +
+              '<div><strong>Insight for ' + esc(email) + '</strong> <span class="muted">(' + esc(windowUsed.from || '?') + ' to ' + esc(windowUsed.to || '?') + ')</span> ' + badge + '</div>' +
+              bullets +
+              '<div class="insight-actions">' +
+              (snapLink || '') +
+              '<button class="secondary" onclick="copyInsight(this)">Copy</button>' +
+              '</div>' +
+              '</div>';
+          })
+          .catch(function (err) {
+            var msg = (err && err.detail) || (err && err.error) || (err && err.message) || 'Failed';
+            td.innerHTML = '<div class="insight-body"><div class="muted">Insight unavailable: ' + esc(msg) + '</div></div>';
+          });
+      }
+
+      function copyInsight(btn) {
+        var row = btn && btn.closest('.insight-row');
+        if (!row) return;
+        var text = row.innerText || '';
+        if (!text) return;
+        navigator.clipboard.writeText(text).catch(function () { });
+        btn.textContent = 'Copied';
+        setTimeout(function () { btn.textContent = 'Copy'; }, 1200);
+      }
+
+      function loadTopDevs() {
+        if (window.__role !== 'admin') return;
+        closeInsightRows();
+        var tbody = document.querySelector('#topDevsTbl tbody');
+        var status = byId('topDevsStatus');
+        if (status) { status.textContent = 'Loading...'; status.classList.remove('ok', 'err'); }
+        if (tbody) tbody.innerHTML = '<tr><td colspan="10"><em>Loading...</em></td></tr>';
+
+        var modeSel = byId('topMode');
+        var mode = (modeSel && modeSel.value) ? modeSel.value : 'iterations';
+        window.__topMode = mode;
+
+        var url = new URL((API || location.origin) + '/api/reports/top-devs');
+        url.searchParams.set('mode', mode);
+
+        fetch(url, {
+          headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') }
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            if (js.error) throw js;
+
+            var items = js.items || [];
+            if (!items.length) {
+              tbody.innerHTML = '<tr><td colspan="10"><em>No data for this window.</em></td></tr>';
+              if (status) { status.textContent = 'No data'; status.classList.add('err'); }
+              return;
+            }
+
+            var windowInfo = js.windowUsed || {};
+            var windowLabel = (windowInfo.mode || mode) + ': ' + (windowInfo.from || '—') + ' to ' + (windowInfo.to || '—');
+            if (windowInfo.iterations && windowInfo.iterations.length) {
+              windowLabel += ' | Sprints: ' + windowInfo.iterations.join(', ');
+            }
+            if (status) { status.textContent = windowLabel; status.classList.add('ok'); }
+            __topWindow = windowInfo;
+
+            var html = '';
+            for (var i = 0; i < items.length; i++) {
+              var it = items[i];
+              var rank = it.lowSample ? '—' : (i + 1);
+              var cycle = it.metrics.cycle_time_hours;
+              var notes = [];
+              if (it.lowSample) notes.push('low sample (<3 finishes)');
+              var consistency = it.metrics.consistency_stddev != null ? it.metrics.consistency_stddev.toFixed(2) : '—';
+              var coverage = it.metrics.update_coverage != null ? it.metrics.update_coverage.toFixed(2) : '—';
+              var snapFrom = (windowInfo && windowInfo.from) ? windowInfo.from : '';
+              var snapTo = (windowInfo && windowInfo.to) ? windowInfo.to : '';
+              var snapshotLink = (snapFrom && snapTo && it.email)
+                ? ('<a href="' + esc((API || location.origin) + '/api/reports/snapshots?format=html&developer=' + encodeURIComponent(it.email) + '&from=' + encodeURIComponent(snapFrom) + '&to=' + encodeURIComponent(snapTo)) + '" target="_blank" rel="noopener">View snapshot</a>')
+                : '';
+              var insightBtn = '<button class="secondary" onclick="toggleInsight(\'' + esc(it.email) + '\')">View insight</button>';
+
+              html += '<tr data-email="' + esc(it.email || '') + '">' +
+                '<td>' + esc(rank) + '</td>' +
+                '<td>' + esc(it.email || '—') + '</td>' +
+                '<td>' + esc(it.score != null ? it.score.toFixed(2) : '0') + '</td>' +
+                '<td>' + esc(it.metrics.throughput) + '</td>' +
+                '<td>' + esc(it.metrics.completion_pct.toFixed(1)) + '%</td>' +
+                '<td>' + esc(cycle == null ? '—' : cycle.toFixed(2)) + '</td>' +
+                '<td>' + esc(it.metrics.blocker_rate.toFixed(3)) + '</td>' +
+                '<td>' + esc(consistency) + '</td>' +
+                '<td>' + esc(coverage) + '</td>' +
+                '<td>' +
+                  (snapshotLink ? snapshotLink + '<br>' : '') +
+                  insightBtn + '<br>' +
+                  (notes.length ? '<span class="badge muted">' + esc(notes.join(', ')) + '</span>' : '—') +
+                '</td>' +
+                '</tr>';
+            }
+            tbody.innerHTML = html;
+          })
+          .catch(function (err) {
+            var msg = (err && err.detail) || (err && err.error) || (err && err.message) || 'Failed';
+            if (tbody) tbody.innerHTML = '<tr><td colspan="10"><em>' + esc(msg) + '</em></td></tr>';
+            if (status) { status.textContent = msg; status.classList.add('err'); }
+          });
+      }
+
 
       function pmUnlockUser(btn) {
         try {
@@ -3206,6 +3449,9 @@
       window.pmUnlockUser = pmUnlockUser;
       window.loadBlockers = loadBlockers;
       window.loadToday = loadToday;
+      window.loadTopDevs = loadTopDevs;
+      window.toggleInsight = toggleInsight;
+      window.copyInsight = copyInsight;
       window.openSPModal = openSPModal;
       window.closeSPModal = closeSPModal;
       window.loadReportRange = loadReportRange;

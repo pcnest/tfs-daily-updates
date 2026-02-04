@@ -635,6 +635,12 @@ const S = (v) =>
   (typeof v === 'string' ? v : v == null ? '' : String(v)).trim();
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
+const addDays = (iso, delta) => {
+  const d = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return iso;
+  d.setUTCDate(d.getUTCDate() + delta);
+  return d.toISOString().slice(0, 10);
+};
 async function todayLocal(pool) {
   // Returns 'YYYY-MM-DD' based on APP_TZ (DST-safe)
   const { rows } = await pool.query(
@@ -3175,6 +3181,492 @@ app.get(
     } catch (e) {
       console.error('[snapshots] error:', e);
       res.status(500).json({ error: 'snapshot_failed', detail: String(e) });
+    }
+  }
+);
+
+// --- Helper: derive last N iterations from current_iteration path ------------
+function deriveIterationPaths(currentPath, count) {
+  if (!currentPath || !count) return [];
+  const trimmed = String(currentPath).trim();
+  const match = trimmed.match(/^(.*?)(\d+)\s*$/);
+  if (!match) return [];
+  const prefix = match[1];
+  const baseNum = parseInt(match[2], 10);
+  if (!Number.isFinite(baseNum)) return [];
+  const out = [];
+  for (let i = 0; i < count; i += 1) {
+    out.push(`${prefix}${baseNum - i}`);
+  }
+  return out;
+}
+
+// --- Helper: count weekdays inclusive (Mon–Fri) ------------------------------
+function countWeekdays(fromISO, toISO) {
+  const start = new Date(`${fromISO}T00:00:00Z`);
+  const end = new Date(`${toISO}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+  let days = 0;
+  for (
+    let d = new Date(start.getTime());
+    d <= end;
+    d = new Date(d.getTime() + 24 * 3600 * 1000)
+  ) {
+    const dow = d.getUTCDay(); // 0=Sun, 6=Sat
+    if (dow !== 0 && dow !== 6) days += 1;
+  }
+  return days;
+}
+
+// --- PM: Top Developers ranking ---------------------------------------------
+async function computeTopDevs({ mode = 'iterations', windowCount = 4, stallHours = 12 } = {}) {
+  const today = todayISO();
+  const MAX_DAYS = 90;
+  let fromISO = addDays(today, -27); // default 28-day window
+  let iterationPaths = null;
+  let windowModeUsed = 'weeks';
+
+  if (mode === 'iterations') {
+    const currIter = await pool.query(
+      `select value from meta where key='current_iteration' limit 1`
+    );
+    const currPath = currIter.rows[0]?.value || '';
+    const derived = deriveIterationPaths(currPath, windowCount);
+    if (derived.length) {
+      iterationPaths = derived.map((s) => s.toLowerCase());
+      windowModeUsed = 'iterations';
+      fromISO = addDays(today, -MAX_DAYS); // keep within 90-day cap
+    }
+  }
+
+  const spanDays = Math.floor(
+    (Date.parse(today) - Date.parse(fromISO)) / 86400000
+  );
+  if (!Number.isFinite(spanDays) || spanDays < 0 || spanDays > MAX_DAYS) {
+    const err = new Error(`Range too large (max ${MAX_DAYS} days)`);
+    err.status = 400;
+    throw err;
+  }
+
+  const sql = `
+      with windowed as (
+        select
+          email as dev,
+          ticket_id,
+          code,
+          at AT TIME ZONE $3 as ts_local,
+          lead(at) over (partition by ticket_id order by at) AT TIME ZONE $3 as next_ts_local
+        from progress_updates
+        where at >= ($1::timestamptz - interval '7 days')
+          and at <  ($2::timestamptz + interval '1 day')
+          and (
+            $5::text[] is null
+            or exists (
+              select 1 from tickets t
+              where t.id = progress_updates.ticket_id
+                and lower(t.iteration_path) = any($5)
+            )
+          )
+      ),
+      segments as (
+        select
+          dev, ticket_id, code, ts_local,
+          greatest(ts_local, $1::date AT TIME ZONE $3) as seg_start,
+          least(coalesce(next_ts_local, $2::date AT TIME ZONE $3), $2::date AT TIME ZONE $3) as seg_end
+        from windowed
+      ),
+      usable as (
+        select *,
+               case when seg_end > seg_start
+                 then extract(epoch from (seg_end - seg_start))/3600.0
+                 else 0 end as hours
+        from segments
+        where seg_end > seg_start
+      ),
+      coded as (
+        select
+          dev, ticket_id,
+          split_part(code,'_',1) || '_xx' as family,
+          hours,
+          ts_local::date as day
+        from usable u
+        where ($5::text[] is null
+          or exists (
+            select 1 from tickets t where t.id = u.ticket_id and lower(t.iteration_path)=any($5)
+          ))
+      ),
+      per_dev_family as (
+        select dev, family,
+               count(*) as transitions,
+               sum(hours) as hours_sum,
+               case when count(*)>0 then sum(hours)/count(*) else 0 end as hours_avg
+        from coded
+        group by dev, family
+      ),
+      ticket_touch as (
+        select dev, count(distinct ticket_id) as ticket_volume
+        from coded
+        group by dev
+      ),
+      completion as (
+        select dev,
+               count(distinct ticket_id) filter (where family='500_xx') as completed_tickets,
+               count(distinct ticket_id) as touched_tickets
+        from coded
+        group by dev
+      ),
+      latest_ticket as (
+        select distinct on (ticket_id)
+          ticket_id,
+          at AT TIME ZONE $3 as last_ts_local,
+          split_part(code,'_',1) || '_xx' as last_family
+        from progress_updates
+        where at <= ($2::timestamptz)
+          and (
+            $5::text[] is null
+            or exists (
+              select 1 from tickets t where t.id = progress_updates.ticket_id and lower(t.iteration_path)=any($5)
+            )
+          )
+        order by ticket_id, at desc
+      ),
+      stalled as (
+        select c.dev, count(distinct c.ticket_id) as stalled_tickets
+        from coded c
+        join latest_ticket lt on lt.ticket_id = c.ticket_id
+        where lt.last_ts_local between ($1::date AT TIME ZONE $3) and ($2::date AT TIME ZONE $3)
+          and lt.last_family in ('200_xx','600_xx','800_xx')
+          and (($2::date AT TIME ZONE $3) - lt.last_ts_local) >= (interval '1 hour' * $4::int)
+        group by c.dev
+      ),
+      blockers as (
+        select dev, sum(transitions) as blocker_transitions
+        from per_dev_family
+        where family in ('600_xx','800_xx')
+        group by dev
+      ),
+      daily_finishes as (
+        select dev, day, count(distinct ticket_id) as finishes
+        from coded
+        where family='500_xx'
+        group by dev, day
+      ),
+      finish_variance as (
+        select dev, stddev_pop(finishes) as finish_stddev
+        from daily_finishes
+        group by dev
+      ),
+      updates as (
+        select email as dev, count(*) as updates_count
+        from progress_updates
+        where at >= ($1::timestamptz) and at <= ($2::timestamptz + interval '1 day')
+          and (
+            $5::text[] is null
+            or exists (
+              select 1 from tickets t where t.id = progress_updates.ticket_id and lower(t.iteration_path)=any($5)
+            )
+          )
+        group by email
+      )
+      select
+        p.dev as email,
+        jsonb_object_agg(p.family, jsonb_build_object(
+          'transitions', p.transitions,
+          'hours_sum', round(p.hours_sum::numeric, 2),
+          'hours_avg', round(p.hours_avg::numeric, 2)
+        )) as families,
+        coalesce(t.ticket_volume,0) as ticket_volume,
+        coalesce(c.completed_tickets,0) as completed_tickets,
+        coalesce(c.touched_tickets,0) as touched_tickets,
+        case when coalesce(c.touched_tickets,0)>0
+             then round(100.0*c.completed_tickets/c.touched_tickets,1) else 0 end as completion_pct,
+        coalesce(s.stalled_tickets,0) as stalled_tickets,
+        coalesce(b.blocker_transitions,0) as blocker_transitions,
+        coalesce(u.updates_count,0) as updates_count,
+        coalesce(f.finish_stddev,0) as finish_stddev
+      from per_dev_family p
+      left join ticket_touch t on t.dev = p.dev
+      left join completion   c on c.dev = p.dev
+      left join stalled      s on s.dev = p.dev
+      left join blockers     b on b.dev = p.dev
+      left join updates      u on u.dev = p.dev
+      left join finish_variance f on f.dev = p.dev
+      group by p.dev, t.ticket_volume, c.completed_tickets, c.touched_tickets,
+               s.stalled_tickets, b.blocker_transitions, u.updates_count, f.finish_stddev
+      order by p.dev;
+      `;
+
+  const { rows } = await pool.query(sql, [
+    fromISO,
+    today,
+    APP_TZ,
+    stallHours,
+    iterationPaths,
+  ]);
+
+  const eligible = rows.filter((r) => Number(r.completed_tickets || 0) >= 3);
+
+  const metricArray = (fn) => eligible.map(fn).filter((v) => v != null);
+  const meanStd = (arr) => {
+    if (!arr.length) return { mean: 0, std: 0 };
+    const mean = arr.reduce((s, v) => s + v, 0) / arr.length;
+    const variance =
+      arr.reduce((s, v) => s + Math.pow(v - mean, 2), 0) / arr.length;
+    return { mean, std: Math.sqrt(variance) };
+  };
+
+  const cycleValue = (r) => {
+    const fam = r.families || {};
+    const keys = ['200_xx', '300_xx', '400_xx'];
+    const sum = keys.reduce(
+      (s, k) => s + (Number(fam[k]?.hours_sum) || 0),
+      0
+    );
+    const trans = keys.reduce(
+      (s, k) => s + (Number(fam[k]?.transitions) || 0),
+      0
+    );
+    return trans > 0 ? sum / trans : null;
+  };
+
+  const blockerRateVal = (r) => {
+    const vol = Math.max(Number(r.ticket_volume) || 0, 1);
+    return (Number(r.blocker_transitions) || 0) / vol;
+  };
+
+  const stats = {
+    throughput: meanStd(metricArray((r) => Number(r.completed_tickets) || 0)),
+    completion: meanStd(metricArray((r) => Number(r.completion_pct) || 0)),
+    cycle: meanStd(metricArray(cycleValue)),
+    blocker: meanStd(metricArray(blockerRateVal)),
+  };
+
+  const weights = {
+    throughput: 0.35,
+    completion: 0.25,
+    cycle: 0.2,
+    blocker: 0.2,
+  };
+
+  const workingDays = countWeekdays(fromISO, today) || 0;
+
+  const scored = rows.map((r) => {
+    const families = r.families || {};
+    const finished = Number(r.completed_tickets) || 0;
+    const ticketVolume = Number(r.ticket_volume) || 0;
+    const completionPct = Number(r.completion_pct) || 0;
+
+    const cycleTime = cycleValue(r);
+    const blockerRate = blockerRateVal(r);
+
+    const z = (val, mean, std) =>
+      std > 0 && val != null ? (val - mean) / std : 0;
+
+    const zThroughput = z(finished, stats.throughput.mean, stats.throughput.std);
+    const zCompletion = z(completionPct, stats.completion.mean, stats.completion.std);
+    const zCycle =
+      cycleTime != null ? -z(cycleTime, stats.cycle.mean, stats.cycle.std) : 0;
+    const zBlocker = -z(blockerRate, stats.blocker.mean, stats.blocker.std);
+
+    const score =
+      weights.throughput * zThroughput +
+      weights.completion * zCompletion +
+      weights.cycle * zCycle +
+      weights.blocker * zBlocker;
+
+    const updatesCount = Number(r.updates_count) || 0;
+    const updateCoverage =
+      workingDays > 0 ? +(updatesCount / workingDays).toFixed(2) : 0;
+
+    const consistency = Number(r.finish_stddev) || 0;
+
+    return {
+      email: r.email,
+      score: Number.isFinite(score) ? +score.toFixed(3) : 0,
+      zScores: {
+        throughput: +zThroughput.toFixed(3),
+        completion: +zCompletion.toFixed(3),
+        cycle: +zCycle.toFixed(3),
+        blocker: +zBlocker.toFixed(3),
+      },
+      metrics: {
+        throughput: finished,
+        completion_pct: completionPct,
+        cycle_time_hours: cycleTime != null ? +cycleTime.toFixed(2) : null,
+        blocker_rate: +blockerRate.toFixed(3),
+        blocker_transitions: Number(r.blocker_transitions) || 0,
+        ticket_volume: ticketVolume,
+        touched_tickets: Number(r.touched_tickets) || 0,
+        stalled_tickets: Number(r.stalled_tickets) || 0,
+        consistency_stddev: +consistency.toFixed(3),
+        update_coverage: updateCoverage,
+        updates_count: updatesCount,
+      },
+      lowSample: finished < 3,
+    };
+  });
+
+  const eligibleScored = scored.filter((r) => !r.lowSample);
+  eligibleScored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return (a.metrics.consistency_stddev || 0) - (b.metrics.consistency_stddev || 0);
+  });
+
+  const result = eligibleScored.concat(scored.filter((r) => r.lowSample));
+
+  return {
+    items: result,
+    weights,
+    windowUsed: {
+      mode: windowModeUsed,
+      from: fromISO,
+      to: today,
+      iterations: iterationPaths || [],
+    },
+    eligibleCount: eligibleScored.length,
+  };
+}
+
+app.get(
+  '/api/reports/top-devs',
+  requireAuth,
+  requirePMOnly,
+  async (req, res) => {
+    try {
+      const mode = (req.query.mode || 'iterations').toLowerCase();
+      const windowCount = Math.max(parseInt(req.query.window, 10) || 4, 1);
+      const stallHours = parseInt(req.query.stallHours, 10) || 12;
+
+      const computed = await computeTopDevs({ mode, windowCount, stallHours });
+
+      if (computed.eligibleCount < 3) {
+        return res.status(400).json({
+          error: 'insufficient_data',
+          detail: 'Not enough finished tickets to rank reliably',
+          windowUsed: computed.windowUsed,
+        });
+      }
+
+      res.json({
+        items: computed.items,
+        weights: computed.weights,
+        windowUsed: computed.windowUsed,
+      });
+    } catch (e) {
+      const status = e.status || 500;
+      console.error('[top-devs] error', e);
+      res.status(status).json({
+        error: 'top_devs_failed',
+        detail: String(e.message || e),
+      });
+    }
+  }
+);
+
+// PM: Insight per developer (plain-language, AI-backed with fallback)
+app.get(
+  '/api/reports/top-devs/insight',
+  requireAuth,
+  requirePMOnly,
+  async (req, res) => {
+    try {
+      const mode = (req.query.mode || 'iterations').toLowerCase();
+      const developer = String(req.query.developer || '').toLowerCase().trim();
+      const windowCount = Math.max(parseInt(req.query.window, 10) || 4, 1);
+      const stallHours = parseInt(req.query.stallHours, 10) || 12;
+
+      if (!developer)
+        return res.status(400).json({ error: 'developer_required' });
+
+      const computed = await computeTopDevs({ mode, windowCount, stallHours });
+      const item = (computed.items || []).find(
+        (r) => String(r.email || '').toLowerCase() === developer
+      );
+
+      if (!item)
+        return res.status(404).json({ error: 'developer_not_found', windowUsed: computed.windowUsed });
+
+      const coverage = item.metrics.update_coverage;
+      const lowCoverage = coverage < 0.5;
+
+      const fallbackInsight = () => {
+        const lines = [];
+        if (item.lowSample) {
+          lines.push('Not ranked because fewer than 3 finished items in this window; treat as informational.');
+        } else {
+          lines.push('Overall: Score relative to team average; higher is better.');
+        }
+        lines.push(`Throughput: ${item.metrics.throughput} finished items; completion ${item.metrics.completion_pct.toFixed(1)}%.`);
+        if (item.metrics.cycle_time_hours != null)
+          lines.push(`Speed: Typical cycle time about ${item.metrics.cycle_time_hours.toFixed(1)} hours.`);
+        lines.push(`Blockers: Blocker rate ${item.metrics.blocker_rate.toFixed(3)} (lower is better).`);
+        lines.push(`Consistency: Daily finish variability σ = ${item.metrics.consistency_stddev.toFixed(2)} (lower = steadier).`);
+        lines.push(`Update coverage: ${coverage.toFixed(2)} updates/weekday${lowCoverage ? ' (low — data may understate activity)' : ''}.`);
+        lines.push('Next step: Focus on clearing blockers early and finishing a higher share of started items.');
+        return lines;
+      };
+
+      let insightLines = fallbackInsight();
+      let usedAI = false;
+
+      if (!item.lowSample && openai) {
+        try {
+          const prompt = [
+            `You are writing a short status for managers (non-technical).`,
+            `Keep it concise and factual. No buzzwords. No invented data.`,
+            `Window: ${computed.windowUsed.from} to ${computed.windowUsed.to}. Mode: ${computed.windowUsed.mode}.`,
+            `Metrics (already calculated, do not recompute):`,
+            `- score: ${item.score}`,
+            `- throughput: ${item.metrics.throughput}`,
+            `- completion_pct: ${item.metrics.completion_pct}`,
+            `- cycle_time_hours: ${item.metrics.cycle_time_hours}`,
+            `- blocker_rate: ${item.metrics.blocker_rate}`,
+            `- consistency_stddev: ${item.metrics.consistency_stddev}`,
+            `- update_coverage: ${coverage}`,
+            `- low_sample: ${item.lowSample}`,
+            `Guidelines:`,
+            `- Start with Overall. Then Throughput/Completion, Speed, Blockers, Consistency, Update coverage.`,
+            `- Use plain language; keep each bullet short.`,
+            `- If data quality is low (low_sample=true or update_coverage<0.5), say so explicitly.`,
+            `- Include one clear next step tailored to the metrics (e.g., reduce blockers, raise completion, improve updates).`,
+          ].join('\n');
+
+          const resp = await openai.chat.completions.create({
+            model: OPENAI_MODEL,
+            messages: [
+              { role: 'system', content: 'You write concise status bullets for managers. 4-7 bullets max.' },
+              { role: 'user', content: prompt },
+            ],
+            max_tokens: 250,
+          });
+
+          const text = (resp.choices?.[0]?.message?.content || '').trim();
+          if (text) {
+            insightLines = text
+              .split('\n')
+              .map((s) => s.replace(/^[\-\*\u2022]\s*/, '').trim())
+              .filter(Boolean);
+            usedAI = true;
+          }
+        } catch (e) {
+          console.warn('[top-devs/insight] AI fallback', e.message);
+          usedAI = false;
+        }
+      }
+
+      res.json({
+        insight: insightLines,
+        usedAI,
+        item,
+        windowUsed: computed.windowUsed,
+      });
+    } catch (e) {
+      const status = e.status || 500;
+      console.error('[top-devs/insight] error', e);
+      res.status(status).json({
+        error: 'top_dev_insight_failed',
+        detail: String(e.message || e),
+      });
     }
   }
 );
