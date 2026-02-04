@@ -3455,6 +3455,7 @@ async function computeTopDevs({ mode = 'iterations', windowCount = 4, stallHours
   const workingDays = countWeekdays(fromISO, today) || 0;
 
   const scored = rows.map((r) => {
+    const email = String(r.email || '').trim();
     const families = r.families || {};
     const finished = Number(r.completed_tickets) || 0;
     const ticketVolume = Number(r.ticket_volume) || 0;
@@ -3485,7 +3486,7 @@ async function computeTopDevs({ mode = 'iterations', windowCount = 4, stallHours
     const consistency = Number(r.finish_stddev) || 0;
 
     return {
-      email: r.email,
+      email,
       score: Number.isFinite(score) ? +score.toFixed(3) : 0,
       zScores: {
         throughput: +zThroughput.toFixed(3),
@@ -3575,7 +3576,7 @@ app.get(
   async (req, res) => {
     try {
       const mode = (req.query.mode || 'iterations').toLowerCase();
-      const developer = String(req.query.developer || '').toLowerCase().trim();
+      const developer = String(req.query.developer || '').trim().toLowerCase();
       const windowCount = Math.max(parseInt(req.query.window, 10) || 4, 1);
       const stallHours = parseInt(req.query.stallHours, 10) || 12;
 
@@ -3584,7 +3585,7 @@ app.get(
 
       const computed = await computeTopDevs({ mode, windowCount, stallHours });
       const item = (computed.items || []).find(
-        (r) => String(r.email || '').toLowerCase() === developer
+        (r) => String(r.email || '').trim().toLowerCase() === developer
       );
 
       if (!item)

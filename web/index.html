@@ -2805,6 +2805,7 @@
             var html = '';
             for (var i = 0; i < items.length; i++) {
               var it = items[i];
+              var email = (it.email || '').trim();
               var rank = it.lowSample ? '—' : (i + 1);
               var cycle = it.metrics.cycle_time_hours;
               var notes = [];
@@ -2813,14 +2814,14 @@
               var coverage = it.metrics.update_coverage != null ? it.metrics.update_coverage.toFixed(2) : '—';
               var snapFrom = (windowInfo && windowInfo.from) ? windowInfo.from : '';
               var snapTo = (windowInfo && windowInfo.to) ? windowInfo.to : '';
-              var snapshotLink = (snapFrom && snapTo && it.email)
-                ? ('<a href="' + esc((API || location.origin) + '/api/reports/snapshots?format=html&developer=' + encodeURIComponent(it.email) + '&from=' + encodeURIComponent(snapFrom) + '&to=' + encodeURIComponent(snapTo)) + '" target="_blank" rel="noopener">View snapshot</a>')
+              var snapshotLink = (snapFrom && snapTo && email)
+                ? ('<a href="' + esc((API || location.origin) + '/api/reports/snapshots?format=html&developer=' + encodeURIComponent(email) + '&from=' + encodeURIComponent(snapFrom) + '&to=' + encodeURIComponent(snapTo)) + '" target="_blank" rel="noopener">View snapshot</a>')
                 : '';
-              var insightBtn = '<button class="secondary" onclick="toggleInsight(\'' + esc(it.email) + '\')">View insight</button>';
+              var insightBtn = '<button class="secondary" onclick="toggleInsight(\'' + esc(email) + '\')">View insight</button>';
 
-              html += '<tr data-email="' + esc(it.email || '') + '">' +
+              html += '<tr data-email="' + esc(email) + '">' +
                 '<td>' + esc(rank) + '</td>' +
-                '<td>' + esc(it.email || '—') + '</td>' +
+                '<td>' + esc(email || '—') + '</td>' +
                 '<td>' + esc(it.score != null ? it.score.toFixed(2) : '0') + '</td>' +
                 '<td>' + esc(it.metrics.throughput) + '</td>' +
                 '<td>' + esc(it.metrics.completion_pct.toFixed(1)) + '%</td>' +
