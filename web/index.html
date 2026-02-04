@@ -1720,6 +1720,7 @@
             status.textContent = "Loaded " + (js.count || 0) + " ticket(s)";
             tbody.innerHTML = "";
             var items = js.items || [];
+            __topItems = items;
             for (var k = 0; k < items.length; k++) {
               var t = items[k];
               var tr2 = document.createElement("tr");
@@ -2671,6 +2672,7 @@
       var __topInsightOpen = null; // email of currently open accordion
       var __topWindow = null; // last window used (for snapshot links)
       var __topMode = 'iterations';
+      var __topItems = [];
 
       function closeInsightRows() {
         var open = document.querySelectorAll('.insight-row');
@@ -2750,7 +2752,34 @@
               '</div>';
           })
           .catch(function (err) {
-            var msg = (err && err.detail) || (err && err.error) || (err && err.message) || 'Failed';
+            var errCode = (err && err.error) || '';
+
+            // If API says developer_not_found, try a local fallback using the cached table data.
+            if (errCode === 'developer_not_found' && Array.isArray(__topItems) && __topItems.length) {
+              var match = __topItems.find(function (it) {
+                return String((it.email || '')).trim().toLowerCase() === email.toLowerCase();
+              });
+              if (match) {
+                var badge = match.lowSample ? '<span class="badge muted">low sample</span> ' : '';
+                if (match.metrics && match.metrics.update_coverage < 0.5) badge += '<span class="badge muted">low coverage</span> ';
+                var bullets = [
+                  'Throughput: ' + match.metrics.throughput + ' finished; completion ' + match.metrics.completion_pct.toFixed(1) + '%.',
+                  'Speed: ' + (match.metrics.cycle_time_hours == null ? 'n/a' : match.metrics.cycle_time_hours.toFixed(1) + 'h per item.'),
+                  'Blockers: rate ' + match.metrics.blocker_rate.toFixed(3) + ' (lower is better).',
+                  'Consistency: σ=' + match.metrics.consistency_stddev.toFixed(2) + ' (lower is steadier).',
+                  'Update coverage: ' + match.metrics.update_coverage.toFixed(2) + ' updates/weekday.'
+                ];
+                td.innerHTML =
+                  '<div class="insight-body">' +
+                  '<div><strong>Insight for ' + esc(email) + '</strong> ' + badge + '</div>' +
+                  '<ul style="margin:0;padding-left:18px;">' + bullets.map(function (b) { return '<li>' + esc(b) + '</li>'; }).join('') + '</ul>' +
+                  '<div class="muted">Shown from cached table data because the API did not return this developer.</div>' +
+                  '</div>';
+                return;
+              }
+            }
+
+            var msg = (err && err.detail) || errCode || (err && err.message) || 'Failed';
             td.innerHTML = '<div class="insight-body"><div class="muted">Insight unavailable: ' + esc(msg) + '</div></div>';
           });
       }
