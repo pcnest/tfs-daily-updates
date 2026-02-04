@@ -1969,8 +1969,9 @@ app.post('/api/updates/unlock', requireAuth, async (req, res) => {
   const me = await pool.query('select role from users where email=$1', [
     req.userEmail,
   ]);
-  if (me.rows[0]?.role !== 'pm')
-    return res.status(403).json({ error: 'pm only' });
+  const role = me.rows[0]?.role;
+  if (role !== 'pm' && role !== 'admin')
+    return res.status(403).json({ error: 'pm/admin only' });
 
   const date = await todayLocal(pool);
 
@@ -2134,8 +2135,9 @@ app.get('/api/updates/today/ai', requireAuth, async (req, res) => {
     const me = await pool.query('select role from users where email=$1', [
       req.userEmail,
     ]);
-    if (me.rows[0]?.role !== 'pm')
-      return res.status(403).json({ error: 'pm only' });
+    const role = me.rows[0]?.role;
+    if (role !== 'pm' && role !== 'admin')
+      return res.status(403).json({ error: 'pm/admin only' });
 
     if (!openai) return res.status(501).json({ error: 'ai_not_configured' });
 
@@ -2260,8 +2262,9 @@ app.get('/api/updates/missing', requireAuth, async (req, res) => {
   const me = await pool.query('select role from users where email=$1', [
     req.userEmail,
   ]);
-  if (me.rows[0]?.role !== 'pm')
-    return res.status(403).json({ error: 'pm only' });
+  const role = me.rows[0]?.role;
+  if (role !== 'pm' && role !== 'admin')
+    return res.status(403).json({ error: 'pm/admin only' });
 
   const date = await todayLocal(pool);
   // All devs who have an account…
@@ -2400,8 +2403,9 @@ async function requirePMOnly(req, res, next) {
     const me = await pool.query('select role from users where email=$1', [
       req.userEmail,
     ]);
-    if ((me.rows[0]?.role || 'dev') !== 'pm')
-      return res.status(403).json({ error: 'pm only' });
+    const role = me.rows[0]?.role || 'dev';
+    if (role !== 'pm' && role !== 'admin')
+      return res.status(403).json({ error: 'pm/admin only' });
     next();
   } catch (e) {
     res.status(500).json({ error: e.message });

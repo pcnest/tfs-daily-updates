@@ -1028,7 +1028,8 @@
             // Hide the Submit section for PMs or when locked; disable select buttons when locked.
             var sc = byId('submitCard');
             if (sc) {
-              if (window.__role === 'pm') sc.classList.add('hidden');
+              var isManager = (window.__role === 'pm' || window.__role === 'admin');
+              if (isManager) sc.classList.add('hidden');
               else sc.classList.toggle('hidden', window.__lockedToday);
             }
             if (window.__lockedToday) setSelectButtonsDisabled(true);
@@ -1508,8 +1509,8 @@
       }
 
       function ensureAssignedDropdownForPM() {
-        var isPM = (window.__role === 'pm');
-        if (!isPM) return;
+        var isManager = (window.__role === 'pm' || window.__role === 'admin');
+        if (!isManager) return;
 
         var original = byId('assigned');
         if (!original) return;
@@ -1698,7 +1699,7 @@
         var url = new URL((API || location.origin) + "/api/tickets");
         if (assigned && assigned.value.trim()) {
           url.searchParams.set("assignedTo", assigned.value.trim());
-          if (window.__role === 'pm') {
+          if (window.__role === 'pm' || window.__role === 'admin') {
             var opt = assigned.options[assigned.selectedIndex];
             var em = opt && opt.getAttribute('data-email');
             var by = (em || assigned.value.trim());
@@ -1898,7 +1899,7 @@
       }
 
       function openSPModal(id) {
-        if (window.__role === 'pm') return;
+        if (window.__role === 'pm' || window.__role === 'admin') return;
         if (window.__lockedToday) {
           setStatus('submitStatus', 'Day is locked. Ask a PM to unlock to change updates.', false);
           return;
@@ -2270,8 +2271,8 @@
               out.push('<span class="pre-meta">' + total + ' item(s)</span>');
               out.push('<span class="badge ' + (user.locked ? 'ok' : 'muted') + '">' + (user.locked ? 'Locked' : 'Open') + '</span>');
 
-              // NEW: show per-dev Unlock beside the status for PM role
-              if (window.__role === 'pm' && user.locked && user.email) {
+              // NEW: show per-dev Unlock beside the status for PM/Admin roles
+              if ((window.__role === 'pm' || window.__role === 'admin') && user.locked && user.email) {
                 out.push(
                   '<button class="secondary small unlock-btn" ' +
                   'data-email="' + esc(user.email) + '" ' +
@@ -2605,7 +2606,7 @@
         // keep a simple priority list (highest risk first for ordering only)
         suggestions = suggestions.slice().sort(function (a, b) { return (b.risk || 0) - (a.risk || 0); });
 
-        var isPM = (window.__role === 'pm');
+        var isPM = (window.__role === 'pm' || window.__role === 'admin');
         var html = '';
         for (var i = 0; i < suggestions.length; i++) {
           var s = suggestions[i];
@@ -2636,7 +2637,7 @@
 
 
       function applySuggestedCode(id, code) {
-        if (window.__role === 'pm') return;
+        if (window.__role === 'pm' || window.__role === 'admin') return;
         if (window.__lockedToday) {
           var st = document.getElementById('submitStatus');
           if (st) { st.textContent = 'Day is locked. Ask a PM to unlock to change updates.'; st.classList.add('err'); }
