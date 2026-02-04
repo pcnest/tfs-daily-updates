@@ -2851,7 +2851,7 @@
               var snapFrom = (windowInfo && windowInfo.from) ? windowInfo.from : '';
               var snapTo = (windowInfo && windowInfo.to) ? windowInfo.to : '';
               var snapshotLink = (snapFrom && snapTo && email)
-                ? ('<button class="secondary small" onclick="openDevSnapshot(\'' + email.replace(/'/g, "\\'") + '\',\'' + snapFrom + '\',\'' + snapTo + '\')"' > View snapshot</button> ')
+                ? ('<button class="secondary small" onclick="openDevSnapshot(\'' + email.replace(/'/g, "\\'") + '\',\'' + snapFrom + '\',\'' + snapTo + '\')">View snapshot</button>')
                 : '';
               var insightBtn = '<button class="secondary" onclick="toggleInsight(\'' + email.replace(/'/g, "\\'") + '\')">View insight</button>';
 
