@@ -2847,7 +2847,7 @@
               var snapshotLink = (snapFrom && snapTo && email)
                 ? ('<a href="' + esc((API || location.origin) + '/api/reports/snapshots?format=html&developer=' + encodeURIComponent(email) + '&from=' + encodeURIComponent(snapFrom) + '&to=' + encodeURIComponent(snapTo)) + '" target="_blank" rel="noopener">View snapshot</a>')
                 : '';
-              var insightBtn = '<button class="secondary" onclick="toggleInsight(\'' + esc(email) + '\')">View insight</button>';
+              var insightBtn = '<button class="secondary" onclick="toggleInsight(\'' + email.replace(/'/g, "\\'") + '\')">View insight</button>';
 
               html += '<tr data-email="' + esc(email) + '">' +
                 '<td>' + esc(rank) + '</td>' +
