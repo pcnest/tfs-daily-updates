@@ -76,7 +76,7 @@ function buildMailTransport() {
     MAIL_MODE,
     ', SMTP_HOST:',
     SMTP_HOST,
-    ')'
+    ')',
   );
   return nodemailer.createTransport({ jsonTransport: true });
 }
@@ -118,7 +118,7 @@ async function resolveRecipientEmail(pool, developer, developerLabel) {
 
   // 2) Try to extract email from the label, if present
   const emailFromLabel = (label.match(
-    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i
+    /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i,
   ) || [])[0];
   if (emailFromLabel) return emailFromLabel.toLowerCase();
 
@@ -214,7 +214,7 @@ async function resolveDeveloperDisplayName(pool, developer, developerLabel) {
         where active=true
           and lower(regexp_replace(alias,'^.*\\\\','')) = $1
         limit 1`,
-      [dev.toLowerCase()]
+      [dev.toLowerCase()],
     );
     if (r.rowCount) {
       if (r.rows[0].display_name) return r.rows[0].display_name;
@@ -227,7 +227,7 @@ async function resolveDeveloperDisplayName(pool, developer, developerLabel) {
     const u = await pool.query(
       `select coalesce(nullif(name,''), '') as name
          from users where lower(email)=$1 limit 1`,
-      [email]
+      [email],
     );
     if (u.rowCount && u.rows[0].name) return u.rows[0].name;
 
@@ -235,7 +235,7 @@ async function resolveDeveloperDisplayName(pool, developer, developerLabel) {
     const t = await pool.query(
       `select coalesce(nullif(display_name,''), '') as display_name
          from tfs_users where lower(email)=$1 limit 1`,
-      [email]
+      [email],
     );
     if (t.rowCount && t.rows[0].display_name) return t.rows[0].display_name;
 
@@ -410,12 +410,12 @@ async function aiTriage(items) {
     return m === 'critical'
       ? 4
       : m === 'high'
-      ? 3
-      : m === 'medium'
-      ? 2
-      : m === 'low'
-      ? 1
-      : 0; // unknown/blank
+        ? 3
+        : m === 'medium'
+          ? 2
+          : m === 'low'
+            ? 1
+            : 0; // unknown/blank
   }
 
   // pull (first) x.y.z pattern as our releaseTag hint
@@ -436,12 +436,12 @@ async function aiTriage(items) {
       priority === 1
         ? 'P1'
         : priority === 2
-        ? 'P2'
-        : priority === 3
-        ? 'P3'
-        : priority === 4
-        ? 'P4'
-        : 'unknown';
+          ? 'P2'
+          : priority === 3
+            ? 'P3'
+            : priority === 4
+              ? 'P4'
+              : 'unknown';
 
     const severity = r.severity || null;
     const severityScore = sevScore(severity);
@@ -514,7 +514,7 @@ ${JSON.stringify(trimmed)}`;
           schema: TriageSchema.schema,
           strict: !!TriageSchema.strict,
         }),
-      })
+      }),
     );
   }
 
@@ -645,7 +645,7 @@ async function todayLocal(pool) {
   // Returns 'YYYY-MM-DD' based on APP_TZ (DST-safe)
   const { rows } = await pool.query(
     `select to_char(timezone($1, now())::date, 'YYYY-MM-DD') as d`,
-    [APP_TZ]
+    [APP_TZ],
   );
   return rows[0].d;
 }
@@ -676,7 +676,7 @@ async function isNoteRequired(pool, code) {
   // DB-driven rule
   const r = await pool.query(
     'SELECT require_note FROM progress_codes WHERE code=$1 AND active=true',
-    [String(code)]
+    [String(code)],
   );
   if (r.rowCount > 0) return !!r.rows[0].require_note;
   // Fallback to legacy prefix rule if code not found
@@ -696,11 +696,11 @@ const blockerKeywords = (
 
 const RISK_STALE_HIGH_DAYS = Math.max(
   0,
-  parseInt(process.env.RISK_STALE_HIGH_DAYS || '4', 10) || 4
+  parseInt(process.env.RISK_STALE_HIGH_DAYS || '4', 10) || 4,
 );
 const RISK_STALE_MEDIUM_DAYS = Math.max(
   0,
-  parseInt(process.env.RISK_STALE_MEDIUM_DAYS || '2', 10) || 2
+  parseInt(process.env.RISK_STALE_MEDIUM_DAYS || '2', 10) || 2,
 );
 
 function daysSince(ts, now = Date.now()) {
@@ -730,10 +730,10 @@ function riskRank(level) {
   return level === 'high'
     ? 3
     : level === 'medium'
-    ? 2
-    : level === 'low'
-    ? 1
-    : 0;
+      ? 2
+      : level === 'low'
+        ? 1
+        : 0;
 }
 
 function maxRisk(a, b) {
@@ -758,7 +758,7 @@ function deriveRiskForUpdate(row) {
   if (isBlocker) {
     level = 'high';
     reasons.push(
-      keyword ? `blocker keyword: ${keyword}` : 'blocker code family'
+      keyword ? `blocker keyword: ${keyword}` : 'blocker code family',
     );
   }
 
@@ -803,7 +803,7 @@ function hashPassword(pw, salt = crypto.randomBytes(16)) {
 function escapeHtml(s) {
   return String(s || '').replace(
     /[&<>"]/g,
-    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c])
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c],
   );
 }
 
@@ -814,7 +814,7 @@ function verifyPassword(pw, encoded) {
   const calc = crypto.scryptSync(pw, salt, 32).toString('base64');
   return crypto.timingSafeEqual(
     Buffer.from(calc, 'base64'),
-    Buffer.from(hashB64, 'base64')
+    Buffer.from(hashB64, 'base64'),
   );
 }
 const newToken = () => crypto.randomBytes(24).toString('hex');
@@ -894,7 +894,7 @@ async function buildSnapshotEmail(req, range, { ai = false } = {}) {
   const friendlyDev = await resolveDeveloperDisplayName(
     pool,
     range.developer,
-    range.developerLabel
+    range.developerLabel,
   );
   const subject = `Developer Snapshot • ${friendlyDev || 'all'} • ${
     range.from
@@ -915,7 +915,7 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
   if (TEST_RECIPIENT) {
     console.warn(
       '[mail] TEST_RECIPIENT in use; overriding To:',
-      TEST_RECIPIENT
+      TEST_RECIPIENT,
     );
     toList.length = 0;
     toList.push(TEST_RECIPIENT);
@@ -967,7 +967,7 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
       const result = await response.json();
       console.log(
         '[sendEmail] Brevo API success, messageId:',
-        result.messageId
+        result.messageId,
       );
 
       return {
@@ -1002,7 +1002,7 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
     const info = await transporter.sendMail(mail);
     console.log(
       '[sendEmail] Email sent successfully, messageId:',
-      info?.messageId
+      info?.messageId,
     );
 
     // Base payload we want to return to callers (UI-friendly)
@@ -1020,8 +1020,8 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
       const buf = Buffer.isBuffer(info.message)
         ? info.message
         : ArrayBuffer.isView(info.message)
-        ? Buffer.from(info.message)
-        : Buffer.from(String(info.message));
+          ? Buffer.from(info.message)
+          : Buffer.from(String(info.message));
 
       const dir = path.join(EXPORT_DIR, 'emails');
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
@@ -1124,7 +1124,7 @@ app.post('/api/auth/signup', async (req, res) => {
   )
   LIMIT 1
   `,
-    [lowerEmail, alias]
+    [lowerEmail, alias],
   );
 
   if (chk.rowCount === 0) {
@@ -1141,7 +1141,7 @@ app.post('/api/auth/signup', async (req, res) => {
    on conflict (email) do update
      set name = excluded.name,
          pw   = excluded.pw`,
-      [lower, displayName, hashPassword(password)]
+      [lower, displayName, hashPassword(password)],
     );
 
     res.json({ status: 'ok' });
@@ -1158,7 +1158,7 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const u = await pool.query(
       'select id, email, name, pw, role from users where email=$1',
-      [lower]
+      [lower],
     );
 
     if (u.rowCount === 0 || !verifyPassword(password, u.rows[0].pw)) {
@@ -1167,7 +1167,7 @@ app.post('/api/auth/login', async (req, res) => {
     const token = newToken();
     await pool.query(
       'insert into sessions(token, email, user_id) values ($1, $2, $3)',
-      [token, lower, u.rows[0].id]
+      [token, lower, u.rows[0].id],
     );
 
     res.json({
@@ -1189,7 +1189,7 @@ async function requireAuth(req, res, next) {
   try {
     const s = await pool.query(
       'select email, user_id from sessions where token=$1',
-      [token]
+      [token],
     );
     if (s.rowCount === 0)
       return res.status(401).json({ error: 'invalid token' });
@@ -1201,7 +1201,7 @@ async function requireAuth(req, res, next) {
     if (!req.userId) {
       const u = await pool.query(
         'select id from users where email=$1 limit 1',
-        [req.userEmail]
+        [req.userEmail],
       );
       req.userId = u.rows[0]?.id || null;
     }
@@ -1230,7 +1230,7 @@ app.use((err, req, res, next) => {
 app.get('/api/me', requireAuth, async (req, res) => {
   const u = await pool.query(
     'select email,name,role from users where email=$1',
-    [req.userEmail]
+    [req.userEmail],
   );
   res.json({
     email: req.userEmail,
@@ -1393,7 +1393,7 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
 
           t.createdBy || '', // $19  << NEW
           seenAt, // $20
-        ]
+        ],
       );
     }
 
@@ -1410,7 +1410,7 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
           `UPDATE tickets
          SET deleted = false, last_seen_at = now()
        WHERE id = ANY($1::text[])`,
-          [idsText]
+          [idsText],
         );
 
         // 2) Use agent's presentIterationPath as authoritative scope (not DB's stale paths)
@@ -1424,7 +1424,7 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
          WHERE lower(iteration_path) = lower($1)
            AND NOT (id = ANY($2::text[]))
          RETURNING id`,
-            [authPath, idsText]
+            [authPath, idsText],
           );
 
           console.log('[sweep]', {
@@ -1444,7 +1444,7 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
          WHERE NOT (id = ANY($1::text[]))
            AND last_seen_at >= now() - interval '3 hours'
          RETURNING id`,
-            [idsText]
+            [idsText],
           );
 
           if (recentResult.rowCount > 0) {
@@ -1464,7 +1464,7 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
             `SELECT DISTINCT iteration_path
          FROM tickets
         WHERE id = ANY($1::text[])`,
-            [idsText]
+            [idsText],
           );
 
           const scopePaths = pathRows
@@ -1477,7 +1477,7 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
            SET deleted = true
          WHERE iteration_path = ANY($1::text[])
            AND NOT (id = ANY($2::text[]))`,
-              [scopePaths, idsText]
+              [scopePaths, idsText],
             );
           }
 
@@ -1488,7 +1488,7 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
            SET deleted = true
          WHERE iteration_path IS NULL
            AND NOT (id = ANY($1::text[]))`,
-              [idsText]
+              [idsText],
             );
           }
 
@@ -1571,7 +1571,7 @@ app.post('/api/iteration/current', requireSyncKey, async (req, res) => {
          set value = excluded.value,
              extra = excluded.extra,
              updated_at = now()`,
-      [name, JSON.stringify({ team, at })]
+      [name, JSON.stringify({ team, at })],
     );
 
     res.json({ ok: true, name });
@@ -1585,7 +1585,7 @@ app.post('/api/iteration/current', requireSyncKey, async (req, res) => {
 app.get('/api/iteration/current', async (_req, res) => {
   try {
     const { rows } = await pool.query(
-      `select value, updated_at, extra from meta where key='current_iteration'`
+      `select value, updated_at, extra from meta where key='current_iteration'`,
     );
     const row = rows[0] || null;
     res.json({
@@ -1710,7 +1710,7 @@ app.get('/api/tickets', async (req, res) => {
     // Match against both the full assigned_to field (may contain display name)
     // and the alias-only portion (after stripping domain prefix)
     clauses.push(
-      `(lower(t.assigned_to) like $${i++} OR lower(regexp_replace(t.assigned_to,'^.*\\\\','')) like $${i++})`
+      `(lower(t.assigned_to) like $${i++} OR lower(regexp_replace(t.assigned_to,'^.*\\\\','')) like $${i++})`,
     );
     const normalized = normId(assignedTo);
     params.push(`%${assignedTo.toLowerCase().trim()}%`, `%${normalized}%`);
@@ -1766,7 +1766,7 @@ app.get('/api/tickets', async (req, res) => {
         const chk = await pool.query(
           `select lower(email) as email from tfs_users
             where active=true and lower(email)=$1 limit 1`,
-          [ub]
+          [ub],
         );
         updatesEmail = chk.rowCount ? chk.rows[0].email : ub;
       } else {
@@ -1781,7 +1781,7 @@ app.get('/api/tickets', async (req, res) => {
             where active=true
               and lower(regexp_replace(alias,'^.*\\\\','')) = $1
             limit 1`,
-          [aliasOnly]
+          [aliasOnly],
         );
         const tfsRow = tfs.rows[0];
         if (tfsRow?.email) {
@@ -1793,7 +1793,7 @@ app.get('/api/tickets', async (req, res) => {
                from users
               where lower(name) = $1
               limit 1`,
-            [tfsRow.display_name]
+            [tfsRow.display_name],
           );
           if (byName.rowCount) updatesEmail = byName.rows[0].email;
         }
@@ -1805,7 +1805,7 @@ app.get('/api/tickets', async (req, res) => {
                from users
               where lower(split_part(email,'@',1)) = $1
               limit 1`,
-            [aliasOnly]
+            [aliasOnly],
           );
           if (byLocal.rowCount) updatesEmail = byLocal.rows[0].email;
         }
@@ -1816,7 +1816,7 @@ app.get('/api/tickets', async (req, res) => {
     if (updatesEmail && updatesEmail !== requester) {
       const roleRow = await pool.query(
         'select role from users where email=$1 limit 1',
-        [requester]
+        [requester],
       );
       const isPM = roleRow.rows[0]?.role === 'pm';
       if (!isPM) updatesEmail = requester;
@@ -1843,8 +1843,8 @@ app.get('/api/tickets', async (req, res) => {
       updatesEmail && updatesAlias
         ? `email = ${emailParam} OR split_part(email,'@',1) = ${aliasParam}`
         : updatesEmail
-        ? `email = ${emailParam}`
-        : `split_part(email,'@',1) = ${aliasParam}`;
+          ? `email = ${emailParam}`
+          : `split_part(email,'@',1) = ${aliasParam}`;
 
     sql = `
       select
@@ -1902,7 +1902,7 @@ app.post('/api/progress', requireAuth, async (req, res) => {
 
   const locked = await pool.query(
     'select 1 from progress_locks where email=$1 and date=$2',
-    [req.userEmail, date]
+    [req.userEmail, date],
   );
   // Always block changes after locking, regardless of env flags.
   if (locked.rowCount)
@@ -1932,7 +1932,7 @@ app.post('/api/progress', requireAuth, async (req, res) => {
       riskLevel || 'low', // $6
       impactArea || '', // $7
       date, // $8
-    ]
+    ],
   );
   res.json({ status: 'ok' });
 });
@@ -1960,7 +1960,7 @@ app.post('/api/updates/lock', requireAuth, async (req, res) => {
     `insert into progress_locks(email, user_id, date, at)
    values ($1, $2, $3, now())
    on conflict (email, date) do nothing`,
-    [req.userEmail, req.userId, date]
+    [req.userEmail, req.userId, date],
   );
 
   res.json({ status: 'ok', locked: true, date });
@@ -1990,13 +1990,13 @@ app.get('/api/updates/lock', requireAuth, async (req, res) => {
 
   const r = await pool.query(
     `select 1 from progress_locks where email=$1 and date=$2`,
-    [req.userEmail, date]
+    [req.userEmail, date],
   );
 
   // Also return the count of progress updates for today
   const progressCount = await pool.query(
     `select count(*) as count from progress_updates where email=$1 and date=$2`,
-    [req.userEmail, date]
+    [req.userEmail, date],
   );
 
   res.json({
@@ -2014,9 +2014,7 @@ app.get('/api/updates/locks/range', requireAuth, async (req, res) => {
     const to = parseDateParam(req.query.to, today);
 
     const MAX_DAYS = 90;
-    const spanDays = Math.floor(
-      (Date.parse(to) - Date.parse(from)) / 86400000
-    );
+    const spanDays = Math.floor((Date.parse(to) - Date.parse(from)) / 86400000);
     if (!Number.isFinite(spanDays) || spanDays < 0 || spanDays > MAX_DAYS) {
       return res
         .status(400)
@@ -2027,7 +2025,7 @@ app.get('/api/updates/locks/range', requireAuth, async (req, res) => {
       `select date from progress_locks
        where email=$1 and date between $2::date and $3::date
        order by date`,
-      [req.userEmail, from, to]
+      [req.userEmail, from, to],
     );
 
     const dates = r.rows.map((row) => {
@@ -2062,11 +2060,11 @@ app.get('/api/updates/today', async (_req, res) => {
      from progress_updates u
      left join tickets t on t.id = u.ticket_id
      where u.date = $1`,
-    [date]
+    [date],
   );
   const locks = await pool.query(
     `select email from progress_locks where date=$1`,
-    [date]
+    [date],
   );
 
   const lockedSet = new Set(locks.rows.map((x) => x.email));
@@ -2098,7 +2096,7 @@ app.get('/api/updates/today', async (_req, res) => {
       `select lower(email) as email, coalesce(nullif(name,''), '') as name
        from users
        where lower(email) = any($1)`,
-      [emails.map((e) => e.toLowerCase())]
+      [emails.map((e) => e.toLowerCase())],
     );
     names = new Map(rNames.rows.map((x) => [x.email, x.name || '']));
   }
@@ -2110,7 +2108,7 @@ app.get('/api/updates/today', async (_req, res) => {
         name: nm,
         locked: u.locked,
         tickets: Array.from(u.tickets.values()).sort((a, b) =>
-          String(a.ticketId).localeCompare(String(b.ticketId))
+          String(a.ticketId).localeCompare(String(b.ticketId)),
         ),
       };
     })
@@ -2119,7 +2117,7 @@ app.get('/api/updates/today', async (_req, res) => {
       name: u.name,
       locked: u.locked,
       tickets: Array.from(u.tickets.values()).sort((a, b) =>
-        String(a.ticketId).localeCompare(String(b.ticketId))
+        String(a.ticketId).localeCompare(String(b.ticketId)),
       ),
       ...u,
     }))
@@ -2151,7 +2149,7 @@ app.get('/api/updates/today/ai', requireAuth, async (req, res) => {
        from progress_updates u
        left join tickets t on t.id = u.ticket_id
        where u.date = $1`,
-      [date]
+      [date],
     );
 
     const latest = new Map();
@@ -2195,7 +2193,7 @@ app.get('/api/exports/status', async (req, res) => {
   try {
     // 1) last tfs_users sync
     const syncRow = await pool.query(
-      `select max(synced_at) as last_sync from tfs_users`
+      `select max(synced_at) as last_sync from tfs_users`,
     );
 
     // 2) progress window & counts
@@ -2214,7 +2212,7 @@ app.get('/api/exports/status', async (req, res) => {
   count(*) as rows_total
 from pu
       `,
-      [APP_TZ]
+      [APP_TZ],
     );
 
     const lastSync = syncRow.rows[0]?.last_sync || null;
@@ -2392,7 +2390,7 @@ app.get('/api/updates/range.tsv', async (req, res) => {
     'Content-Disposition',
     `attachment; filename="progress_${q.from}_to_${q.to}${
       safeDev ? '_' + safeDev : ''
-    }.tsv"`
+    }.tsv"`,
   );
   res.send(out);
 });
@@ -2448,7 +2446,7 @@ app.get(
          where active=true
            and lower(regexp_replace(alias,'^.*\\\\','')) = $1
          limit 1`,
-            [candidate]
+            [candidate],
           );
           devEmail = r.rowCount ? r.rows[0].email : null;
           devLocal = candidate;
@@ -2473,7 +2471,7 @@ app.get(
       // Cap window at 90 days to avoid runaway PDFs
       const MAX_DAYS = 90;
       const spanDays = Math.floor(
-        (Date.parse(toISO) - Date.parse(fromISO)) / 86400000
+        (Date.parse(toISO) - Date.parse(fromISO)) / 86400000,
       );
       if (!Number.isFinite(spanDays) || spanDays < 0 || spanDays > MAX_DAYS) {
         return res
@@ -2694,7 +2692,7 @@ app.get(
           return `${longMonth(fd)} ${fd.getDate()}, ${fd.getFullYear()}`;
 
         return `${month(fd)} ${fd.getDate()} – ${month(
-          td
+          td,
         )} ${td.getDate()}, ${td.getFullYear()}`;
       }
 
@@ -2722,7 +2720,7 @@ app.get(
             console.warn(
               '[snapshots][ai] insight error for',
               r.email,
-              e.message
+              e.message,
             );
           }
         }
@@ -2768,7 +2766,7 @@ app.get(
           0;
         const totalHours = famKeys.reduce(
           (s, k) => s + (v(families, k).hours_sum || 0),
-          0
+          0,
         );
         const weightedAvg = totalTransitions
           ? totalHours / totalTransitions
@@ -2800,14 +2798,14 @@ app.get(
           I && I.risk && I.risk.stall_why
             ? I.risk.stall_why
             : `Blocker/delay footprint ${blockers} (600/800) and elevated 200_xx avg of ${h(
-                v(families, '200_xx').hours_avg
+                v(families, '200_xx').hours_avg,
               )}h.`;
 
         const slipWhy =
           I && I.risk && I.risk.slip_why
             ? I.risk.slip_why
             : `Starts ${starts} vs finishes ${finishes}; completion ${pct(
-                completionPct
+                completionPct,
               )}.`;
         const list = (arr) =>
           Array.isArray(arr) && arr.length
@@ -2828,10 +2826,10 @@ app.get(
           const takeKpiFor = (fa) => {
             if (!kpisPool.length) return '';
             const hay = new Set(
-              toks(`${fa.focus} ${fa.why || ''} ${fa.action || ''}`)
+              toks(`${fa.focus} ${fa.why || ''} ${fa.action || ''}`),
             );
             let idx = kpisPool.findIndex((k) =>
-              toks(k).some((w) => hay.has(w))
+              toks(k).some((w) => hay.has(w)),
             );
             if (idx < 0) idx = 0;
             return kpisPool.splice(idx, 1)[0] || '';
@@ -2929,8 +2927,8 @@ app.get(
         if (I?.focus_areas?.length) {
           pool.push(
             ...I.focus_areas.map(
-              (f) => `${f.focus} ${f.why || ''} ${f.action || ''}`
-            )
+              (f) => `${f.focus} ${f.why || ''} ${f.action || ''}`,
+            ),
           );
         }
         if (I?.risk) {
@@ -2953,30 +2951,30 @@ app.get(
         [/finish|500_xx|throughput|complete|conversion|delivery/],
         finishes >= starts
           ? 'throughput kept pace'
-          : 'consider more pushes to 500_xx'
+          : 'consider more pushes to 500_xx',
       );
       const tail2 = pickInsight(
         [/600|800|block|delay|stall|unblock|dependency/],
-        'target reduction'
+        'target reduction',
       );
       const fallbackRT = `${
         reviews > 0 ? 'Code reviews visible' : 'Surface PR reviews (400_xx)'
       }; Testing ${testing > 0 ? 'active' : 'light'}`;
       const tail3 = pickInsight(
         [/review|400_xx|\bpr\b|testing|qa|300_xx/],
-        fallbackRT
+        fallbackRT,
       );
       const tail4 = pickInsight(
         [/200|wip|in[- ]progress|flow|context|multitask|batch|queue/],
-        'keep WIP small to improve flow'
+        'keep WIP small to improve flow',
       );
       const tail5 = pickInsight(
         [/cycle|lead[- ]?time|avg|aging|wait|stall|slip|flow time|latency/],
         I?.risk
           ? `risk — stall ${escapeHtml(I.risk.stall_risk)}, slip ${escapeHtml(
-              I.risk.slip_risk
+              I.risk.slip_risk,
             )}`
-          : 'watch cycle-time averages'
+          : 'watch cycle-time averages',
       );
       // If AI is active (I exists) -> overall; else -> per-family 200/300
       const cycleLine = I
@@ -3062,18 +3060,18 @@ app.get(
       I && I.risk
         ? `<ul>
             <li><strong>Stall:</strong> ${escapeHtml(
-              I.risk.stall_risk
+              I.risk.stall_risk,
             )} — <span class="muted">${escapeHtml(stallWhy)}</span></li>
             <li><strong>Slip:</strong> ${escapeHtml(
-              I.risk.slip_risk
+              I.risk.slip_risk,
             )} — <span class="muted">${escapeHtml(slipWhy)}</span></li>
            </ul>`
         : `<ul>
             <li><strong>Stall:</strong> — <span class="muted">${escapeHtml(
-              stallWhy
+              stallWhy,
             )}</span></li>
             <li><strong>Slip:</strong> — <span class="muted">${escapeHtml(
-              slipWhy
+              slipWhy,
             )}</span></li>
            </ul>`
     }
@@ -3089,7 +3087,7 @@ app.get(
       if (emails.length) {
         const { rows: users } = await pool.query(
           `select lower(email) as email, coalesce(nullif(name,''), '') as name from users where lower(email) = any($1)`,
-          [emails]
+          [emails],
         );
         users.forEach((u) => namesByEmail.set(u.email, u.name || ''));
       }
@@ -3105,7 +3103,7 @@ app.get(
           families: r.families || {},
           insights:
             insightsByEmail.get(String(r.email || '').toLowerCase()) || null, // NEW
-        })
+        }),
       );
 
       if (format === 'html') {
@@ -3160,14 +3158,14 @@ app.get(
       const buf = Buffer.isBuffer(pdfRaw)
         ? pdfRaw
         : ArrayBuffer.isView(pdfRaw)
-        ? Buffer.from(pdfRaw)
-        : Buffer.from(pdfRaw ?? []);
+          ? Buffer.from(pdfRaw)
+          : Buffer.from(pdfRaw ?? []);
 
       // Signature + header check
       if (buf.length < 5 || buf.toString('ascii', 0, 5) !== '%PDF-') {
         console.error(
           '[snapshots] invalid PDF payload, first bytes:',
-          Array.from(buf.slice(0, 16)).join(',')
+          Array.from(buf.slice(0, 16)).join(','),
         );
         return res.status(500).json({ error: 'pdf_generation_failed' });
       }
@@ -3175,7 +3173,7 @@ app.get(
       res.setHeader('Content-Type', 'application/pdf');
       res.setHeader(
         'Content-Disposition',
-        `attachment; filename="Developer-Snapshots_${fileDevPart}${fromISO}_to_${toISO}.pdf"`
+        `attachment; filename="Developer-Snapshots_${fileDevPart}${fromISO}_to_${toISO}.pdf"`,
       );
 
       res.setHeader('Cache-Control', 'no-store, no-transform');
@@ -3186,7 +3184,7 @@ app.get(
       console.error('[snapshots] error:', e);
       res.status(500).json({ error: 'snapshot_failed', detail: String(e) });
     }
-  }
+  },
 );
 
 // --- Helper: derive last N iterations from current_iteration path ------------
@@ -3223,7 +3221,11 @@ function countWeekdays(fromISO, toISO) {
 }
 
 // --- PM: Top Developers ranking ---------------------------------------------
-async function computeTopDevs({ mode = 'iterations', windowCount = 4, stallHours = 12 } = {}) {
+async function computeTopDevs({
+  mode = 'iterations',
+  windowCount = 4,
+  stallHours = 12,
+} = {}) {
   const today = todayISO();
   const MAX_DAYS = 90;
   let fromISO = addDays(today, -27); // default 28-day window
@@ -3232,7 +3234,7 @@ async function computeTopDevs({ mode = 'iterations', windowCount = 4, stallHours
 
   if (mode === 'iterations') {
     const currIter = await pool.query(
-      `select value from meta where key='current_iteration' limit 1`
+      `select value from meta where key='current_iteration' limit 1`,
     );
     const currPath = currIter.rows[0]?.value || '';
     const derived = deriveIterationPaths(currPath, windowCount);
@@ -3244,7 +3246,7 @@ async function computeTopDevs({ mode = 'iterations', windowCount = 4, stallHours
   }
 
   const spanDays = Math.floor(
-    (Date.parse(today) - Date.parse(fromISO)) / 86400000
+    (Date.parse(today) - Date.parse(fromISO)) / 86400000,
   );
   if (!Number.isFinite(spanDays) || spanDays < 0 || spanDays > MAX_DAYS) {
     const err = new Error(`Range too large (max ${MAX_DAYS} days)`);
@@ -3422,13 +3424,10 @@ async function computeTopDevs({ mode = 'iterations', windowCount = 4, stallHours
   const cycleValue = (r) => {
     const fam = r.families || {};
     const keys = ['200_xx', '300_xx', '400_xx'];
-    const sum = keys.reduce(
-      (s, k) => s + (Number(fam[k]?.hours_sum) || 0),
-      0
-    );
+    const sum = keys.reduce((s, k) => s + (Number(fam[k]?.hours_sum) || 0), 0);
     const trans = keys.reduce(
       (s, k) => s + (Number(fam[k]?.transitions) || 0),
-      0
+      0,
     );
     return trans > 0 ? sum / trans : null;
   };
@@ -3455,7 +3454,9 @@ async function computeTopDevs({ mode = 'iterations', windowCount = 4, stallHours
   const workingDays = countWeekdays(fromISO, today) || 0;
 
   const scored = rows.map((r) => {
-    const email = String(r.email || '').trim();
+    const email = String(r.email || '')
+      .trim()
+      .toLowerCase();
     const families = r.families || {};
     const finished = Number(r.completed_tickets) || 0;
     const ticketVolume = Number(r.ticket_volume) || 0;
@@ -3467,8 +3468,16 @@ async function computeTopDevs({ mode = 'iterations', windowCount = 4, stallHours
     const z = (val, mean, std) =>
       std > 0 && val != null ? (val - mean) / std : 0;
 
-    const zThroughput = z(finished, stats.throughput.mean, stats.throughput.std);
-    const zCompletion = z(completionPct, stats.completion.mean, stats.completion.std);
+    const zThroughput = z(
+      finished,
+      stats.throughput.mean,
+      stats.throughput.std,
+    );
+    const zCompletion = z(
+      completionPct,
+      stats.completion.mean,
+      stats.completion.std,
+    );
     const zCycle =
       cycleTime != null ? -z(cycleTime, stats.cycle.mean, stats.cycle.std) : 0;
     const zBlocker = -z(blockerRate, stats.blocker.mean, stats.blocker.std);
@@ -3514,7 +3523,9 @@ async function computeTopDevs({ mode = 'iterations', windowCount = 4, stallHours
   const eligibleScored = scored.filter((r) => !r.lowSample);
   eligibleScored.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
-    return (a.metrics.consistency_stddev || 0) - (b.metrics.consistency_stddev || 0);
+    return (
+      (a.metrics.consistency_stddev || 0) - (b.metrics.consistency_stddev || 0)
+    );
   });
 
   const result = eligibleScored.concat(scored.filter((r) => r.lowSample));
@@ -3565,7 +3576,7 @@ app.get(
         detail: String(e.message || e),
       });
     }
-  }
+  },
 );
 
 // PM: Insight per developer (plain-language, AI-backed with fallback)
@@ -3576,7 +3587,9 @@ app.get(
   async (req, res) => {
     try {
       const mode = (req.query.mode || 'iterations').toLowerCase();
-      const developer = String(req.query.developer || '').trim().toLowerCase();
+      const developer = String(req.query.developer || '')
+        .trim()
+        .toLowerCase();
       const windowCount = Math.max(parseInt(req.query.window, 10) || 4, 1);
       const stallHours = parseInt(req.query.stallHours, 10) || 12;
 
@@ -3585,11 +3598,19 @@ app.get(
 
       const computed = await computeTopDevs({ mode, windowCount, stallHours });
       const item = (computed.items || []).find(
-        (r) => String(r.email || '').trim().toLowerCase() === developer
+        (r) =>
+          String(r.email || '')
+            .trim()
+            .toLowerCase() === developer,
       );
 
       if (!item)
-        return res.status(404).json({ error: 'developer_not_found', windowUsed: computed.windowUsed });
+        return res
+          .status(404)
+          .json({
+            error: 'developer_not_found',
+            windowUsed: computed.windowUsed,
+          });
 
       const coverage = item.metrics.update_coverage;
       const lowCoverage = coverage < 0.5;
@@ -3597,17 +3618,33 @@ app.get(
       const fallbackInsight = () => {
         const lines = [];
         if (item.lowSample) {
-          lines.push('Not ranked because fewer than 3 finished items in this window; treat as informational.');
+          lines.push(
+            'Not ranked because fewer than 3 finished items in this window; treat as informational.',
+          );
         } else {
-          lines.push('Overall: Score relative to team average; higher is better.');
+          lines.push(
+            'Overall: Score relative to team average; higher is better.',
+          );
         }
-        lines.push(`Throughput: ${item.metrics.throughput} finished items; completion ${item.metrics.completion_pct.toFixed(1)}%.`);
+        lines.push(
+          `Throughput: ${item.metrics.throughput} finished items; completion ${item.metrics.completion_pct.toFixed(1)}%.`,
+        );
         if (item.metrics.cycle_time_hours != null)
-          lines.push(`Speed: Typical cycle time about ${item.metrics.cycle_time_hours.toFixed(1)} hours.`);
-        lines.push(`Blockers: Blocker rate ${item.metrics.blocker_rate.toFixed(3)} (lower is better).`);
-        lines.push(`Consistency: Daily finish variability σ = ${item.metrics.consistency_stddev.toFixed(2)} (lower = steadier).`);
-        lines.push(`Update coverage: ${coverage.toFixed(2)} updates/weekday${lowCoverage ? ' (low — data may understate activity)' : ''}.`);
-        lines.push('Next step: Focus on clearing blockers early and finishing a higher share of started items.');
+          lines.push(
+            `Speed: Typical cycle time about ${item.metrics.cycle_time_hours.toFixed(1)} hours.`,
+          );
+        lines.push(
+          `Blockers: Blocker rate ${item.metrics.blocker_rate.toFixed(3)} (lower is better).`,
+        );
+        lines.push(
+          `Consistency: Daily finish variability σ = ${item.metrics.consistency_stddev.toFixed(2)} (lower = steadier).`,
+        );
+        lines.push(
+          `Update coverage: ${coverage.toFixed(2)} updates/weekday${lowCoverage ? ' (low — data may understate activity)' : ''}.`,
+        );
+        lines.push(
+          'Next step: Focus on clearing blockers early and finishing a higher share of started items.',
+        );
         return lines;
       };
 
@@ -3639,7 +3676,11 @@ app.get(
           const resp = await openai.chat.completions.create({
             model: OPENAI_MODEL,
             messages: [
-              { role: 'system', content: 'You write concise status bullets for managers. 4-7 bullets max.' },
+              {
+                role: 'system',
+                content:
+                  'You write concise status bullets for managers. 4-7 bullets max.',
+              },
               { role: 'user', content: prompt },
             ],
             max_tokens: 250,
@@ -3673,7 +3714,7 @@ app.get(
         detail: String(e.message || e),
       });
     }
-  }
+  },
 );
 
 // Email Developer Progress Snapshot
@@ -3701,7 +3742,7 @@ app.post(
       const { subject, html, attachments } = await buildSnapshotEmail(
         req,
         { from, to, developer, developerLabel },
-        { ai: String(ai) === '1' }
+        { ai: String(ai) === '1' },
       );
       console.log('[snapshot/email] Email content built successfully');
 
@@ -3709,7 +3750,7 @@ app.post(
       const toEmail = await resolveRecipientEmail(
         pool,
         developer,
-        developerLabel
+        developerLabel,
       );
       const toList = toEmail ? [toEmail] : []; // no-op if "all"
       // Merge CCs from the request and from env; dedupe
@@ -3740,7 +3781,7 @@ app.post(
       console.error('[snapshot/email] Error:', e);
       res.status(500).json({ error: String(e.message || e) });
     }
-  }
+  },
 );
 
 // --- blockers radar
@@ -3754,7 +3795,7 @@ app.get('/api/updates/blockers', async (_req, res) => {
      from progress_updates u
      left join tickets t on t.id = u.ticket_id
      where u.date = $1`,
-    [date]
+    [date],
   );
   // const isBlockerCode = (c) => c && /^(600|700|800)_/.test(String(c));
   const hits = [];
@@ -3971,7 +4012,7 @@ const SNAPSHOT_PROMPT_VERSION = 'snapshot_v3_rag_delta_2025-03-08';
 const SNAPSHOT_EVIDENCE_MAX_TICKETS = 12;
 const SNAPSHOT_RUN_RETENTION = Math.max(
   0,
-  parseInt(process.env.SNAPSHOT_RUN_RETENTION || '50', 10) || 50
+  parseInt(process.env.SNAPSHOT_RUN_RETENTION || '50', 10) || 50,
 );
 
 // Minimal helper to call OpenAI for one developer's metrics + evidence
@@ -4003,7 +4044,9 @@ async function aiSnapshotInsightsForDev({
   const metricsSummary = summarizeSnapshotMetrics(metrics, overallAvg);
 
   const emailKey = String(devEmail || metrics.email || '').toLowerCase();
-  const localKey = String(devLocal || toLocalPart(emailKey) || '').toLowerCase();
+  const localKey = String(
+    devLocal || toLocalPart(emailKey) || '',
+  ).toLowerCase();
   let evidence = null;
   let priorInsights = null;
   let deltaSummary = null;
@@ -4025,7 +4068,7 @@ async function aiSnapshotInsightsForDev({
       deltaSummary = buildSnapshotDelta(
         metricsSummary,
         prevMetrics,
-        priorPeriod.period_label
+        priorPeriod.period_label,
       );
     }
   }
@@ -4118,7 +4161,7 @@ ${JSON.stringify({
           JSON.stringify(metricsSummary || {}),
           JSON.stringify(evidence || {}),
           JSON.stringify(js || {}),
-        ]
+        ],
       );
       if (SNAPSHOT_RUN_RETENTION > 0) {
         await pool.query(
@@ -4131,7 +4174,7 @@ ${JSON.stringify({
            )
            delete from ai_snapshot_runs
             where id in (select id from to_delete)`,
-          [emailKey, SNAPSHOT_RUN_RETENTION]
+          [emailKey, SNAPSHOT_RUN_RETENTION],
         );
       }
     } catch (e) {
@@ -4220,7 +4263,9 @@ function topKeywordHits(notes, keywords, max = 6) {
   const freq = new Map();
   const pool = (notes || []).map((n) => String(n || '').toLowerCase());
   for (const raw of keywords || []) {
-    const kw = String(raw || '').toLowerCase().trim();
+    const kw = String(raw || '')
+      .toLowerCase()
+      .trim();
     if (!kw) continue;
     let count = 0;
     for (const note of pool) {
@@ -4271,9 +4316,15 @@ function buildSnapshotDelta(current, previous, priorLabel) {
     const c = current.families[k] || {};
     const p = (previous.families || {})[k] || {};
     const tDelta = (Number(c.transitions) || 0) - (Number(p.transitions) || 0);
-    const hDelta = round2((Number(c.hours_avg) || 0) - (Number(p.hours_avg) || 0));
+    const hDelta = round2(
+      (Number(c.hours_avg) || 0) - (Number(p.hours_avg) || 0),
+    );
     if (tDelta !== 0 || Math.abs(hDelta) >= 0.25) {
-      famChanges.push({ family: k, transitions_delta: tDelta, hours_avg_delta: hDelta });
+      famChanges.push({
+        family: k,
+        transitions_delta: tDelta,
+        hours_avg_delta: hDelta,
+      });
     }
   }
   famChanges.sort((a, b) => {
@@ -4283,11 +4334,19 @@ function buildSnapshotDelta(current, previous, priorLabel) {
   });
   const delta = {
     prior_period_label: priorLabel || '',
-    ticket_volume_delta: (Number(current.ticket_volume) || 0) - (Number(previous.ticket_volume) || 0),
-    completion_pct_delta: round1((Number(current.completion_pct) || 0) - (Number(previous.completion_pct) || 0)),
-    stalled_tickets_delta: (Number(current.stalled_tickets) || 0) - (Number(previous.stalled_tickets) || 0),
+    ticket_volume_delta:
+      (Number(current.ticket_volume) || 0) -
+      (Number(previous.ticket_volume) || 0),
+    completion_pct_delta: round1(
+      (Number(current.completion_pct) || 0) -
+        (Number(previous.completion_pct) || 0),
+    ),
+    stalled_tickets_delta:
+      (Number(current.stalled_tickets) || 0) -
+      (Number(previous.stalled_tickets) || 0),
     overall_avg_cycle_time_delta: round2(
-      (Number(current.overall_avg_cycle_time) || 0) - (Number(previous.overall_avg_cycle_time) || 0)
+      (Number(current.overall_avg_cycle_time) || 0) -
+        (Number(previous.overall_avg_cycle_time) || 0),
     ),
     family_deltas: famChanges.slice(0, 6),
   };
@@ -4376,11 +4435,11 @@ function validateSnapshotInsights(output, evidence) {
 
   if (Array.isArray(evidence?.top_tickets) && evidence.top_tickets.length) {
     const allowedIds = new Set(
-      evidence.top_tickets.map((t) => String(t.id || '')).filter(Boolean)
+      evidence.top_tickets.map((t) => String(t.id || '')).filter(Boolean),
     );
     const ids = extractSnapshotIds(text);
     const unknown = ids.filter(
-      (id) => !allowedIds.has(id) && !isLikelyYear(id)
+      (id) => !allowedIds.has(id) && !isLikelyYear(id),
     );
     if (unknown.length) {
       return { ok: false, reason: 'unknown_ticket_id', detail: unknown[0] };
@@ -4412,35 +4471,38 @@ function buildSnapshotFallbackInsights({ metrics, evidence }) {
   const key_findings = [];
   key_findings.push(
     `Starts vs finishes: ${starts} vs ${finishes}; completion ${fmtPct(
-      completionPct
-    )}.`
+      completionPct,
+    )}.`,
   );
   key_findings.push(
-    `Blocked/delays footprint: ${blockers} transitions (600/800); stalled tickets ${stalled}.`
+    `Blocked/delays footprint: ${blockers} transitions (600/800); stalled tickets ${stalled}.`,
   );
   key_findings.push(
     overallAvg > 0
       ? `Cycle-time signals: overall avg ${fmtH(overallAvg)}; 200_xx avg ${fmtH(
-          avg200
+          avg200,
         )}.`
-      : 'Cycle-time signals: insufficient timing data in this window.'
+      : 'Cycle-time signals: insufficient timing data in this window.',
   );
   key_findings.push(
-    `Reviews/testing: ${reviews} review transitions, ${testing} testing transitions.`
+    `Reviews/testing: ${reviews} review transitions, ${testing} testing transitions.`,
   );
   if (inprog > 0) {
     key_findings.push(`WIP/flow: ${inprog} in-progress (200_xx) transitions.`);
   }
 
   const strengths = [];
-  if (finishes > 0) strengths.push(`Completions recorded (${finishes} in 500_xx).`);
+  if (finishes > 0)
+    strengths.push(`Completions recorded (${finishes} in 500_xx).`);
   if (reviews + testing > 0)
-    strengths.push(`Quality loop visible (${testing} testing, ${reviews} review).`);
+    strengths.push(
+      `Quality loop visible (${testing} testing, ${reviews} review).`,
+    );
   if (blockers === 0)
     strengths.push('No blocker transitions recorded (600/800).');
   if (!strengths.length) {
     strengths.push(
-      `Updates logged across ${num(metrics?.ticket_volume)} tickets.`
+      `Updates logged across ${num(metrics?.ticket_volume)} tickets.`,
     );
   }
 
@@ -4453,7 +4515,8 @@ function buildSnapshotFallbackInsights({ metrics, evidence }) {
     focus_areas.push({
       focus: 'Unblock delays faster',
       why,
-      action: 'Run daily unblock check and chase owners; reduce 600/800 transitions.',
+      action:
+        'Run daily unblock check and chase owners; reduce 600/800 transitions.',
     });
   }
   if (avg200 >= 8 || inprog > finishes) {
@@ -4485,10 +4548,14 @@ function buildSnapshotFallbackInsights({ metrics, evidence }) {
     suggested_kpis.push(`Lower 200_xx avg cycle time to <= ${target}h.`);
   }
   if (reviews + testing === 0) {
-    suggested_kpis.push('Add at least 1 review/testing transition per completed ticket.');
+    suggested_kpis.push(
+      'Add at least 1 review/testing transition per completed ticket.',
+    );
   }
   if (!suggested_kpis.length) {
-    suggested_kpis.push(`Increase completion rate to ${Math.min(90, completionPct + 15).toFixed(1)}%.`);
+    suggested_kpis.push(
+      `Increase completion rate to ${Math.min(90, completionPct + 15).toFixed(1)}%.`,
+    );
   }
 
   let stall_risk = 'low';
@@ -4512,14 +4579,18 @@ function buildSnapshotFallbackInsights({ metrics, evidence }) {
   const support_from_team_leads = [];
   if (blockers > 0 || stalled >= 2) {
     support_from_team_leads.push(
-      'Run 15-min unblock huddles and assign owners for stalled tickets.'
+      'Run 15-min unblock huddles and assign owners for stalled tickets.',
     );
   }
   if (reviews + testing === 0) {
-    support_from_team_leads.push('Require PR/review links in updates and track 400_xx activity.');
+    support_from_team_leads.push(
+      'Require PR/review links in updates and track 400_xx activity.',
+    );
   }
   if (!support_from_team_leads.length) {
-    support_from_team_leads.push('Maintain a weekly cadence to review WIP and blockers.');
+    support_from_team_leads.push(
+      'Maintain a weekly cadence to review WIP and blockers.',
+    );
   }
 
   return {
@@ -4539,9 +4610,7 @@ function buildSnapshotFallbackInsights({ metrics, evidence }) {
 function trimSnapshotInsights(output) {
   if (!output) return null;
   const clampArr = (arr, max) =>
-    Array.isArray(arr)
-      ? arr.slice(0, max).map((s) => clampText(s, 180))
-      : [];
+    Array.isArray(arr) ? arr.slice(0, max).map((s) => clampText(s, 180)) : [];
   const focus =
     Array.isArray(output.focus_areas) && output.focus_areas.length
       ? output.focus_areas.slice(0, 3).map((f) => ({
@@ -4577,7 +4646,7 @@ async function loadSnapshotHistory(devEmail, fromISO) {
       where lower(dev_email) = $1
       order by created_at desc
       limit 1`,
-    [email]
+    [email],
   );
   const periodRes = await pool.query(
     `select period_start, period_end, period_label, metrics_summary, ai_output
@@ -4586,7 +4655,7 @@ async function loadSnapshotHistory(devEmail, fromISO) {
         and period_end < $2::date
       order by period_end desc
       limit 1`,
-    [email, fromISO]
+    [email, fromISO],
   );
   return {
     priorAny: anyRes.rowCount ? anyRes.rows[0] : null,
@@ -4605,7 +4674,12 @@ async function buildSnapshotEvidence({
   if (!email && !local) {
     return {
       window: { from: fromISO, to: toISO },
-      totals: { update_count: 0, ticket_count: 0, blocker_updates: 0, high_risk_updates: 0 },
+      totals: {
+        update_count: 0,
+        ticket_count: 0,
+        blocker_updates: 0,
+        high_risk_updates: 0,
+      },
       blocker_keywords: [],
       top_terms: [],
       top_tickets: [],
@@ -4671,11 +4745,15 @@ async function buildSnapshotEvidence({
     const note = clampText(scrub(r.note || ''), 240);
     if (note) notes.push(note);
     const lastAt =
-      r.at && typeof r.at.toISOString === 'function' ? r.at.toISOString() : String(r.at || '');
+      r.at && typeof r.at.toISOString === 'function'
+        ? r.at.toISOString()
+        : String(r.at || '');
     const stalenessDays = daysSince(r.at);
     const code = clampText(r.code || '', 32);
     const noteLc = note.toLowerCase();
-    const blockerHit = blockerKeywords.some((k) => k && noteLc.includes(k.toLowerCase()));
+    const blockerHit = blockerKeywords.some(
+      (k) => k && noteLc.includes(k.toLowerCase()),
+    );
     return {
       id: String(r.ticketId || ''),
       title: clampText(r.title || '', 120),
@@ -4693,7 +4771,9 @@ async function buildSnapshotEvidence({
     };
   });
 
-  const staleTicketCount = tickets.filter((t) => t.staleness_days != null && t.staleness_days >= 7).length;
+  const staleTicketCount = tickets.filter(
+    (t) => t.staleness_days != null && t.staleness_days >= 7,
+  ).length;
   const topTerms = topTermsFromNotes(notes, 6);
   const blockerHits = topKeywordHits(notes, blockerKeywords, 6);
 
@@ -4714,7 +4794,9 @@ async function buildSnapshotEvidence({
 
   scored.sort((a, b) => {
     if (b._score !== a._score) return b._score - a._score;
-    return String(b.last_update_at || '').localeCompare(String(a.last_update_at || ''));
+    return String(b.last_update_at || '').localeCompare(
+      String(a.last_update_at || ''),
+    );
   });
 
   const topTickets = scored.slice(0, maxTickets).map(({ _score, ...t }) => t);
@@ -4765,7 +4847,7 @@ function extractExplicitWho({ currentNote = '', lastNote = '', tags = '' }) {
 
   // light @tag capture
   const m = hay.match(
-    /@(qa|api|pm|om|sre|ux|design|security|data|backend|platform|team[- ]lead)\b/i
+    /@(qa|api|pm|om|sre|ux|design|security|data|backend|platform|team[- ]lead)\b/i,
   );
   if (m) {
     const tag = m[1].toLowerCase();
@@ -4796,7 +4878,7 @@ function extractExplicitWho({ currentNote = '', lastNote = '', tags = '' }) {
   if (atAlias) return atAlias[1];
   // 3) capitalized person name after common verbs/preps
   const person = raw.match(
-    /\b(?:with|to|for|ask|ping|cc|tag|loop(?:ing)?\s+in|handoff\s+to|handover\s+to|blocked\s+by|waiting\s+on)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/
+    /\b(?:with|to|for|ask|ping|cc|tag|loop(?:ing)?\s+in|handoff\s+to|handover\s+to|blocked\s+by|waiting\s+on)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+){0,2})\b/,
   );
   if (person) return person[1]; // e.g., "Roland", "Alice Smith"
 
@@ -4834,7 +4916,7 @@ app.post(
       const ctx = body.context || {};
       const selectedCode = clampText(
         ctx.selectedCode || ctx.code || ctx.lastCode || '',
-        32
+        32,
       );
 
       const tId = String(ticket.id || ticket.ticketId || '').trim();
@@ -4871,7 +4953,7 @@ app.post(
       try {
         const meRow = await pool.query(
           `select coalesce(nullif(name,''), email) as label from users where email=$1 limit 1`,
-          [req.userEmail]
+          [req.userEmail],
         );
         requesterLabel = meRow.rows[0]?.label || req.userEmail;
       } catch (_) {}
@@ -4913,7 +4995,7 @@ Heuristics you may use when inferring:
         try {
           const r = await pool.query(
             'select assigned_to, tags, related_link_count, type from tickets where id=$1 limit 1',
-            [tId]
+            [tId],
           );
           if (r.rowCount) {
             assignedToDb = clampText(r.rows[0].assigned_to || assignedToDb);
@@ -5021,7 +5103,7 @@ Return JSON: { "next_steps": ["...", "...", "..."] }`;
           if (typeof js.chase_text === 'string') {
             js.chase_text = js.chase_text.replace(
               /^hi\s+qa[^\w]*,\s*/i,
-              'Hi team, '
+              'Hi team, ',
             );
           }
           js.who = 'Team / owner';
@@ -5044,7 +5126,7 @@ Return JSON: { "next_steps": ["...", "...", "..."] }`;
         openai: e?.response?.data || e?.error || null,
       });
     }
-  }
+  },
 );
 
 // static web
@@ -5060,7 +5142,7 @@ pool
     extra jsonb,
     updated_at timestamptz default now()
   )
-`
+`,
   )
   .then(() => {
     console.log('[boot] meta table is ready');
@@ -5085,12 +5167,12 @@ pool
     ai_output jsonb,
     created_at timestamptz default now()
   )
-`
+`,
   )
   .then(() =>
     pool.query(
-      `create index if not exists ai_snapshot_runs_dev_period on ai_snapshot_runs (dev_email, period_end)`
-    )
+      `create index if not exists ai_snapshot_runs_dev_period on ai_snapshot_runs (dev_email, period_end)`,
+    ),
   )
   .then(() => {
     console.log('[boot] ai_snapshot_runs table is ready');

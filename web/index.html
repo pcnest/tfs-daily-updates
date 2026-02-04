@@ -2851,7 +2851,7 @@
               var snapFrom = (windowInfo && windowInfo.from) ? windowInfo.from : '';
               var snapTo = (windowInfo && windowInfo.to) ? windowInfo.to : '';
               var snapshotLink = (snapFrom && snapTo && email)
-                ? ('<a href="' + esc((API || location.origin) + '/api/reports/snapshots?format=html&developer=' + encodeURIComponent(email) + '&from=' + encodeURIComponent(snapFrom) + '&to=' + encodeURIComponent(snapTo)) + '" target="_blank" rel="noopener">View snapshot</a>')
+                ? ('<button class="secondary small" onclick="openDevSnapshot(\'' + email.replace(/'/g, "\\'") + '\',\'' + snapFrom + '\',\'' + snapTo + '\')"' > View snapshot</button> ')
                 : '';
               var insightBtn = '<button class="secondary" onclick="toggleInsight(\'' + email.replace(/'/g, "\\'") + '\')">View insight</button>';
 
@@ -2881,6 +2881,32 @@
           });
       }
 
+
+      function openDevSnapshot(email, from, to) {
+        var url = (API || location.origin) + '/api/reports/snapshots?format=html&developer=' + encodeURIComponent(email) + '&from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
+        var tkn = localStorage.getItem('pocToken') || '';
+        if (!tkn) {
+          window.open(url, '_blank', 'noopener');
+          return;
+        }
+        fetch(url, {
+          headers: { 'Authorization': 'Bearer ' + tkn, 'Accept': 'text/html' }
+        })
+          .then(function (r) {
+            if (!r.ok) throw new Error('HTTP ' + r.status);
+            return r.text();
+          })
+          .then(function (html) {
+            var win = window.open('', '_blank', 'noopener');
+            if (win) {
+              win.document.write(html);
+              win.document.close();
+            }
+          })
+          .catch(function (err) {
+            alert('Failed to open snapshot: ' + ((err && err.message) ? err.message : err));
+          });
+      }
 
       function pmUnlockUser(btn) {
         try {
@@ -3505,6 +3531,7 @@
       window.devAssistFromModal = devAssistFromModal;
       window.renderDevAssistInModal = renderDevAssistInModal;
       window.openSnapshots = openSnapshots;
+      window.openDevSnapshot = openDevSnapshot;
       window.emailSnapshots = emailSnapshots;
       window.toggleAiRisk = toggleAiRisk;
 
