@@ -2836,6 +2836,7 @@
             }
             if (status) { status.textContent = windowLabel; status.classList.add('ok'); }
             __topWindow = windowInfo;
+            __topItems = items; // Cache for insight fallback
 
             var html = '';
             for (var i = 0; i < items.length; i++) {
