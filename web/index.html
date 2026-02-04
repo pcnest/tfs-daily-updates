@@ -387,13 +387,16 @@
       font-size: 13px;
       line-height: 1.4;
     }
+
     .insight-row td .muted {
       color: var(--muted);
     }
+
     .insight-row .insight-body {
       display: grid;
       gap: 6px;
     }
+
     .insight-row .insight-actions {
       display: flex;
       gap: 10px;
@@ -850,7 +853,9 @@
                 </tr>
               </thead>
               <tbody>
-                <tr><td colspan="10"><em>Loading...</em></td></tr>
+                <tr>
+                  <td colspan="10"><em>Loading...</em></td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -2860,9 +2865,9 @@
                 '<td>' + esc(consistency) + '</td>' +
                 '<td>' + esc(coverage) + '</td>' +
                 '<td>' +
-                  (snapshotLink ? snapshotLink + '<br>' : '') +
-                  insightBtn + '<br>' +
-                  (notes.length ? '<span class="badge muted">' + esc(notes.join(', ')) + '</span>' : '—') +
+                (snapshotLink ? snapshotLink + '<br>' : '') +
+                insightBtn + '<br>' +
+                (notes.length ? '<span class="badge muted">' + esc(notes.join(', ')) + '</span>' : '—') +
                 '</td>' +
                 '</tr>';
             }
