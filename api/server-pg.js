@@ -3862,6 +3862,267 @@ app.get(
   },
 );
 
+// PM/Admin: On-demand Bonus Eligibility for any developer
+app.get(
+  '/api/reports/bonus-eligibility',
+  requireAuth,
+  requirePMOnly,
+  async (req, res) => {
+    try {
+      const developer = String(req.query.developer || '')
+        .trim()
+        .toLowerCase();
+      if (!developer)
+        return res.status(400).json({ error: 'developer_required' });
+
+      const mode = (req.query.mode || 'iterations').toLowerCase();
+      const windowCount = Math.max(parseInt(req.query.window, 10) || 4, 1);
+
+      // Compute window
+      const today = todayISO();
+      const MAX_DAYS = 90;
+      let fromISO = addDays(today, -27);
+      let iterationPaths = null;
+      let windowModeUsed = 'weeks';
+
+      if (mode === 'iterations') {
+        const currIter = await pool.query(
+          `select value from meta where key='current_iteration' limit 1`,
+        );
+        const currPath = currIter.rows[0]?.value || '';
+        const derived = deriveIterationPaths(currPath, windowCount);
+        if (derived.length) {
+          iterationPaths = derived.map((s) => s.toLowerCase());
+          windowModeUsed = 'iterations';
+          fromISO = addDays(today, -MAX_DAYS);
+        }
+      }
+
+      const windowUsed = {
+        mode: windowModeUsed,
+        from: fromISO,
+        to: today,
+        iterations: iterationPaths || [],
+      };
+
+      // Check cache (1 hour TTL)
+      const cacheResult = await pool.query(
+        `select status, reasoning, ticket_context_used, created_at
+         from bonus_evaluations
+         where dev_email = $1::text
+           and period_end = $2::date
+           and mode = $3::text
+           and created_at > (now() - interval '1 hour')
+         order by created_at desc
+         limit 1`,
+        [developer, windowUsed.to, windowUsed.mode],
+      );
+
+      if (cacheResult.rows.length > 0) {
+        const cached = cacheResult.rows[0];
+        return res.json({
+          status: cached.status,
+          reasoning: cached.reasoning,
+          usedAI: true,
+          cached: true,
+          evaluatedAt: cached.created_at,
+          windowUsed,
+        });
+      }
+
+      // Compute individual developer metrics (not dependent on team)
+      const sql = `
+        with windowed as (
+          select
+            ticket_id,
+            code,
+            at AT TIME ZONE $3 as ts_local,
+            lead(at) over (partition by ticket_id order by at) AT TIME ZONE $3 as next_ts_local
+          from progress_updates
+          where email = $4::text
+            and at >= ($1::timestamptz - interval '7 days')
+            and at <  ($2::timestamptz + interval '1 day')
+            and (
+              $5::text[] is null
+              or exists (
+                select 1 from tickets t
+                where t.id = progress_updates.ticket_id
+                  and lower(t.iteration_path) = any($5)
+              )
+            )
+        ),
+        segments as (
+          select
+            ticket_id, code, ts_local,
+            greatest(ts_local, $1::date AT TIME ZONE $3) as seg_start,
+            least(coalesce(next_ts_local, $2::date AT TIME ZONE $3), $2::date AT TIME ZONE $3) as seg_end
+          from windowed
+        ),
+        usable as (
+          select *,
+                 case when seg_end > seg_start
+                   then extract(epoch from (seg_end - seg_start))/3600.0
+                   else 0 end as hours
+          from segments
+          where seg_end > seg_start
+        ),
+        coded as (
+          select
+            ticket_id,
+            split_part(code,'_',1) || '_xx' as family,
+            hours,
+            ts_local::date as day
+          from usable u
+          where ($5::text[] is null
+            or exists (
+              select 1 from tickets t where t.id = u.ticket_id and lower(t.iteration_path)=any($5)
+            ))
+        )
+        select
+          count(distinct ticket_id) filter (where family='500_xx') as completed_tickets,
+          count(distinct ticket_id) as touched_tickets,
+          coalesce(
+            avg(hours) filter (where family in ('200_xx','300_xx','400_xx')),
+            0
+          ) as cycle_time_hours,
+          sum(case when family in ('600_xx','800_xx') then 1 else 0 end) as blocker_transitions,
+          count(distinct ticket_id) as ticket_volume,
+          stddev_pop(count(distinct ticket_id) filter (where family='500_xx')) over () as finish_stddev
+        from coded
+      `;
+
+      const result = await pool.query(sql, [
+        fromISO,
+        today,
+        APP_TZ,
+        developer,
+        iterationPaths,
+      ]);
+
+      if (result.rows.length === 0 || !result.rows[0].ticket_volume) {
+        return res.json({
+          status: 'Needs Review',
+          reasoning:
+            'No activity found in this window. Developer may be new, on leave, or assigned to work outside the tracked scope.',
+          usedAI: false,
+          cached: false,
+          windowUsed,
+          metrics: null,
+        });
+      }
+
+      const row = result.rows[0];
+      const finished = Number(row.completed_tickets) || 0;
+      const touched = Number(row.touched_tickets) || 0;
+      const completionPct = touched > 0 ? (finished / touched) * 100 : 0;
+      const cycleTime = Number(row.cycle_time_hours) || 0;
+      const blockerTransitions = Number(row.blocker_transitions) || 0;
+      const ticketVolume = Number(row.ticket_volume) || 1;
+      const blockerRate = blockerTransitions / ticketVolume;
+
+      // Get update coverage
+      const updateResult = await pool.query(
+        `select count(*) as updates_count
+         from progress_updates
+         where email = $1::text
+           and at >= $2::timestamptz and at <= $3::timestamptz + interval '1 day'
+           and (
+             $4::text[] is null
+             or exists (
+               select 1 from tickets t where t.id = progress_updates.ticket_id and lower(t.iteration_path)=any($4)
+             )
+           )`,
+        [developer, fromISO, today, iterationPaths],
+      );
+
+      const updatesCount = Number(updateResult.rows[0]?.updates_count) || 0;
+      const workingDays = countWeekdays(fromISO, today) || 1;
+      const updateCoverage = updatesCount / workingDays;
+
+      const metrics = {
+        throughput: finished,
+        completion_pct: +completionPct.toFixed(1),
+        cycle_time_hours: cycleTime > 0 ? +cycleTime.toFixed(2) : null,
+        blocker_rate: +blockerRate.toFixed(3),
+        blocker_transitions: blockerTransitions,
+        ticket_volume: ticketVolume,
+        touched_tickets: touched,
+        update_coverage: +updateCoverage.toFixed(2),
+        updates_count: updatesCount,
+      };
+
+      const lowSample = finished < 3;
+
+      // Build a simplified item for bonus eval
+      const item = {
+        email: developer,
+        metrics,
+        lowSample,
+      };
+
+      // Generate bonus eligibility if OpenAI is available
+      if (!openai) {
+        return res.json({
+          status: 'Needs Review',
+          reasoning:
+            'AI evaluation unavailable—OpenAI API key not configured. Manual review required.',
+          usedAI: false,
+          cached: false,
+          windowUsed,
+          metrics,
+        });
+      }
+
+      // Build PBI context
+      const pbiContexts = await buildBonusContext({
+        devEmail: developer,
+        fromISO,
+        toISO: today,
+        maxPBIs: 2,
+      });
+
+      // Generate evaluation
+      const evaluation = await generateBonusEligibility({
+        devEmail: developer,
+        item,
+        windowUsed,
+        pbiContexts,
+      });
+
+      // Store in database
+      await pool.query(
+        `insert into bonus_evaluations (dev_email, period_start, period_end, mode, status, reasoning, ticket_context_used)
+         values ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          developer,
+          windowUsed.from,
+          windowUsed.to,
+          windowUsed.mode,
+          evaluation.status,
+          evaluation.reasoning,
+          JSON.stringify(pbiContexts),
+        ],
+      );
+
+      res.json({
+        status: evaluation.status,
+        reasoning: evaluation.reasoning,
+        usedAI: true,
+        cached: false,
+        evaluatedAt: new Date().toISOString(),
+        windowUsed,
+        metrics,
+      });
+    } catch (e) {
+      console.error('[bonus-eligibility] error:', e);
+      res.status(500).json({
+        error: 'bonus_eligibility_failed',
+        detail: String(e.message || e),
+      });
+    }
+  },
+);
+
 // Email Developer Progress Snapshot
 app.post(
   '/api/reports/snapshots/email',

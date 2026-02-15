@@ -2914,104 +2914,53 @@
         container.innerHTML = '<div class="muted">Loading bonus eligibility...</div>';
         if (btn) btn.textContent = 'Hide Bonus Eligibility';
 
-        // Check if insight is showing fallback message (API already failed)
-        var insightRow = btn.closest('.insight-row');
-        var isFallback = insightRow && insightRow.textContent.indexOf('Shown from cached table data because the API did not return this developer') > -1;
-
-        // If insight is using fallback, skip API call and use cached data directly
-        if (isFallback) {
-          var match = Array.isArray(__topItems) && __topItems.length
-            ? __topItems.find(function (it) {
-              return String((it.email || '')).trim().toLowerCase() === email.toLowerCase();
-            })
-            : null;
-
-          if (match && !match.lowSample) {
-            var fallbackReasoning = 'This developer has metrics in the current window, but a fresh analysis could not be generated at this time. ' +
-              'Based on cached data: ' + match.metrics.throughput + ' items finished with ' +
-              match.metrics.completion_pct.toFixed(1) + '% completion rate. ' +
-              'Manual review recommended to assess bonus eligibility.';
-
-            container.innerHTML =
-              '<div style="padding:12px; background:#f9f9f9; border-left:3px solid #ddd; border-radius:4px; color:#333;">' +
-              '<div style="margin-bottom:8px; color:#333;"><strong>Bonus Eligibility:</strong> <span class="badge muted">Needs Review</span> (from cached data)</div>' +
-              '<div style="margin-bottom:8px; line-height:1.5; color:#333;">' + esc(fallbackReasoning) + '</div>' +
-              '<div style="font-size:0.85rem; color:#666; font-style:italic;">This evaluation is based on cached metrics. Final bonus decisions require manager review.</div>' +
-              '</div>';
-            return;
-          }
-
-          container.innerHTML = '<div class="muted">Bonus eligibility unavailable: Developer not found in current analysis window. Please try refreshing the Top Performers table.</div>';
-          return;
-        }
-
-        // Make API call only if insight API worked
+        // Call dedicated bonus eligibility endpoint
         var hdrs = { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') };
-        var url = new URL((API || location.origin) + '/api/reports/top-devs/insight');
+        var url = new URL((API || location.origin) + '/api/reports/bonus-eligibility');
         url.searchParams.set('developer', email);
         url.searchParams.set('mode', mode || 'iterations');
-        url.searchParams.set('includeBonus', 'true');
 
         fetch(url, { headers: hdrs })
           .then(function (r) {
-            if (!r.ok && r.status === 404) {
-              // Developer not found in fresh API results, but might be in cached table
-              return { error: 'developer_not_found', status: 404 };
+            if (!r.ok) {
+              return r.json().then(function (err) {
+                throw err;
+              }).catch(function () {
+                throw new Error('Bonus eligibility request failed');
+              });
             }
             return r.json();
           })
           .then(function (js) {
-            if (js.error === 'developer_not_found' || js.status === 404) {
-              // Fallback: Use cached table data to show a "Needs Review" status
-              var match = Array.isArray(__topItems) && __topItems.length
-                ? __topItems.find(function (it) {
-                  return String((it.email || '')).trim().toLowerCase() === email.toLowerCase();
-                })
-                : null;
-
-              if (match && !match.lowSample) {
-                // Developer exists in cached data with sufficient sample
-                var fallbackReasoning = 'This developer has metrics in the current window, but a fresh analysis could not be generated at this time. ' +
-                  'Based on cached data: ' + match.metrics.throughput + ' items finished with ' +
-                  match.metrics.completion_pct.toFixed(1) + '% completion rate. ' +
-                  'Manual review recommended to assess bonus eligibility.';
-
-                container.innerHTML =
-                  '<div style="padding:12px; background:#f9f9f9; border-left:3px solid #ddd; border-radius:4px; color:#333;">' +
-                  '<div style="margin-bottom:8px; color:#333;"><strong>Bonus Eligibility:</strong> <span class="badge muted">Needs Review</span> (from cached data)</div>' +
-                  '<div style="margin-bottom:8px; line-height:1.5; color:#333;">' + esc(fallbackReasoning) + '</div>' +
-                  '<div style="font-size:0.85rem; color:#666; font-style:italic;">This evaluation is based on cached metrics. Final bonus decisions require manager review.</div>' +
-                  '</div>';
-                return;
-              }
-
-              // No cached data or low sample
-              container.innerHTML = '<div class="muted">Bonus eligibility unavailable: Developer not found in current analysis window. Please try refreshing the Top Performers table.</div>';
-              return;
-            }
-
             if (js.error) throw js;
-            var bonus = js.bonusEligibility;
-            if (!bonus) {
-              container.innerHTML = '<div class="muted">Bonus eligibility not available.</div>';
-              return;
-            }
 
-            var status = bonus.status || 'Unknown';
-            var reasoning = bonus.reasoning || 'No reasoning provided.';
-            var cached = bonus.cached ? ' (from cache)' : '';
+            var status = js.status || 'Unknown';
+            var reasoning = js.reasoning || 'No reasoning provided.';
+            var cached = js.cached ? ' (from cache)' : '';
             var badgeClass = status === 'Eligible' ? 'ok' : status === 'Not Eligible' ? 'err' : 'muted';
+
+            var metricsHtml = '';
+            if (js.metrics) {
+              metricsHtml = '<div style="margin:8px 0; padding:8px; background:#fff; border-radius:4px; font-size:0.9rem; color:#555;">' +
+                '<strong>Metrics:</strong> ' +
+                js.metrics.throughput + ' finished, ' +
+                js.metrics.completion_pct + '% completion, ' +
+                (js.metrics.cycle_time_hours ? js.metrics.cycle_time_hours + 'h cycle time' : 'N/A cycle time') +
+                ', ' + js.metrics.blocker_rate + ' blocker rate' +
+                '</div>';
+            }
 
             container.innerHTML =
               '<div style="padding:12px; background:#f9f9f9; border-left:3px solid #ddd; border-radius:4px; color:#333;">' +
               '<div style="margin-bottom:8px; color:#333;"><strong>Bonus Eligibility:</strong> <span class="badge ' + badgeClass + '">' + esc(status) + '</span>' + esc(cached) + '</div>' +
               '<div style="margin-bottom:8px; line-height:1.5; color:#333;">' + esc(reasoning) + '</div>' +
+              metricsHtml +
               '<div style="font-size:0.85rem; color:#666; font-style:italic;">This evaluation is advisory and AI-generated. Final bonus decisions require manager review.</div>' +
               '</div>';
           })
           .catch(function (err) {
-            var msg = (err && err.detail) || (err && err.error) || (err && err.message) || 'Failed';
-            container.innerHTML = '<div class="muted">Bonus eligibility unavailable: ' + esc(msg) + '</div>';
+            var errMsg = (err && err.detail) || (err && err.error) || (err && err.message) || 'Failed to load bonus eligibility';
+            container.innerHTML = '<div class="muted error">Error: ' + esc(errMsg) + '</div>';
           });
       }
 
