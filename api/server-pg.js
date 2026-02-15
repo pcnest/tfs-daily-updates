@@ -3977,18 +3977,44 @@ app.get(
             or exists (
               select 1 from tickets t where t.id = u.ticket_id and lower(t.iteration_path)=any($5)
             ))
+        ),
+        per_family as (
+          select
+            family,
+            count(*) as transitions,
+            sum(hours) as hours_sum
+          from coded
+          group by family
+        ),
+        completion as (
+          select
+            count(distinct ticket_id) filter (where family='500_xx') as completed_tickets,
+            count(distinct ticket_id) as touched_tickets
+          from coded
+        ),
+        blockers as (
+          select coalesce(sum(transitions), 0) as blocker_transitions
+          from per_family
+          where family in ('600_xx','800_xx')
+        ),
+        cycle_time as (
+          select
+            coalesce(
+              sum(hours_sum) / nullif(sum(transitions), 0),
+              0
+            ) as avg_hours
+          from per_family
+          where family in ('200_xx','300_xx','400_xx')
         )
         select
-          count(distinct ticket_id) filter (where family='500_xx') as completed_tickets,
-          count(distinct ticket_id) as touched_tickets,
-          coalesce(
-            avg(hours) filter (where family in ('200_xx','300_xx','400_xx')),
-            0
-          ) as cycle_time_hours,
-          sum(case when family in ('600_xx','800_xx') then 1 else 0 end) as blocker_transitions,
-          count(distinct ticket_id) as ticket_volume,
-          stddev_pop(count(distinct ticket_id) filter (where family='500_xx')) over () as finish_stddev
-        from coded
+          coalesce(c.completed_tickets, 0) as completed_tickets,
+          coalesce(c.touched_tickets, 0) as touched_tickets,
+          coalesce(ct.avg_hours, 0) as cycle_time_hours,
+          coalesce(b.blocker_transitions, 0) as blocker_transitions,
+          coalesce(c.touched_tickets, 0) as ticket_volume
+        from completion c
+        cross join blockers b
+        cross join cycle_time ct
       `;
 
       const result = await pool.query(sql, [
