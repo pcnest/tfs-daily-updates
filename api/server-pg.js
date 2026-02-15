@@ -3905,32 +3905,7 @@ app.get(
         iterations: iterationPaths || [],
       };
 
-      // Check cache (1 hour TTL)
-      const cacheResult = await pool.query(
-        `select status, reasoning, ticket_context_used, created_at
-         from bonus_evaluations
-         where dev_email = $1::text
-           and period_end = $2::date
-           and mode = $3::text
-           and created_at > (now() - interval '1 hour')
-         order by created_at desc
-         limit 1`,
-        [developer, windowUsed.to, windowUsed.mode],
-      );
-
-      if (cacheResult.rows.length > 0) {
-        const cached = cacheResult.rows[0];
-        return res.json({
-          status: cached.status,
-          reasoning: cached.reasoning,
-          usedAI: true,
-          cached: true,
-          evaluatedAt: cached.created_at,
-          windowUsed,
-        });
-      }
-
-      // Compute individual developer metrics (not dependent on team)
+      // Compute individual developer metrics (always needed for display)
       const sql = `
         with windowed as (
           select
@@ -4078,6 +4053,32 @@ app.get(
       };
 
       const lowSample = finished < 3;
+
+      // Check cache (1 hour TTL) - AFTER computing metrics
+      const cacheResult = await pool.query(
+        `select status, reasoning, ticket_context_used, created_at
+         from bonus_evaluations
+         where dev_email = $1::text
+           and period_end = $2::date
+           and mode = $3::text
+           and created_at > (now() - interval '1 hour')
+         order by created_at desc
+         limit 1`,
+        [developer, windowUsed.to, windowUsed.mode],
+      );
+
+      if (cacheResult.rows.length > 0) {
+        const cached = cacheResult.rows[0];
+        return res.json({
+          status: cached.status,
+          reasoning: cached.reasoning,
+          usedAI: true,
+          cached: true,
+          evaluatedAt: cached.created_at,
+          windowUsed,
+          metrics, // Include metrics even when cached
+        });
+      }
 
       // Build a simplified item for bonus eval
       const item = {
