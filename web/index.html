@@ -2818,6 +2818,11 @@
                 '<div><strong>Insight for ' + esc(email) + '</strong> ' + badge + '</div>' +
                 '<ul style="margin:0;padding-left:18px;">' + bullets.map(function (b) { return '<li>' + esc(b) + '</li>'; }).join('') + '</ul>' +
                 '<div class="muted">Shown from cached table data because the API did not return this developer.</div>' +
+                '<div class="insight-actions">' +
+                '<button class="secondary" onclick="copyInsight(this)">Copy</button>' +
+                '<button class="secondary" onclick="loadBonusEligibility(\'' + email.replace(/'/g, "\\'") + '\', \'' + mode + '\', this)">View Bonus Eligibility</button>' +
+                '</div>' +
+                '<div id="bonusEligibility_' + email.replace(/@/g, '_').replace(/\./g, '_') + '" class="bonus-eligibility-section" style="margin-top:12px; display:none;"></div>' +
                 '</div>';
               return;
             }
