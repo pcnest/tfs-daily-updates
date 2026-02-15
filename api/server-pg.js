@@ -1525,16 +1525,8 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
 });
 
 // Team member list for PMs (used to populate Assigned-to dropdown)
-app.get('/api/team-members', requireAuth, async (req, res) => {
+app.get('/api/team-members', requireAuth, requirePMOnly, async (req, res) => {
   try {
-    // only PMs can fetch
-    const me = await pool.query('select role from users where email=$1', [
-      req.userEmail,
-    ]);
-    if ((me.rows[0]?.role || 'dev') !== 'pm') {
-      return res.status(403).json({ error: 'forbidden' });
-    }
-
     // Pull registered devs from users, shaped like the old tfs_users payload
     const { rows } = await pool.query(`
       select

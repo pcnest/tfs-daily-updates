@@ -1342,7 +1342,7 @@
         }
 
         if (pmBox) pmBox.classList.toggle('hidden', !isManager);
-        if (topDevsCard) topDevsCard.classList.toggle('hidden', !isAdmin); // admin-only card
+        if (topDevsCard) topDevsCard.classList.toggle('hidden', !isManager); // pm/admin card
         if (bonusAuditCard) bonusAuditCard.classList.toggle('hidden', !isAdmin); // admin-only card
 
         if (pmBox) {
@@ -1371,7 +1371,7 @@
 
           if (filters) filters.style.display = '';
           loadToday(); loadBlockers(); loadMissing();
-          if (isAdmin) loadTopDevs(); // admin-only
+          if (isManager) loadTopDevs(); // pm/admin
 
           presetReportThisWeek(false);
           if (!window.__exportTimer) {
