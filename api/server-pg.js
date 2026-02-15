@@ -3939,7 +3939,7 @@ app.get(
             at AT TIME ZONE $3 as ts_local,
             lead(at) over (partition by ticket_id order by at) AT TIME ZONE $3 as next_ts_local
           from progress_updates
-          where email = $4::text
+          where lower(email) = $4::text
             and at >= ($1::timestamptz - interval '7 days')
             and at <  ($2::timestamptz + interval '1 day')
             and (
@@ -4050,7 +4050,7 @@ app.get(
       const updateResult = await pool.query(
         `select count(*) as updates_count
          from progress_updates
-         where email = $1::text
+         where lower(email) = $1::text
            and at >= $2::timestamptz and at <= $3::timestamptz + interval '1 day'
            and (
              $4::text[] is null

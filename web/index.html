@@ -3025,7 +3025,8 @@
       }
 
       function loadTopDevs() {
-        if (window.__role !== 'admin') return;
+        var role = (window.__role || 'dev').toLowerCase();
+        if (role !== 'admin' && role !== 'pm') return;
         closeInsightRows();
         var tbody = document.querySelector('#topDevsTbl tbody');
         var status = byId('topDevsStatus');
