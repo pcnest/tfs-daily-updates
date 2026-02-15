@@ -861,6 +861,39 @@
           </div>
         </section>
 
+        <!-- Bonus Eligibility Audit Log (Admin-only) -->
+        <section class="card thin" id="bonusAuditCard" aria-labelledby="bonusAuditHeader" style="display:none;">
+          <div class="row">
+            <h3 id="bonusAuditHeader" style="margin:0;">Bonus Eligibility Audit Log</h3>
+            <div class="toolbar right">
+              <button onclick="toggleBonusAudit()">Toggle</button>
+              <button onclick="loadBonusAudit()">Refresh</button>
+              <span id="bonusAuditStatus" class="status" aria-live="polite"></span>
+            </div>
+          </div>
+
+          <div id="bonusAuditBody" class="table-wrap" style="overflow:auto; display:none;">
+            <table id="bonusAuditTbl">
+              <thead>
+                <tr>
+                  <th>Dev</th>
+                  <th>Period Start</th>
+                  <th>Period End</th>
+                  <th>Scope</th>
+                  <th>Status</th>
+                  <th>Reasoning</th>
+                  <th>Evaluated At</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td colspan="7"><em>Loading...</em></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
         <!-- Report -->
         <section class="card thin" aria-labelledby="reportsHeader">
           <div class="row">
@@ -1296,6 +1329,7 @@
         var pmBox = byId('pm');
         var weeklyCard = byId('weeklySummaryCard');
         var topDevsCard = byId('topDevsCard');
+        var bonusAuditCard = byId('bonusAuditCard');
 
         if (loginCard) loginCard.classList.add('hidden');
         if (ticketsCard) ticketsCard.classList.remove('hidden');
@@ -1309,6 +1343,7 @@
 
         if (pmBox) pmBox.classList.toggle('hidden', !isManager);
         if (topDevsCard) topDevsCard.classList.toggle('hidden', !isAdmin); // admin-only card
+        if (bonusAuditCard) bonusAuditCard.classList.toggle('hidden', !isAdmin); // admin-only card
 
         if (pmBox) {
           var controls = pmBox.querySelectorAll('button, a');
@@ -2753,7 +2788,9 @@
               '<div class="insight-actions">' +
               (snapLink || '') +
               '<button class="secondary" onclick="copyInsight(this)">Copy</button>' +
+              '<button class="secondary" onclick="loadBonusEligibility(\'' + email.replace(/'/g, "\\'") + '\', \'' + mode + '\', this)">View Bonus Eligibility</button>' +
               '</div>' +
+              '<div id="bonusEligibility_' + email.replace(/@/g, '_').replace(/\./g, '_') + '" class="bonus-eligibility-section" style="margin-top:12px; display:none;"></div>' +
               '</div>';
           })
           .catch(function (err) {
@@ -2798,6 +2835,118 @@
         navigator.clipboard.writeText(text).catch(function () { });
         btn.textContent = 'Copied';
         setTimeout(function () { btn.textContent = 'Copy'; }, 1200);
+      }
+
+      // --- Bonus Eligibility (PM-only) --------------------------------------
+      function loadBonusEligibility(email, mode, btn) {
+        email = String(email || '').trim();
+        var containerId = 'bonusEligibility_' + email.replace(/@/g, '_').replace(/\./g, '_');
+        var container = document.getElementById(containerId);
+        if (!container) return;
+
+        // Toggle display
+        if (container.style.display === 'block') {
+          container.style.display = 'none';
+          if (btn) btn.textContent = 'View Bonus Eligibility';
+          return;
+        }
+
+        container.style.display = 'block';
+        container.innerHTML = '<div class="muted">Loading bonus eligibility...</div>';
+        if (btn) btn.textContent = 'Hide Bonus Eligibility';
+
+        var hdrs = { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') };
+        var url = new URL((API || location.origin) + '/api/reports/top-devs/insight');
+        url.searchParams.set('developer', email);
+        url.searchParams.set('mode', mode || 'iterations');
+        url.searchParams.set('includeBonus', 'true');
+
+        fetch(url, { headers: hdrs })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            if (js.error) throw js;
+            var bonus = js.bonusEligibility;
+            if (!bonus) {
+              container.innerHTML = '<div class="muted">Bonus eligibility not available.</div>';
+              return;
+            }
+
+            var status = bonus.status || 'Unknown';
+            var reasoning = bonus.reasoning || 'No reasoning provided.';
+            var cached = bonus.cached ? ' (from cache)' : '';
+            var badgeClass = status === 'Eligible' ? 'ok' : status === 'Not Eligible' ? 'err' : 'muted';
+
+            container.innerHTML =
+              '<div style="padding:12px; background:#f9f9f9; border-left:3px solid #ddd; border-radius:4px;">' +
+              '<div style="margin-bottom:8px;"><strong>Bonus Eligibility:</strong> <span class="badge ' + badgeClass + '">' + esc(status) + '</span>' + esc(cached) + '</div>' +
+              '<div style="margin-bottom:8px; line-height:1.5;">' + esc(reasoning) + '</div>' +
+              '<div style="font-size:0.85rem; color:#666; font-style:italic;">This evaluation is advisory and AI-generated. Final bonus decisions require manager review.</div>' +
+              '</div>';
+          })
+          .catch(function (err) {
+            var msg = (err && err.detail) || (err && err.error) || (err && err.message) || 'Failed';
+            container.innerHTML = '<div class="muted">Bonus eligibility unavailable: ' + esc(msg) + '</div>';
+          });
+      }
+
+      // --- Bonus Audit Log (PM-only) ----------------------------------------
+      function toggleBonusAudit() {
+        var body = document.getElementById('bonusAuditBody');
+        if (!body) return;
+        body.style.display = body.style.display === 'none' ? 'block' : 'none';
+      }
+
+      function loadBonusAudit() {
+        if (window.__role !== 'admin') return;
+        var tbody = document.querySelector('#bonusAuditTbl tbody');
+        var status = byId('bonusAuditStatus');
+        if (status) { status.textContent = 'Loading...'; status.classList.remove('ok', 'err'); }
+        if (tbody) tbody.innerHTML = '<tr><td colspan="7"><em>Loading...</em></td></tr>';
+
+        var windowInfo = __topWindow || {};
+        var url = new URL((API || location.origin) + '/api/reports/bonus-evaluations');
+        if (windowInfo.from) url.searchParams.set('from', windowInfo.from);
+        if (windowInfo.to) url.searchParams.set('to', windowInfo.to);
+
+        fetch(url, {
+          headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') }
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            if (js.error) throw js;
+
+            var items = js.items || [];
+            if (!items.length) {
+              tbody.innerHTML = '<tr><td colspan="7"><em>No audit records found.</em></td></tr>';
+              if (status) { status.textContent = 'No data'; status.classList.add('err'); }
+              return;
+            }
+
+            var html = '';
+            for (var i = 0; i < items.length; i++) {
+              var it = items[i];
+              var badgeClass = it.status === 'Eligible' ? 'ok' : it.status === 'Not Eligible' ? 'err' : 'muted';
+              var reasoning = String(it.reasoning || '').slice(0, 100) + (it.reasoning && it.reasoning.length > 100 ? '...' : '');
+              var evalDate = it.evaluatedAt ? new Date(it.evaluatedAt).toLocaleString() : '—';
+
+              html += '<tr>' +
+                '<td>' + esc(it.dev_email || '—') + '</td>' +
+                '<td>' + esc(it.period_start || '—') + '</td>' +
+                '<td>' + esc(it.period_end || '—') + '</td>' +
+                '<td>' + esc(it.mode || '—') + '</td>' +
+                '<td><span class="badge ' + badgeClass + '">' + esc(it.status || '—') + '</span></td>' +
+                '<td title="' + esc(it.reasoning || '') + '">' + esc(reasoning) + '</td>' +
+                '<td>' + esc(evalDate) + '</td>' +
+                '</tr>';
+            }
+            tbody.innerHTML = html;
+            if (status) { status.textContent = items.length + ' records'; status.classList.add('ok'); }
+          })
+          .catch(function (err) {
+            var msg = (err && err.detail) || (err && err.error) || (err && err.message) || 'Failed';
+            if (tbody) tbody.innerHTML = '<tr><td colspan="7"><em>' + esc(msg) + '</em></td></tr>';
+            if (status) { status.textContent = msg; status.classList.add('err'); }
+          });
       }
 
       function loadTopDevs() {

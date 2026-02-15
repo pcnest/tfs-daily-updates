@@ -3605,12 +3605,10 @@ app.get(
       );
 
       if (!item)
-        return res
-          .status(404)
-          .json({
-            error: 'developer_not_found',
-            windowUsed: computed.windowUsed,
-          });
+        return res.status(404).json({
+          error: 'developer_not_found',
+          windowUsed: computed.windowUsed,
+        });
 
       const coverage = item.metrics.update_coverage;
       const lowCoverage = coverage < 0.5;
@@ -3700,17 +3698,167 @@ app.get(
         }
       }
 
-      res.json({
+      // --- Bonus eligibility evaluation (opt-in via ?includeBonus=true) ---
+      let bonusEligibility = null;
+      const includeBonus =
+        (req.query.includeBonus || '').toLowerCase() === 'true';
+
+      if (includeBonus) {
+        try {
+          // Check cache (1 hour TTL)
+          const cacheResult = await pool.query(
+            `select status, reasoning, ticket_context_used, created_at
+             from bonus_evaluations
+             where dev_email = $1::text
+               and period_end = $2::date
+               and mode = $3::text
+               and created_at > (now() - interval '1 hour')
+             order by created_at desc
+             limit 1`,
+            [developer, computed.windowUsed.to, computed.windowUsed.mode],
+          );
+
+          if (cacheResult.rows.length > 0) {
+            const cached = cacheResult.rows[0];
+            bonusEligibility = {
+              status: cached.status,
+              reasoning: cached.reasoning,
+              usedAI: true,
+              cached: true,
+              evaluatedAt: cached.created_at,
+            };
+          } else if (openai) {
+            // Generate new evaluation
+            const pbiContexts = await buildBonusContext({
+              devEmail: developer,
+              fromISO: computed.windowUsed.from,
+              toISO: computed.windowUsed.to,
+              maxPBIs: 2,
+            });
+
+            const evaluation = await generateBonusEligibility({
+              devEmail: developer,
+              item,
+              windowUsed: computed.windowUsed,
+              pbiContexts,
+            });
+
+            // Store in database
+            await pool.query(
+              `insert into bonus_evaluations (dev_email, period_start, period_end, mode, status, reasoning, ticket_context_used)
+               values ($1, $2, $3, $4, $5, $6, $7)`,
+              [
+                developer,
+                computed.windowUsed.from,
+                computed.windowUsed.to,
+                computed.windowUsed.mode,
+                evaluation.status,
+                evaluation.reasoning,
+                JSON.stringify(pbiContexts),
+              ],
+            );
+
+            bonusEligibility = {
+              status: evaluation.status,
+              reasoning: evaluation.reasoning,
+              usedAI: true,
+              cached: false,
+              evaluatedAt: new Date().toISOString(),
+            };
+          } else {
+            bonusEligibility = {
+              status: 'Needs Review',
+              reasoning: 'AI evaluation unavailable—requires manual review.',
+              usedAI: false,
+              cached: false,
+            };
+          }
+        } catch (e) {
+          console.error(
+            '[top-devs/insight] bonus eligibility error:',
+            e.message,
+          );
+          bonusEligibility = {
+            status: 'Needs Review',
+            reasoning:
+              'Evaluation unavailable due to system error—requires manual review.',
+            usedAI: false,
+            cached: false,
+          };
+        }
+      }
+
+      const response = {
         insight: insightLines,
         usedAI,
         item,
         windowUsed: computed.windowUsed,
-      });
+      };
+
+      if (bonusEligibility) {
+        response.bonusEligibility = bonusEligibility;
+      }
+
+      res.json(response);
     } catch (e) {
       const status = e.status || 500;
       console.error('[top-devs/insight] error', e);
       res.status(status).json({
         error: 'top_dev_insight_failed',
+        detail: String(e.message || e),
+      });
+    }
+  },
+);
+
+// PM: Bonus Eligibility Audit Log
+app.get(
+  '/api/reports/bonus-evaluations',
+  requireAuth,
+  requirePMOnly,
+  async (req, res) => {
+    try {
+      const from = req.query.from ? String(req.query.from) : null;
+      const to = req.query.to ? String(req.query.to) : null;
+      const developer = req.query.developer
+        ? String(req.query.developer).trim().toLowerCase()
+        : null;
+
+      let sql = `
+        select
+          dev_email,
+          period_start,
+          period_end,
+          mode,
+          status,
+          reasoning,
+          created_at as "evaluatedAt"
+        from bonus_evaluations
+        where 1=1
+      `;
+      const params = [];
+
+      if (from) {
+        params.push(from);
+        sql += ` and period_start >= $${params.length}::date`;
+      }
+      if (to) {
+        params.push(to);
+        sql += ` and period_end <= $${params.length}::date`;
+      }
+      if (developer) {
+        params.push(developer);
+        sql += ` and lower(dev_email) = $${params.length}::text`;
+      }
+
+      sql += ` order by created_at desc limit 100`;
+
+      const result = await pool.query(sql, params);
+      res.json({ items: result.rows || [] });
+    } catch (e) {
+      console.error('[bonus-evaluations] error:', e);
+      res.status(500).json({
+        error: 'bonus_evaluations_failed',
         detail: String(e.message || e),
       });
     }
@@ -4815,6 +4963,239 @@ async function buildSnapshotEvidence({
     stale_ticket_count: staleTicketCount,
   };
 }
+
+// --- buildBonusContext: gather 1-2 PBI contexts for bonus eligibility evaluation ---
+async function buildBonusContext({ devEmail, fromISO, toISO, maxPBIs = 2 }) {
+  const email = devEmail ? String(devEmail).toLowerCase() : null;
+  if (!email) return [];
+
+  // Query progress_updates with tickets to get PBI context
+  const sql = `
+    select
+      u.ticket_id as "ticketId",
+      u.code,
+      u.note,
+      u.risk_level as "riskLevel",
+      u.at,
+      t.title,
+      count(*) over (partition by u.ticket_id) as "updateCount"
+    from progress_updates u
+    left join tickets t on t.id = u.ticket_id
+    where u.at >= $1::timestamptz
+      and u.at < ($2::timestamptz + interval '1 day')
+      and lower(u.email) = $3::text
+    order by u.ticket_id, u.at asc
+  `;
+
+  const res = await pool.query(sql, [fromISO, toISO, email]);
+  const rows = res.rows || [];
+
+  // Group by ticket
+  const ticketMap = new Map();
+  for (const r of rows) {
+    const tid = String(r.ticketId || '');
+    if (!ticketMap.has(tid)) {
+      ticketMap.set(tid, {
+        ticketId: tid,
+        title: clampText(r.title || '', 120),
+        notes: [],
+        updateCount: Number(r.updateCount || 0),
+        riskLevel: clampText(r.riskLevel || 'low', 16),
+        hadBlockers: false,
+      });
+    }
+    const tkt = ticketMap.get(tid);
+    const code = String(r.code || '');
+    if (isBlockerCode(code)) tkt.hadBlockers = true;
+    const note = clampText(scrub(r.note || ''), 150);
+    if (note) tkt.notes.push(note);
+  }
+
+  // Score tickets for relevance
+  const tickets = Array.from(ticketMap.values()).map((t) => {
+    let score = 0;
+    if (t.hadBlockers) score += 3;
+    const risk = String(t.riskLevel || '').toLowerCase();
+    if (risk === 'high') score += 2;
+    if (risk === 'medium') score += 1;
+    if (t.updateCount >= 3) score += 1;
+    return { ...t, _score: score };
+  });
+
+  // Sort by score descending, take top maxPBIs
+  tickets.sort((a, b) => b._score - a._score);
+  const topPBIs = tickets.slice(0, maxPBIs);
+
+  // Return simplified context (no ticket IDs)
+  return topPBIs.map((t) => ({
+    title: t.title,
+    notesSummary: t.notes.join(' → ').slice(0, 150),
+    hadBlockers: t.hadBlockers,
+    riskLevel: t.riskLevel,
+  }));
+}
+
+// --- generateBonusEligibility: call OpenAI to evaluate bonus eligibility ---
+async function generateBonusEligibility({
+  devEmail,
+  item,
+  windowUsed,
+  pbiContexts,
+}) {
+  if (!openai) {
+    return {
+      status: 'Needs Review',
+      reasoning: 'AI evaluation unavailable—requires manual review.',
+    };
+  }
+
+  try {
+    // Build qualitative metric descriptions
+    const metrics = item.metrics || {};
+    const zScores = item.zScores || {};
+
+    const throughputDesc =
+      zScores.throughput > 0.5
+        ? 'high volume'
+        : zScores.throughput < -0.5
+          ? 'low volume'
+          : 'moderate volume';
+    const completionDesc =
+      metrics.completion_pct >= 75
+        ? 'finishes most started work'
+        : metrics.completion_pct >= 50
+          ? 'finishes some started work'
+          : 'leaves many items incomplete';
+    const cycleDesc =
+      zScores.cycle < -0.3
+        ? 'keeps work moving quickly'
+        : zScores.cycle > 0.3
+          ? 'work cycles are longer than typical'
+          : 'work cycles are typical';
+    const blockerDesc =
+      zScores.blocker < -0.3
+        ? 'rarely blocked'
+        : zScores.blocker > 0.3
+          ? 'encounters frequent blockers'
+          : 'encounters some blockers';
+    const consistencyDesc =
+      metrics.consistency_stddev < 1.5
+        ? 'steady day-to-day delivery'
+        : 'delivery is sporadic';
+    const updateCoverageDesc =
+      metrics.update_coverage >= 0.7
+        ? 'thorough progress updates'
+        : metrics.update_coverage >= 0.4
+          ? 'adequate progress updates'
+          : 'sparse update habits';
+
+    // Build system prompt
+    const systemPrompt = `You evaluate developer bonus eligibility for product owners and stakeholders. Write in clear business language.
+
+Output JSON schema:
+{ "status": "Eligible" | "Not Eligible" | "Needs Review", "reasoning": string }
+
+Reasoning guidelines:
+- Lead with impact/outcome, not patterns
+- Weave in 1-2 PBI contexts naturally (use title, reference work journey from notes)
+- NO ticket IDs, NO raw metrics (e.g., "score: 0.52"), NO PR numbers
+- MAY reference displayed signals qualitatively: "steady delivery cadence" (Consistency), "thorough progress updates" (Update coverage)
+- Use stakeholder language: "follow-through", "handoffs", "coordination overhead", "sprint planning reliability"
+- Frame constructively: "would help finish more consistently" not "you're bad at finishing"
+- If evidence is thin/mixed (low sample, sparse updates, conflicting signals), say so and choose "Needs Review"
+
+Example phrasing for "Eligible":
+- "Consistently delivers finished work with minimal rework. Recent efforts on [authentication refactor] and [payment gateway integration] show strong follow-through—work gets unblocked quickly and stays on track. Daily progress is steady and predictable, making sprint planning reliable."
+- "High volume of completed items with clean handoffs. Tackled [complex data migration] without getting stuck; when blockers appeared, escalated promptly. Progress updates are thorough, which helps the team stay coordinated."
+
+Example phrasing for "Not Eligible":
+- "Good effort, but completion slips when work stretches too long. [Multi-tenant refactoring] shows promise but stalls in mid-flight. Breaking features into smaller, testable increments would help finish more consistently."
+- "Volume is reasonable, but blockers linger without escalation. [Third-party integration] hit snags that could have been surfaced earlier. Proactive communication when stuck would accelerate resolutions."
+- "Progress updates are sparse, making it hard to spot issues early. Work on [payment processor] lacks visibility until late. More frequent check-ins would help catch blockers sooner."
+
+Example phrasing for "Needs Review":
+- "Mixed signals this period. Throughput is lower than usual, possibly due to [complex migration work] requiring deep investigation. Needs manager context before drawing conclusions."
+- "Low sample size—fewer than three finished items this window. Recent focus on [infrastructure overhaul] may not show impact yet. Hold evaluation until next period."`;
+
+    // Build user prompt
+    const pbiSummary =
+      pbiContexts && pbiContexts.length > 0
+        ? pbiContexts
+            .map(
+              (p, i) =>
+                `${i + 1}. [${p.title}] ${p.hadBlockers ? '(had blockers)' : ''} ${p.riskLevel === 'high' ? '(high risk)' : ''}: ${p.notesSummary}`,
+            )
+            .join('\n')
+        : 'No detailed PBI context available.';
+
+    const userPrompt = `Window: ${windowUsed.from} to ${windowUsed.to} (${windowUsed.mode})
+Developer: ${devEmail}
+
+Metrics (qualitative):
+- Throughput: ${throughputDesc}
+- Completion: ${completionDesc}
+- Cycle time: ${cycleDesc}
+- Blocker rate: ${blockerDesc}
+- Consistency: ${consistencyDesc}
+- Update coverage: ${updateCoverageDesc}
+- Low sample: ${item.lowSample ? 'yes' : 'no'}
+
+PBI contexts:
+${pbiSummary}
+
+Provide bonus eligibility evaluation.`;
+
+    // Call OpenAI
+    const resp = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'bonus_eligibility',
+          strict: true,
+          schema: {
+            type: 'object',
+            properties: {
+              status: {
+                type: 'string',
+                enum: ['Eligible', 'Not Eligible', 'Needs Review'],
+              },
+              reasoning: { type: 'string' },
+            },
+            required: ['status', 'reasoning'],
+            additionalProperties: false,
+          },
+        },
+      },
+      max_tokens: 400,
+    });
+
+    const parsed = parseOpenAIJson(resp);
+    if (parsed && parsed.status && parsed.reasoning) {
+      return {
+        status: parsed.status,
+        reasoning: parsed.reasoning,
+      };
+    }
+
+    return {
+      status: 'Needs Review',
+      reasoning: 'Evaluation failed to parse—requires manual review.',
+    };
+  } catch (e) {
+    console.error('[generateBonusEligibility] error:', e.message);
+    return {
+      status: 'Needs Review',
+      reasoning:
+        'Evaluation unavailable due to system error—requires manual review.',
+    };
+  }
+}
+
 // --- explicit "who" extractor (from notes/tags) -----------------------------
 function extractExplicitWho({ currentNote = '', lastNote = '', tags = '' }) {
   const raw = [currentNote, lastNote, tags].filter(Boolean).join(' ');
@@ -5179,4 +5560,33 @@ pool
   })
   .catch((e) => {
     console.error('[boot] ai_snapshot_runs table ensure failed:', e);
+  });
+
+// --- boot: ensure bonus_evaluations table exists (audit trail for bonus eligibility) ---
+pool
+  .query(
+    `
+  create table if not exists bonus_evaluations (
+    id bigserial primary key,
+    dev_email text not null,
+    period_start date not null,
+    period_end date not null,
+    mode text not null,
+    status text not null,
+    reasoning text not null,
+    ticket_context_used jsonb,
+    created_at timestamptz default now()
+  )
+`,
+  )
+  .then(() =>
+    pool.query(
+      `create index if not exists bonus_evaluations_dev_period on bonus_evaluations (dev_email, period_end)`,
+    ),
+  )
+  .then(() => {
+    console.log('[boot] bonus_evaluations table is ready');
+  })
+  .catch((e) => {
+    console.error('[boot] bonus_evaluations table ensure failed:', e);
   });
