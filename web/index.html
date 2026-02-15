@@ -2891,9 +2891,9 @@
                   'Manual review recommended to assess bonus eligibility.';
 
                 container.innerHTML =
-                  '<div style="padding:12px; background:#f9f9f9; border-left:3px solid #ddd; border-radius:4px;">' +
-                  '<div style="margin-bottom:8px;"><strong>Bonus Eligibility:</strong> <span class="badge muted">Needs Review</span> (from cached data)</div>' +
-                  '<div style="margin-bottom:8px; line-height:1.5;">' + esc(fallbackReasoning) + '</div>' +
+                  '<div style="padding:12px; background:#f9f9f9; border-left:3px solid #ddd; border-radius:4px; color:#333;">' +
+                  '<div style="margin-bottom:8px; color:#333;"><strong>Bonus Eligibility:</strong> <span class="badge muted">Needs Review</span> (from cached data)</div>' +
+                  '<div style="margin-bottom:8px; line-height:1.5; color:#333;">' + esc(fallbackReasoning) + '</div>' +
                   '<div style="font-size:0.85rem; color:#666; font-style:italic;">This evaluation is based on cached metrics. Final bonus decisions require manager review.</div>' +
                   '</div>';
                 return;
@@ -2917,9 +2917,9 @@
             var badgeClass = status === 'Eligible' ? 'ok' : status === 'Not Eligible' ? 'err' : 'muted';
 
             container.innerHTML =
-              '<div style="padding:12px; background:#f9f9f9; border-left:3px solid #ddd; border-radius:4px;">' +
-              '<div style="margin-bottom:8px;"><strong>Bonus Eligibility:</strong> <span class="badge ' + badgeClass + '">' + esc(status) + '</span>' + esc(cached) + '</div>' +
-              '<div style="margin-bottom:8px; line-height:1.5;">' + esc(reasoning) + '</div>' +
+              '<div style="padding:12px; background:#f9f9f9; border-left:3px solid #ddd; border-radius:4px; color:#333;">' +
+              '<div style="margin-bottom:8px; color:#333;"><strong>Bonus Eligibility:</strong> <span class="badge ' + badgeClass + '">' + esc(status) + '</span>' + esc(cached) + '</div>' +
+              '<div style="margin-bottom:8px; line-height:1.5; color:#333;">' + esc(reasoning) + '</div>' +
               '<div style="font-size:0.85rem; color:#666; font-style:italic;">This evaluation is advisory and AI-generated. Final bonus decisions require manager review.</div>' +
               '</div>';
           })
