@@ -2757,6 +2757,47 @@
         insertAfter(tr, anchorRow);
         __topInsightOpen = email;
 
+        // Check cache first to avoid unnecessary API calls
+        var match = Array.isArray(__topItems) && __topItems.length
+          ? __topItems.find(function (it) {
+            return String((it.email || '')).trim().toLowerCase() === email.toLowerCase();
+          })
+          : null;
+
+        // If we have cached data, use it directly (avoids 404 errors)
+        if (match && __topWindow) {
+          var badge = match.lowSample ? '<span class="badge muted">low sample</span> ' : '';
+          if (match.metrics && match.metrics.update_coverage < 0.5) badge += '<span class="badge muted">low coverage</span> ';
+
+          var snapLink = '';
+          if (__topWindow.from && __topWindow.to) {
+            var base = (API || location.origin) + '/api/reports/snapshots?format=html';
+            snapLink = '<a class="secondary" target="_blank" rel="noopener" href="' + esc(base + '&developer=' + encodeURIComponent(email) + '&from=' + encodeURIComponent(__topWindow.from) + '&to=' + encodeURIComponent(__topWindow.to)) + '">Open snapshot (HTML)</a>';
+          }
+
+          var bullets = [
+            'Throughput: ' + match.metrics.throughput + ' finished; completion ' + match.metrics.completion_pct.toFixed(1) + '%.',
+            'Speed: ' + (match.metrics.cycle_time_hours == null ? 'n/a' : match.metrics.cycle_time_hours.toFixed(1) + 'h per item.'),
+            'Blockers: rate ' + match.metrics.blocker_rate.toFixed(3) + ' (lower is better).',
+            'Consistency: σ=' + match.metrics.consistency_stddev.toFixed(2) + ' (lower is steadier).',
+            'Update coverage: ' + match.metrics.update_coverage.toFixed(2) + ' updates/weekday.'
+          ];
+
+          td.innerHTML =
+            '<div class="insight-body">' +
+            '<div><strong>Insight for ' + esc(email) + '</strong> <span class="muted">(' + esc(__topWindow.from || '?') + ' to ' + esc(__topWindow.to || '?') + ')</span> ' + badge + '</div>' +
+            '<ul style="margin:0;padding-left:18px;">' + bullets.map(function (b) { return '<li>' + esc(b) + '</li>'; }).join('') + '</ul>' +
+            '<div class="insight-actions">' +
+            (snapLink || '') +
+            '<button class="secondary" onclick="copyInsight(this)">Copy</button>' +
+            '<button class="secondary" onclick="loadBonusEligibility(\'' + email.replace(/'/g, "\\'") + '\', \'' + mode + '\', this)">View Bonus Eligibility</button>' +
+            '</div>' +
+            '<div id="bonusEligibility_' + email.replace(/@/g, '_').replace(/\./g, '_') + '" class="bonus-eligibility-section" style="margin-top:12px; display:none;"></div>' +
+            '</div>';
+          return;
+        }
+
+        // No cache available, try API
         var hdrs = { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') };
         var url = new URL((API || location.origin) + '/api/reports/top-devs/insight');
         url.searchParams.set('developer', email);
