@@ -721,18 +721,20 @@
 
     <section class="card" id="loginCard">
       <h3>Login</h3>
-      <div class="row"><label for="loginEmail">Email</label><input id="loginEmail" placeholder="dev@company.com"
-          autocomplete="username" /></div>
-      <div class="row"><label for="loginPw">Password</label><input id="loginPw" type="password" placeholder="••••••"
-          autocomplete="current-password" /></div>
-      <div class="row">
-        <div></div>
-        <div class="toolbar">
-          <button onclick="signup()">Sign Up</button>
-          <button onclick="login()">Log In</button>
-          <span id="loginStatus" class="status" role="status" aria-live="polite"></span>
+      <form onsubmit="login(); return false;" autocomplete="on">
+        <div class="row"><label for="loginEmail">Email</label><input id="loginEmail" placeholder="dev@company.com"
+            autocomplete="username" /></div>
+        <div class="row"><label for="loginPw">Password</label><input id="loginPw" type="password" placeholder="••••••"
+            autocomplete="current-password" /></div>
+        <div class="row">
+          <div></div>
+          <div class="toolbar">
+            <button type="button" onclick="signup()">Sign Up</button>
+            <button type="submit">Log In</button>
+            <span id="loginStatus" class="status" role="status" aria-live="polite"></span>
+          </div>
         </div>
-      </div>
+      </form>
     </section>
 
     <section class="card hidden" id="ticketsCard">
@@ -2804,8 +2806,19 @@
         url.searchParams.set('mode', mode || 'iterations');
 
         fetch(url, { headers: hdrs })
-          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            if (!r.ok && r.status === 404) {
+              // Developer not found - return empty insight without console error
+              return { error: 'developer_not_found', insight: [] };
+            }
+            return r.json();
+          })
           .then(function (js) {
+            // Handle developer not found by using fallback instead of throwing
+            if (js.error === 'developer_not_found') {
+              // Fall through to the catch block's fallback logic
+              throw js;
+            }
             if (js.error) throw js;
             var insight = Array.isArray(js.insight) ? js.insight : [];
             var windowUsed = js.windowUsed || __topWindow || {};
@@ -3080,9 +3093,28 @@
         fetch(url, {
           headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') }
         })
-          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            if (!r.ok) {
+              // For 400 (insufficient data), handle gracefully without console error
+              if (r.status === 400) {
+                return r.json().then(function (js) {
+                  return { error: 'insufficient_data', detail: js.detail || 'Not enough data to rank' };
+                });
+              }
+              return r.json();
+            }
+            return r.json();
+          })
           .then(function (js) {
-            if (js.error) throw js;
+            if (js.error) {
+              // Handle known expected errors without throwing
+              if (js.error === 'insufficient_data') {
+                tbody.innerHTML = '<tr><td colspan="10"><em>Insufficient data: fewer than 3 finished tickets in this window.</em></td></tr>';
+                if (status) { status.textContent = 'Insufficient data'; status.classList.add('err'); }
+                return;
+              }
+              throw js;
+            }
 
             var items = js.items || [];
             if (!items.length) {

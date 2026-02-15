@@ -1070,6 +1070,11 @@ app.get('/ready', async (_req, res) => {
   }
 });
 
+// Serve a minimal favicon to prevent 404 errors in browser console
+app.get('/favicon.ico', (req, res) => {
+  res.status(204).end(); // No Content
+});
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[boot] listening on http://0.0.0.0:${PORT}`);
 });
