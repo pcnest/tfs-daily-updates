@@ -2860,6 +2860,38 @@
         container.innerHTML = '<div class="muted">Loading bonus eligibility...</div>';
         if (btn) btn.textContent = 'Hide Bonus Eligibility';
 
+        // Check if insight is showing fallback message (API already failed)
+        var insightRow = btn.closest('.insight-row');
+        var isFallback = insightRow && insightRow.textContent.indexOf('Shown from cached table data because the API did not return this developer') > -1;
+
+        // If insight is using fallback, skip API call and use cached data directly
+        if (isFallback) {
+          var match = Array.isArray(__topItems) && __topItems.length
+            ? __topItems.find(function (it) {
+              return String((it.email || '')).trim().toLowerCase() === email.toLowerCase();
+            })
+            : null;
+
+          if (match && !match.lowSample) {
+            var fallbackReasoning = 'This developer has metrics in the current window, but a fresh analysis could not be generated at this time. ' +
+              'Based on cached data: ' + match.metrics.throughput + ' items finished with ' +
+              match.metrics.completion_pct.toFixed(1) + '% completion rate. ' +
+              'Manual review recommended to assess bonus eligibility.';
+
+            container.innerHTML =
+              '<div style="padding:12px; background:#f9f9f9; border-left:3px solid #ddd; border-radius:4px; color:#333;">' +
+              '<div style="margin-bottom:8px; color:#333;"><strong>Bonus Eligibility:</strong> <span class="badge muted">Needs Review</span> (from cached data)</div>' +
+              '<div style="margin-bottom:8px; line-height:1.5; color:#333;">' + esc(fallbackReasoning) + '</div>' +
+              '<div style="font-size:0.85rem; color:#666; font-style:italic;">This evaluation is based on cached metrics. Final bonus decisions require manager review.</div>' +
+              '</div>';
+            return;
+          }
+
+          container.innerHTML = '<div class="muted">Bonus eligibility unavailable: Developer not found in current analysis window. Please try refreshing the Top Performers table.</div>';
+          return;
+        }
+
+        // Make API call only if insight API worked
         var hdrs = { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') };
         var url = new URL((API || location.origin) + '/api/reports/top-devs/insight');
         url.searchParams.set('developer', email);
