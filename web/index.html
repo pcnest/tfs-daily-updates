@@ -899,12 +899,11 @@
         <!-- (3) Top performers (Admin-only) -->
         <section class="card thin" id="topDevsCard" aria-labelledby="topDevsHeader">
           <div class="row">
-            <h3 id="topDevsHeader" style="margin:0;">Top performers (last 4 sprints, 4 weeks, or custom range)</h3>
+            <h3 id="topDevsHeader" style="margin:0;">Top performers (last 4 weeks or custom range)</h3>
             <div class="toolbar right">
               <label for="topMode" style="display:flex;gap:6px;align-items:center;">
                 Scope
                 <select id="topMode" aria-label="Window mode" onchange="toggleCustomDateInputs()">
-                  <option value="iterations">Last 4 sprints</option>
                   <option value="weeks">Last 4 weeks</option>
                   <option value="custom">Custom date range</option>
                 </select>
@@ -2798,7 +2797,7 @@
       // --- Top performers insights (accordion) -------------------------------
       var __topInsightOpen = null; // email of currently open accordion
       var __topWindow = null; // last window used (for snapshot links)
-      var __topMode = 'iterations';
+      var __topMode = 'weeks';
       var __topItems = [];
 
       function closeInsightRows() {
@@ -2870,7 +2869,7 @@
             'Update coverage: ' + match.metrics.update_coverage.toFixed(2) + ' updates/weekday.'
           ];
 
-          var currentMode = (__topWindow && __topWindow.mode) || 'iterations';
+          var currentMode = (__topWindow && __topWindow.mode) || 'weeks';
           td.innerHTML =
             '<div class="insight-body">' +
             '<div><strong>Insight for ' + esc(email) + '</strong> <span class="muted">(' + esc(__topWindow.from || '?') + ' to ' + esc(__topWindow.to || '?') + ')</span> ' + badge + '</div>' +
@@ -2889,7 +2888,7 @@
         var hdrs = { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') };
         var url = new URL((API || location.origin) + '/api/reports/top-devs/insight');
         url.searchParams.set('developer', email);
-        url.searchParams.set('mode', mode || 'iterations');
+        url.searchParams.set('mode', mode || 'weeks');
 
         // Pass custom date range if available
         if (__topWindow && __topWindow.mode === 'custom' && __topWindow.from && __topWindow.to) {
@@ -2927,7 +2926,7 @@
               ? '<ul style="margin:0;padding-left:18px;">' + insight.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ul>'
               : '<div class="muted">No insight available.</div>';
 
-            var currentMode = (windowUsed && windowUsed.mode) || mode || 'iterations';
+            var currentMode = (windowUsed && windowUsed.mode) || mode || 'weeks';
             td.innerHTML =
               '<div class="insight-body">' +
               '<div><strong>Insight for ' + esc(email) + '</strong> <span class="muted">(' + esc(windowUsed.from || '?') + ' to ' + esc(windowUsed.to || '?') + ')</span> ' + badge + '</div>' +
@@ -2960,7 +2959,7 @@
                 'Consistency: σ=' + match.metrics.consistency_stddev.toFixed(2) + ' (lower is steadier).',
                 'Update coverage: ' + match.metrics.update_coverage.toFixed(2) + ' updates/weekday.'
               ];
-              var currentMode = (__topWindow && __topWindow.mode) || mode || 'iterations';
+              var currentMode = (__topWindow && __topWindow.mode) || mode || 'weeks';
               td.innerHTML =
                 '<div class="insight-body">' +
                 '<div><strong>Insight for ' + esc(email) + '</strong> ' + badge + '</div>' +
@@ -3012,7 +3011,7 @@
         var hdrs = { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') };
         var url = new URL((API || location.origin) + '/api/reports/bonus-eligibility');
         url.searchParams.set('developer', email);
-        url.searchParams.set('mode', mode || 'iterations');
+        url.searchParams.set('mode', mode || 'weeks');
 
         // Pass custom date range if available
         if (__topWindow && __topWindow.mode === 'custom' && __topWindow.from && __topWindow.to) {
@@ -3144,7 +3143,7 @@
         var modeSel = byId('topMode');
         var customInputs = byId('customDateInputs');
         var refreshBtn = byId('topRefreshBtn');
-        var mode = (modeSel && modeSel.value) ? modeSel.value : 'iterations';
+        var mode = (modeSel && modeSel.value) ? modeSel.value : 'weeks';
 
         if (mode === 'custom' && customInputs) {
           customInputs.style.display = 'flex';
@@ -3179,7 +3178,7 @@
         if (tbody) tbody.innerHTML = '<tr><td colspan="10"><em>Loading...</em></td></tr>';
 
         var modeSel = byId('topMode');
-        var mode = (modeSel && modeSel.value) ? modeSel.value : 'iterations';
+        var mode = (modeSel && modeSel.value) ? modeSel.value : 'weeks';
         window.__topMode = mode;
 
         var url = new URL((API || location.origin) + '/api/reports/top-devs');

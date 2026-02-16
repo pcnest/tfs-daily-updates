@@ -3572,7 +3572,7 @@ app.get(
   requireAdminOnly,
   async (req, res) => {
     try {
-      let mode = (req.query.mode || 'iterations').toLowerCase();
+      let mode = (req.query.mode || 'weeks').toLowerCase();
       const windowCount = Math.max(parseInt(req.query.window, 10) || 4, 1);
       const stallHours = parseInt(req.query.stallHours, 10) || 12;
       let fromISO = null;
@@ -3672,7 +3672,7 @@ app.get(
   requireAdminOnly,
   async (req, res) => {
     try {
-      let mode = (req.query.mode || 'iterations').toLowerCase();
+      let mode = (req.query.mode || 'weeks').toLowerCase();
       const developer = String(req.query.developer || '')
         .trim()
         .toLowerCase();
@@ -3984,7 +3984,7 @@ app.get(
       if (!developer)
         return res.status(400).json({ error: 'developer_required' });
 
-      let mode = (req.query.mode || 'iterations').toLowerCase();
+      let mode = (req.query.mode || 'weeks').toLowerCase();
       const windowCount = Math.max(parseInt(req.query.window, 10) || 4, 1);
       let fromISO = null;
       let toISO = null;
