@@ -3894,6 +3894,12 @@ app.get(
       const mode = (req.query.mode || 'iterations').toLowerCase();
       const windowCount = Math.max(parseInt(req.query.window, 10) || 4, 1);
 
+      console.log('[bonus-eligibility] Request:', {
+        developer,
+        mode,
+        windowCount,
+      });
+
       // Compute metrics using the same logic as Top Performers for consistency
       const topDevsResult = await computeTopDevs({
         mode,
@@ -3901,13 +3907,31 @@ app.get(
       });
 
       const windowUsed = topDevsResult.windowUsed;
+      console.log('[bonus-eligibility] Window used:', windowUsed);
+      console.log(
+        '[bonus-eligibility] Total devs in result:',
+        topDevsResult.items.length,
+      );
 
       // Find the specific developer in the results
       const devItem = topDevsResult.items.find(
         (item) => item.email.toLowerCase() === developer,
       );
 
+      console.log(
+        '[bonus-eligibility] Found devItem:',
+        devItem
+          ? {
+              email: devItem.email,
+              throughput: devItem.metrics.throughput,
+              completion_pct: devItem.metrics.completion_pct,
+              lowSample: devItem.lowSample,
+            }
+          : 'null',
+      );
+
       if (!devItem || !devItem.metrics.ticket_volume) {
+        console.log('[bonus-eligibility] Developer not found or no activity');
         return res.json({
           status: 'Needs Review',
           reasoning:
@@ -3916,6 +3940,7 @@ app.get(
           cached: false,
           windowUsed,
           metrics: null,
+          _debugVersion: 'v2-unified-metrics',
         });
       }
 
@@ -3937,6 +3962,9 @@ app.get(
 
       if (cacheResult.rows.length > 0) {
         const cached = cacheResult.rows[0];
+        console.log(
+          '[bonus-eligibility] Returning cached evaluation (but fresh metrics)',
+        );
         return res.json({
           status: cached.status,
           reasoning: cached.reasoning,
@@ -3945,6 +3973,7 @@ app.get(
           evaluatedAt: cached.created_at,
           windowUsed,
           metrics, // Include metrics even when cached
+          _debugVersion: 'v2-unified-metrics', // Debug marker to confirm new code is deployed
         });
       }
 
@@ -3957,6 +3986,7 @@ app.get(
 
       // Generate bonus eligibility if OpenAI is available
       if (!openai) {
+        console.log('[bonus-eligibility] OpenAI not configured');
         return res.json({
           status: 'Needs Review',
           reasoning:
@@ -3965,6 +3995,7 @@ app.get(
           cached: false,
           windowUsed,
           metrics,
+          _debugVersion: 'v2-unified-metrics',
         });
       }
 
@@ -4007,6 +4038,7 @@ app.get(
         evaluatedAt: new Date().toISOString(),
         windowUsed,
         metrics,
+        _debugVersion: 'v2-unified-metrics',
       });
     } catch (e) {
       console.error('[bonus-eligibility] error:', e);
