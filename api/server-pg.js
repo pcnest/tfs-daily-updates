@@ -3265,9 +3265,9 @@ async function computeTopDevs({
           and (
             $5::text[] is null
             or exists (
-              select 1 from tickets t
+              select 1 from tickets t, unnest($5) as iter
               where t.id = progress_updates.ticket_id
-                and lower(t.iteration_path) = any($5)
+                and lower(t.iteration_path) LIKE '%' || lower(iter)
             )
           )
       ),
@@ -3295,7 +3295,8 @@ async function computeTopDevs({
         from usable u
         where ($5::text[] is null
           or exists (
-            select 1 from tickets t where t.id = u.ticket_id and lower(t.iteration_path)=any($5)
+            select 1 from tickets t, unnest($5) as iter
+            where t.id = u.ticket_id and lower(t.iteration_path) LIKE '%' || lower(iter)
           ))
       ),
       per_dev_family as (
@@ -3328,7 +3329,8 @@ async function computeTopDevs({
           and (
             $5::text[] is null
             or exists (
-              select 1 from tickets t where t.id = progress_updates.ticket_id and lower(t.iteration_path)=any($5)
+              select 1 from tickets t, unnest($5) as iter
+              where t.id = progress_updates.ticket_id and lower(t.iteration_path) LIKE '%' || lower(iter)
             )
           )
         order by ticket_id, at desc
@@ -3366,7 +3368,8 @@ async function computeTopDevs({
           and (
             $5::text[] is null
             or exists (
-              select 1 from tickets t where t.id = progress_updates.ticket_id and lower(t.iteration_path)=any($5)
+              select 1 from tickets t, unnest($5) as iter
+              where t.id = progress_updates.ticket_id and lower(t.iteration_path) LIKE '%' || lower(iter)
             )
           )
         group by email
@@ -3920,9 +3923,9 @@ app.get(
             and (
               $5::text[] is null
               or exists (
-                select 1 from tickets t
+                select 1 from tickets t, unnest($5) as iter
                 where t.id = progress_updates.ticket_id
-                  and lower(t.iteration_path) = any($5)
+                  and lower(t.iteration_path) LIKE '%' || lower(iter)
               )
             )
         ),
@@ -3950,7 +3953,8 @@ app.get(
           from usable u
           where ($5::text[] is null
             or exists (
-              select 1 from tickets t where t.id = u.ticket_id and lower(t.iteration_path)=any($5)
+              select 1 from tickets t, unnest($5) as iter
+              where t.id = u.ticket_id and lower(t.iteration_path) LIKE '%' || lower(iter)
             ))
         ),
         per_family as (
