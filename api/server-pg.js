@@ -5257,12 +5257,17 @@ async function generateBonusEligibility({
         : zScores.cycle > 0.3
           ? 'work cycles are longer than typical'
           : 'work cycles are typical';
+
+    // APPROACH 1 & 2: Use raw metrics for blocker description to avoid contradictions
     const blockerDesc =
-      zScores.blocker < -0.3
-        ? 'rarely blocked'
-        : zScores.blocker > 0.3
-          ? 'encounters frequent blockers'
-          : 'encounters some blockers';
+      metrics.blocker_rate === 0
+        ? 'no blockers encountered'
+        : metrics.blocker_rate < 0.1
+          ? 'rarely blocked'
+          : metrics.blocker_rate > 0.3
+            ? 'encounters frequent blockers'
+            : 'encounters some blockers';
+
     const consistencyDesc =
       metrics.consistency_stddev < 1.5
         ? 'steady day-to-day delivery'
@@ -5274,24 +5279,42 @@ async function generateBonusEligibility({
           ? 'adequate progress updates'
           : 'sparse update habits';
 
-    // Build system prompt
+    // APPROACH 2: Add raw metrics context for AI validation
+    const rawMetricsContext = `Raw metrics for validation:
+- Throughput: ${metrics.throughput} finished items
+- Completion: ${metrics.completion_pct}%
+- Cycle time: ${metrics.cycle_time_hours != null ? metrics.cycle_time_hours.toFixed(1) + 'h' : 'N/A'}
+- Blocker rate: ${metrics.blocker_rate.toFixed(3)} (${metrics.blocker_transitions} blocker transitions out of ${metrics.ticket_volume} tickets)
+- Consistency σ: ${metrics.consistency_stddev.toFixed(2)}
+- Update coverage: ${metrics.update_coverage.toFixed(2)} updates/weekday`;
+
+    // APPROACH 3: Build system prompt with consistency requirements
     const systemPrompt = `You evaluate developer bonus eligibility for product owners and stakeholders. Write in clear business language.
 
 Output JSON schema:
 { "status": "Eligible" | "Not Eligible" | "Needs Review", "reasoning": string }
 
+CRITICAL CONSISTENCY RULES:
+1. NEVER contradict the raw metrics. If blocker_rate is 0.000, do NOT mention "frequent blockers" or any blocking issues.
+2. If cycle_time_hours is N/A or null, do NOT comment on speed or cycle time.
+3. If completion is 90%+, do NOT say work "remains incomplete" or "stalls."
+4. If throughput is high (15+ items), acknowledge the volume; don't focus solely on negatives.
+5. When raw metrics show excellent performance, the reasoning should reflect that—don't manufacture problems.
+
 Reasoning guidelines:
 - Lead with impact/outcome, not patterns
 - Weave in 1-2 PBI contexts naturally (use title, reference work journey from notes)
-- NO ticket IDs, NO raw metrics (e.g., "score: 0.52"), NO PR numbers
+- NO ticket IDs, NO raw metric numbers (e.g., "score: 0.52"), NO PR numbers
 - MAY reference displayed signals qualitatively: "steady delivery cadence" (Consistency), "thorough progress updates" (Update coverage)
 - Use stakeholder language: "follow-through", "handoffs", "coordination overhead", "sprint planning reliability"
 - Frame constructively: "would help finish more consistently" not "you're bad at finishing"
 - If evidence is thin/mixed (low sample, sparse updates, conflicting signals), say so and choose "Needs Review"
+- If metrics are excellent (high throughput + high completion + no blockers), default to "Eligible" unless PBI context shows serious concerns
 
 Example phrasing for "Eligible":
 - "Consistently delivers finished work with minimal rework. Recent efforts on [authentication refactor] and [payment gateway integration] show strong follow-through—work gets unblocked quickly and stays on track. Daily progress is steady and predictable, making sprint planning reliable."
 - "High volume of completed items with clean handoffs. Tackled [complex data migration] without getting stuck; when blockers appeared, escalated promptly. Progress updates are thorough, which helps the team stay coordinated."
+- "Strong follow-through this period. [API redesign] and [database optimization] both shipped without prolonged delays. Work moves through the pipeline efficiently, and completion rates remain high."
 
 Example phrasing for "Not Eligible":
 - "Good effort, but completion slips when work stretches too long. [Multi-tenant refactoring] shows promise but stalls in mid-flight. Breaking features into smaller, testable increments would help finish more consistently."
@@ -5316,6 +5339,8 @@ Example phrasing for "Needs Review":
     const userPrompt = `Window: ${windowUsed.from} to ${windowUsed.to} (${windowUsed.mode})
 Developer: ${devEmail}
 
+${rawMetricsContext}
+
 Metrics (qualitative):
 - Throughput: ${throughputDesc}
 - Completion: ${completionDesc}
@@ -5328,7 +5353,7 @@ Metrics (qualitative):
 PBI contexts:
 ${pbiSummary}
 
-Provide bonus eligibility evaluation.`;
+Provide bonus eligibility evaluation. Remember: do not contradict the raw metrics above.`;
 
     // Call OpenAI
     const resp = await openai.chat.completions.create({
