@@ -1344,7 +1344,7 @@
         }
 
         if (pmBox) pmBox.classList.toggle('hidden', !isManager);
-        if (topDevsCard) topDevsCard.classList.toggle('hidden', !isManager); // pm/admin card
+        if (topDevsCard) topDevsCard.classList.toggle('hidden', !isAdmin); // admin-only card
         if (bonusAuditCard) bonusAuditCard.classList.toggle('hidden', !isAdmin); // admin-only card
 
         if (pmBox) {
@@ -3026,7 +3026,7 @@
 
       function loadTopDevs() {
         var role = (window.__role || 'dev').toLowerCase();
-        if (role !== 'admin' && role !== 'pm') return;
+        if (role !== 'admin') return;
         closeInsightRows();
         var tbody = document.querySelector('#topDevsTbl tbody');
         var status = byId('topDevsStatus');

@@ -2407,6 +2407,19 @@ async function requirePMOnly(req, res, next) {
   }
 }
 
+async function requireAdminOnly(req, res, next) {
+  try {
+    const me = await pool.query('select role from users where email=$1', [
+      req.userEmail,
+    ]);
+    const role = me.rows[0]?.role || 'dev';
+    if (role !== 'admin') return res.status(403).json({ error: 'admin only' });
+    next();
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+}
+
 app.get(
   '/api/reports/snapshots',
   requireAuth,
@@ -3546,7 +3559,7 @@ async function computeTopDevs({
 app.get(
   '/api/reports/top-devs',
   requireAuth,
-  requirePMOnly,
+  requireAdminOnly,
   async (req, res) => {
     try {
       const mode = (req.query.mode || 'iterations').toLowerCase();
@@ -3579,11 +3592,11 @@ app.get(
   },
 );
 
-// PM: Insight per developer (plain-language, AI-backed with fallback)
+// Admin: Insight per developer (plain-language, AI-backed with fallback)
 app.get(
   '/api/reports/top-devs/insight',
   requireAuth,
-  requirePMOnly,
+  requireAdminOnly,
   async (req, res) => {
     try {
       const mode = (req.query.mode || 'iterations').toLowerCase();
@@ -3811,11 +3824,11 @@ app.get(
   },
 );
 
-// PM: Bonus Eligibility Audit Log
+// Admin: Bonus Eligibility Audit Log
 app.get(
   '/api/reports/bonus-evaluations',
   requireAuth,
-  requirePMOnly,
+  requireAdminOnly,
   async (req, res) => {
     try {
       const from = req.query.from ? String(req.query.from) : null;
