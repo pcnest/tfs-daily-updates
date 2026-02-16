@@ -3894,130 +3894,20 @@ app.get(
       const mode = (req.query.mode || 'iterations').toLowerCase();
       const windowCount = Math.max(parseInt(req.query.window, 10) || 4, 1);
 
-      // Compute window
-      const today = todayISO();
-      const MAX_DAYS = 90;
-      let fromISO = addDays(today, -27);
-      let iterationPaths = null;
-      let windowModeUsed = 'weeks';
+      // Compute metrics using the same logic as Top Performers for consistency
+      const topDevsResult = await computeTopDevs({
+        mode,
+        windowCount,
+      });
 
-      if (mode === 'iterations') {
-        const currIter = await pool.query(
-          `select value from meta where key='current_iteration' limit 1`,
-        );
-        const currPath = currIter.rows[0]?.value || '';
-        const derived = deriveIterationPaths(currPath, windowCount);
-        if (derived.length) {
-          iterationPaths = derived.map((s) => s.toLowerCase());
-          windowModeUsed = 'iterations';
-          fromISO = addDays(today, -MAX_DAYS);
-        }
-      }
+      const windowUsed = topDevsResult.windowUsed;
 
-      const windowUsed = {
-        mode: windowModeUsed,
-        from: fromISO,
-        to: today,
-        iterations: iterationPaths || [],
-      };
+      // Find the specific developer in the results
+      const devItem = topDevsResult.items.find(
+        (item) => item.email.toLowerCase() === developer,
+      );
 
-      // Compute individual developer metrics (always needed for display)
-      const sql = `
-        with windowed as (
-          select
-            ticket_id,
-            code,
-            at AT TIME ZONE $3 as ts_local,
-            lead(at) over (partition by ticket_id order by at) AT TIME ZONE $3 as next_ts_local
-          from progress_updates
-          where lower(email) = $4::text
-            and at >= ($1::timestamptz - interval '7 days')
-            and at <  ($2::timestamptz + interval '1 day')
-            and (
-              $5::text[] is null
-              or exists (
-                select 1 from tickets t, unnest($5) as iter
-                where t.id = progress_updates.ticket_id
-                  and lower(t.iteration_path) LIKE '%' || lower(iter)
-              )
-            )
-        ),
-        segments as (
-          select
-            ticket_id, code, ts_local,
-            greatest(ts_local, $1::date AT TIME ZONE $3) as seg_start,
-            least(coalesce(next_ts_local, $2::date AT TIME ZONE $3), $2::date AT TIME ZONE $3) as seg_end
-          from windowed
-        ),
-        usable as (
-          select *,
-                 case when seg_end > seg_start
-                   then extract(epoch from (seg_end - seg_start))/3600.0
-                   else 0 end as hours
-          from segments
-          where seg_end > seg_start
-        ),
-        coded as (
-          select
-            ticket_id,
-            split_part(code,'_',1) || '_xx' as family,
-            hours,
-            ts_local::date as day
-          from usable u
-          where ($5::text[] is null
-            or exists (
-              select 1 from tickets t, unnest($5) as iter
-              where t.id = u.ticket_id and lower(t.iteration_path) LIKE '%' || lower(iter)
-            ))
-        ),
-        per_family as (
-          select
-            family,
-            count(*) as transitions,
-            sum(hours) as hours_sum
-          from coded
-          group by family
-        ),
-        completion as (
-          select
-            count(distinct ticket_id) filter (where family='500_xx') as completed_tickets,
-            count(distinct ticket_id) as touched_tickets
-          from coded
-        ),
-        blockers as (
-          select coalesce(sum(transitions), 0) as blocker_transitions
-          from per_family
-          where family in ('600_xx','800_xx')
-        ),
-        cycle_time as (
-          select
-            coalesce(
-              sum(hours_sum) / nullif(sum(transitions), 0),
-              0
-            ) as avg_hours
-          from per_family
-          where family in ('200_xx','300_xx','400_xx')
-        )
-        select
-          coalesce(c.completed_tickets, 0) as completed_tickets,
-          coalesce(c.touched_tickets, 0) as touched_tickets,
-          coalesce(ct.avg_hours, 0) as cycle_time_hours,
-          coalesce(b.blocker_transitions, 0) as blocker_transitions,
-          coalesce(c.touched_tickets, 0) as ticket_volume
-        from completion c
-        cross join blockers b
-        cross join cycle_time ct
-      `;
-
-      const result = await pool.query(sql, [
-        fromISO,
-        today,
-        APP_TZ,
-        developer,
-        iterationPaths,
-      ]);
-
-      if (result.rows.length === 0 || !result.rows[0].ticket_volume) {
+      if (!devItem || !devItem.metrics.ticket_volume) {
         return res.json({
           status: 'Needs Review',
           reasoning:
@@ -4029,47 +3919,8 @@ app.get(
         });
       }
 
-      const row = result.rows[0];
-      const finished = Number(row.completed_tickets) || 0;
-      const touched = Number(row.touched_tickets) || 0;
-      const completionPct = touched > 0 ? (finished / touched) * 100 : 0;
-      const cycleTime = Number(row.cycle_time_hours) || 0;
-      const blockerTransitions = Number(row.blocker_transitions) || 0;
-      const ticketVolume = Number(row.ticket_volume) || 1;
-      const blockerRate = blockerTransitions / ticketVolume;
-
-      // Get update coverage
-      const updateResult = await pool.query(
-        `select count(*) as updates_count
-         from progress_updates
-         where lower(email) = $1::text
-           and at >= $2::timestamptz and at <= $3::timestamptz + interval '1 day'
-           and (
-             $4::text[] is null
-             or exists (
-               select 1 from tickets t where t.id = progress_updates.ticket_id and lower(t.iteration_path)=any($4)
-             )
-           )`,
-        [developer, fromISO, today, iterationPaths],
-      );
-
-      const updatesCount = Number(updateResult.rows[0]?.updates_count) || 0;
-      const workingDays = countWeekdays(fromISO, today) || 1;
-      const updateCoverage = updatesCount / workingDays;
-
-      const metrics = {
-        throughput: finished,
-        completion_pct: +completionPct.toFixed(1),
-        cycle_time_hours: cycleTime > 0 ? +cycleTime.toFixed(2) : null,
-        blocker_rate: +blockerRate.toFixed(3),
-        blocker_transitions: blockerTransitions,
-        ticket_volume: ticketVolume,
-        touched_tickets: touched,
-        update_coverage: +updateCoverage.toFixed(2),
-        updates_count: updatesCount,
-      };
-
-      const lowSample = finished < 3;
+      const metrics = devItem.metrics;
+      const lowSample = devItem.lowSample;
 
       // Check cache (1 hour TTL) - AFTER computing metrics
       const cacheResult = await pool.query(
@@ -4120,15 +3971,15 @@ app.get(
       // Build PBI context
       const pbiContexts = await buildBonusContext({
         devEmail: developer,
-        fromISO,
-        toISO: today,
+        fromISO: windowUsed.from,
+        toISO: windowUsed.to,
         maxPBIs: 2,
       });
 
       // Generate evaluation
       const evaluation = await generateBonusEligibility({
         devEmail: developer,
-        item,
+        item: devItem,
         windowUsed,
         pbiContexts,
       });
