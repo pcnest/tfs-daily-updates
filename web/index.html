@@ -2785,6 +2785,7 @@
             'Update coverage: ' + match.metrics.update_coverage.toFixed(2) + ' updates/weekday.'
           ];
 
+          var currentMode = (__topWindow && __topWindow.mode) || 'iterations';
           td.innerHTML =
             '<div class="insight-body">' +
             '<div><strong>Insight for ' + esc(email) + '</strong> <span class="muted">(' + esc(__topWindow.from || '?') + ' to ' + esc(__topWindow.to || '?') + ')</span> ' + badge + '</div>' +
@@ -2792,7 +2793,7 @@
             '<div class="insight-actions">' +
             (snapLink || '') +
             '<button class="secondary" onclick="copyInsight(this)">Copy</button>' +
-            '<button class="secondary" onclick="loadBonusEligibility(\'' + email.replace(/'/g, "\\'") + '\', \'' + mode + '\', this)">View Bonus Eligibility</button>' +
+            '<button class="secondary" onclick="loadBonusEligibility(\'' + email.replace(/'/g, "\\'") + '\', \'' + currentMode + '\', this)">View Bonus Eligibility</button>' +
             '</div>' +
             '<div id="bonusEligibility_' + email.replace(/@/g, '_').replace(/\./g, '_') + '" class="bonus-eligibility-section" style="margin-top:12px; display:none;"></div>' +
             '</div>';
@@ -2835,6 +2836,7 @@
               ? '<ul style="margin:0;padding-left:18px;">' + insight.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ul>'
               : '<div class="muted">No insight available.</div>';
 
+            var currentMode = (windowUsed && windowUsed.mode) || mode || 'iterations';
             td.innerHTML =
               '<div class="insight-body">' +
               '<div><strong>Insight for ' + esc(email) + '</strong> <span class="muted">(' + esc(windowUsed.from || '?') + ' to ' + esc(windowUsed.to || '?') + ')</span> ' + badge + '</div>' +
@@ -2842,7 +2844,7 @@
               '<div class="insight-actions">' +
               (snapLink || '') +
               '<button class="secondary" onclick="copyInsight(this)">Copy</button>' +
-              '<button class="secondary" onclick="loadBonusEligibility(\'' + email.replace(/'/g, "\\'") + '\', \'' + mode + '\', this)">View Bonus Eligibility</button>' +
+              '<button class="secondary" onclick="loadBonusEligibility(\'' + email.replace(/'/g, "\\'") + '\', \'' + currentMode + '\', this)">View Bonus Eligibility</button>' +
               '</div>' +
               '<div id="bonusEligibility_' + email.replace(/@/g, '_').replace(/\./g, '_') + '" class="bonus-eligibility-section" style="margin-top:12px; display:none;"></div>' +
               '</div>';
@@ -2867,6 +2869,7 @@
                 'Consistency: σ=' + match.metrics.consistency_stddev.toFixed(2) + ' (lower is steadier).',
                 'Update coverage: ' + match.metrics.update_coverage.toFixed(2) + ' updates/weekday.'
               ];
+              var currentMode = (__topWindow && __topWindow.mode) || mode || 'iterations';
               td.innerHTML =
                 '<div class="insight-body">' +
                 '<div><strong>Insight for ' + esc(email) + '</strong> ' + badge + '</div>' +
@@ -2874,7 +2877,7 @@
                 '<div class="muted">Shown from cached table data because the API did not return this developer.</div>' +
                 '<div class="insight-actions">' +
                 '<button class="secondary" onclick="copyInsight(this)">Copy</button>' +
-                '<button class="secondary" onclick="loadBonusEligibility(\'' + email.replace(/'/g, "\\'") + '\', \'' + mode + '\', this)">View Bonus Eligibility</button>' +
+                '<button class="secondary" onclick="loadBonusEligibility(\'' + email.replace(/'/g, "\\'") + '\', \'' + currentMode + '\', this)">View Bonus Eligibility</button>' +
                 '</div>' +
                 '<div id="bonusEligibility_' + email.replace(/@/g, '_').replace(/\./g, '_') + '" class="bonus-eligibility-section" style="margin-top:12px; display:none;"></div>' +
                 '</div>';
