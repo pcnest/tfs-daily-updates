@@ -899,16 +899,26 @@
         <!-- (3) Top performers (Admin-only) -->
         <section class="card thin" id="topDevsCard" aria-labelledby="topDevsHeader">
           <div class="row">
-            <h3 id="topDevsHeader" style="margin:0;">Top performers (last 4 sprints or 28 days)</h3>
+            <h3 id="topDevsHeader" style="margin:0;">Top performers (last 4 sprints, 4 weeks, or custom range)</h3>
             <div class="toolbar right">
               <label for="topMode" style="display:flex;gap:6px;align-items:center;">
                 Scope
-                <select id="topMode" aria-label="Window mode">
+                <select id="topMode" aria-label="Window mode" onchange="toggleCustomDateInputs()">
                   <option value="iterations">Last 4 sprints</option>
                   <option value="weeks">Last 4 weeks</option>
+                  <option value="custom">Custom date range</option>
                 </select>
               </label>
-              <button onclick="loadTopDevs()">Refresh</button>
+              <div id="customDateInputs" style="display:none;gap:6px;align-items:center;">
+                <label for="topFromDate" style="display:flex;gap:4px;align-items:center;">
+                  From <input type="date" id="topFromDate" aria-label="Start date" style="padding:4px;">
+                </label>
+                <label for="topToDate" style="display:flex;gap:4px;align-items:center;">
+                  To <input type="date" id="topToDate" aria-label="End date" style="padding:4px;">
+                </label>
+                <button onclick="loadTopDevs()">Apply</button>
+              </div>
+              <button onclick="loadTopDevs()" id="topRefreshBtn">Refresh</button>
               <span id="topDevsStatus" class="status" aria-live="polite"></span>
             </div>
           </div>
@@ -2881,6 +2891,12 @@
         url.searchParams.set('developer', email);
         url.searchParams.set('mode', mode || 'iterations');
 
+        // Pass custom date range if available
+        if (__topWindow && __topWindow.mode === 'custom' && __topWindow.from && __topWindow.to) {
+          url.searchParams.set('from', __topWindow.from);
+          url.searchParams.set('to', __topWindow.to);
+        }
+
         fetch(url, { headers: hdrs })
           .then(function (r) {
             if (!r.ok && r.status === 404) {
@@ -2997,6 +3013,12 @@
         var url = new URL((API || location.origin) + '/api/reports/bonus-eligibility');
         url.searchParams.set('developer', email);
         url.searchParams.set('mode', mode || 'iterations');
+
+        // Pass custom date range if available
+        if (__topWindow && __topWindow.mode === 'custom' && __topWindow.from && __topWindow.to) {
+          url.searchParams.set('from', __topWindow.from);
+          url.searchParams.set('to', __topWindow.to);
+        }
 
         fetch(url, { headers: hdrs })
           .then(function (r) {
@@ -3118,6 +3140,35 @@
           });
       }
 
+      function toggleCustomDateInputs() {
+        var modeSel = byId('topMode');
+        var customInputs = byId('customDateInputs');
+        var refreshBtn = byId('topRefreshBtn');
+        var mode = (modeSel && modeSel.value) ? modeSel.value : 'iterations';
+
+        if (mode === 'custom' && customInputs) {
+          customInputs.style.display = 'flex';
+          if (refreshBtn) refreshBtn.style.display = 'none';
+          // Set default dates: last 28 days
+          var toInput = byId('topToDate');
+          var fromInput = byId('topFromDate');
+          if (toInput && !toInput.value) {
+            var today = new Date();
+            toInput.value = today.toISOString().split('T')[0];
+          }
+          if (fromInput && !fromInput.value) {
+            var d = new Date();
+            d.setDate(d.getDate() - 27);
+            fromInput.value = d.toISOString().split('T')[0];
+          }
+        } else {
+          if (customInputs) customInputs.style.display = 'none';
+          if (refreshBtn) refreshBtn.style.display = 'inline-block';
+          // Auto-load when switching to preset modes
+          loadTopDevs();
+        }
+      }
+
       function loadTopDevs() {
         var role = (window.__role || 'dev').toLowerCase();
         if (role !== 'admin') return;
@@ -3132,7 +3183,49 @@
         window.__topMode = mode;
 
         var url = new URL((API || location.origin) + '/api/reports/top-devs');
-        url.searchParams.set('mode', mode);
+
+        // Handle custom date range mode
+        if (mode === 'custom') {
+          var fromInput = byId('topFromDate');
+          var toInput = byId('topToDate');
+          var fromDate = fromInput ? fromInput.value : '';
+          var toDate = toInput ? toInput.value : '';
+
+          if (!fromDate || !toDate) {
+            if (status) { status.textContent = 'Please select both from and to dates'; status.classList.add('err'); }
+            if (tbody) tbody.innerHTML = '<tr><td colspan="10"><em>Please select both from and to dates</em></td></tr>';
+            return;
+          }
+
+          // Validate date range
+          var from = new Date(fromDate);
+          var to = new Date(toDate);
+
+          if (from >= to) {
+            if (status) { status.textContent = 'From date must be before To date'; status.classList.add('err'); }
+            if (tbody) tbody.innerHTML = '<tr><td colspan="10"><em>From date must be before To date</em></td></tr>';
+            return;
+          }
+
+          var daysDiff = Math.floor((to - from) / (1000 * 60 * 60 * 24)) + 1;
+          if (daysDiff < 7) {
+            if (status) { status.textContent = 'Date range must be at least 7 days'; status.classList.add('err'); }
+            if (tbody) tbody.innerHTML = '<tr><td colspan="10"><em>Date range must be at least 7 days</em></td></tr>';
+            return;
+          }
+
+          if (daysDiff > 90) {
+            if (status) { status.textContent = 'Date range cannot exceed 90 days'; status.classList.add('err'); }
+            if (tbody) tbody.innerHTML = '<tr><td colspan="10"><em>Date range cannot exceed 90 days</em></td></tr>';
+            return;
+          }
+
+          url.searchParams.set('mode', 'custom');
+          url.searchParams.set('from', fromDate);
+          url.searchParams.set('to', toDate);
+        } else {
+          url.searchParams.set('mode', mode);
+        }
 
         fetch(url, {
           headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') }
@@ -3172,9 +3265,16 @@
             }
 
             var windowInfo = js.windowUsed || {};
-            var windowLabel = (windowInfo.mode || mode) + ': ' + (windowInfo.from || '—') + ' to ' + (windowInfo.to || '—');
-            if (windowInfo.iterations && windowInfo.iterations.length) {
-              windowLabel += ' | Sprints: ' + windowInfo.iterations.join(', ');
+            var winMode = windowInfo.mode || mode;
+            var windowLabel = '';
+
+            if (winMode === 'custom') {
+              windowLabel = 'Custom range: ' + (windowInfo.from || '—') + ' to ' + (windowInfo.to || '—');
+            } else {
+              windowLabel = winMode + ': ' + (windowInfo.from || '—') + ' to ' + (windowInfo.to || '—');
+              if (windowInfo.iterations && windowInfo.iterations.length) {
+                windowLabel += ' | Sprints: ' + windowInfo.iterations.join(', ');
+              }
             }
             if (status) { status.textContent = windowLabel; status.classList.add('ok'); }
             __topWindow = windowInfo;

@@ -3235,14 +3235,23 @@ async function computeTopDevs({
   mode = 'iterations',
   windowCount = 4,
   stallHours = 12,
+  fromISO = null,
+  toISO = null,
 } = {}) {
   const today = todayISO();
   const MAX_DAYS = 90;
-  let fromISO = addDays(today, -27); // default 28-day window
+  let windowFromISO = fromISO || addDays(today, -27); // default 28-day window
+  let windowToISO = toISO || today;
   let iterationPaths = null;
   let windowModeUsed = 'weeks';
 
-  if (mode === 'iterations') {
+  // Handle custom date range mode
+  if (mode === 'custom' && fromISO && toISO) {
+    windowFromISO = fromISO;
+    windowToISO = toISO;
+    windowModeUsed = 'custom';
+    iterationPaths = [];
+  } else if (mode === 'iterations') {
     const currIter = await pool.query(
       `select value from meta where key='current_iteration' limit 1`,
     );
@@ -3251,12 +3260,13 @@ async function computeTopDevs({
     if (derived.length) {
       iterationPaths = derived.map((s) => s.toLowerCase());
       windowModeUsed = 'iterations';
-      fromISO = addDays(today, -MAX_DAYS); // keep within 90-day cap
+      windowFromISO = addDays(today, -MAX_DAYS); // keep within 90-day cap
+      windowToISO = today;
     }
   }
 
   const spanDays = Math.floor(
-    (Date.parse(today) - Date.parse(fromISO)) / 86400000,
+    (Date.parse(windowToISO) - Date.parse(windowFromISO)) / 86400000,
   );
   if (!Number.isFinite(spanDays) || spanDays < 0 || spanDays > MAX_DAYS) {
     const err = new Error(`Range too large (max ${MAX_DAYS} days)`);
@@ -3416,8 +3426,8 @@ async function computeTopDevs({
       `;
 
   const { rows } = await pool.query(sql, [
-    fromISO,
-    today,
+    windowFromISO,
+    windowToISO,
     APP_TZ,
     stallHours,
     iterationPaths,
@@ -3464,7 +3474,7 @@ async function computeTopDevs({
     blocker: 0.2,
   };
 
-  const workingDays = countWeekdays(fromISO, today) || 0;
+  const workingDays = countWeekdays(windowFromISO, windowToISO) || 0;
 
   const scored = rows.map((r) => {
     const email = String(r.email || '')
@@ -3548,8 +3558,8 @@ async function computeTopDevs({
     weights,
     windowUsed: {
       mode: windowModeUsed,
-      from: fromISO,
-      to: today,
+      from: windowFromISO,
+      to: windowToISO,
       iterations: iterationPaths || [],
     },
     eligibleCount: eligibleScored.length,
@@ -3562,11 +3572,74 @@ app.get(
   requireAdminOnly,
   async (req, res) => {
     try {
-      const mode = (req.query.mode || 'iterations').toLowerCase();
+      let mode = (req.query.mode || 'iterations').toLowerCase();
       const windowCount = Math.max(parseInt(req.query.window, 10) || 4, 1);
       const stallHours = parseInt(req.query.stallHours, 10) || 12;
+      let fromISO = null;
+      let toISO = null;
 
-      const computed = await computeTopDevs({ mode, windowCount, stallHours });
+      // Handle custom date range
+      if (mode === 'custom') {
+        const fromParam = req.query.from;
+        const toParam = req.query.to;
+
+        if (!fromParam || !toParam) {
+          return res.status(400).json({
+            error: 'missing_dates',
+            detail:
+              'Custom mode requires both from and to query parameters (YYYY-MM-DD)',
+          });
+        }
+
+        // Validate date format and parse
+        const fromDate = new Date(fromParam);
+        const toDate = new Date(toParam);
+
+        if (
+          Number.isNaN(fromDate.getTime()) ||
+          Number.isNaN(toDate.getTime())
+        ) {
+          return res.status(400).json({
+            error: 'invalid_date',
+            detail: 'Dates must be in YYYY-MM-DD format',
+          });
+        }
+
+        if (fromDate >= toDate) {
+          return res.status(400).json({
+            error: 'invalid_range',
+            detail: 'from date must be before to date',
+          });
+        }
+
+        const daysDiff =
+          Math.floor((toDate - fromDate) / (1000 * 60 * 60 * 24)) + 1;
+
+        if (daysDiff < 7) {
+          return res.status(400).json({
+            error: 'range_too_short',
+            detail: 'Date range must be at least 7 days',
+          });
+        }
+
+        if (daysDiff > 90) {
+          return res.status(400).json({
+            error: 'range_too_long',
+            detail: 'Date range cannot exceed 90 days',
+          });
+        }
+
+        fromISO = fromParam;
+        toISO = toParam;
+      }
+
+      const computed = await computeTopDevs({
+        mode,
+        windowCount,
+        stallHours,
+        fromISO,
+        toISO,
+      });
 
       if (computed.eligibleCount < 3) {
         return res.status(400).json({
@@ -3599,17 +3672,37 @@ app.get(
   requireAdminOnly,
   async (req, res) => {
     try {
-      const mode = (req.query.mode || 'iterations').toLowerCase();
+      let mode = (req.query.mode || 'iterations').toLowerCase();
       const developer = String(req.query.developer || '')
         .trim()
         .toLowerCase();
       const windowCount = Math.max(parseInt(req.query.window, 10) || 4, 1);
       const stallHours = parseInt(req.query.stallHours, 10) || 12;
+      let fromISO = null;
+      let toISO = null;
 
       if (!developer)
         return res.status(400).json({ error: 'developer_required' });
 
-      const computed = await computeTopDevs({ mode, windowCount, stallHours });
+      // Handle custom date range
+      if (mode === 'custom') {
+        fromISO = req.query.from;
+        toISO = req.query.to;
+        if (!fromISO || !toISO) {
+          return res.status(400).json({
+            error: 'missing_dates',
+            detail: 'Custom mode requires both from and to query parameters',
+          });
+        }
+      }
+
+      const computed = await computeTopDevs({
+        mode,
+        windowCount,
+        stallHours,
+        fromISO,
+        toISO,
+      });
       const item = (computed.items || []).find(
         (r) =>
           String(r.email || '')
@@ -3891,19 +3984,37 @@ app.get(
       if (!developer)
         return res.status(400).json({ error: 'developer_required' });
 
-      const mode = (req.query.mode || 'iterations').toLowerCase();
+      let mode = (req.query.mode || 'iterations').toLowerCase();
       const windowCount = Math.max(parseInt(req.query.window, 10) || 4, 1);
+      let fromISO = null;
+      let toISO = null;
+
+      // Handle custom date range (same validation as top-devs endpoint)
+      if (mode === 'custom') {
+        fromISO = req.query.from;
+        toISO = req.query.to;
+        if (!fromISO || !toISO) {
+          return res.status(400).json({
+            error: 'missing_dates',
+            detail: 'Custom mode requires both from and to query parameters',
+          });
+        }
+      }
 
       console.log('[bonus-eligibility] Request:', {
         developer,
         mode,
         windowCount,
+        fromISO,
+        toISO,
       });
 
       // Compute metrics using the same logic as Top Performers for consistency
       const topDevsResult = await computeTopDevs({
         mode,
         windowCount,
+        fromISO,
+        toISO,
       });
 
       const windowUsed = topDevsResult.windowUsed;
@@ -3952,12 +4063,13 @@ app.get(
         `select status, reasoning, ticket_context_used, created_at
          from bonus_evaluations
          where dev_email = $1::text
-           and period_end = $2::date
-           and mode = $3::text
+           and period_start = $2::date
+           and period_end = $3::date
+           and mode = $4::text
            and created_at > (now() - interval '1 hour')
          order by created_at desc
          limit 1`,
-        [developer, windowUsed.to, windowUsed.mode],
+        [developer, windowUsed.from, windowUsed.to, windowUsed.mode],
       );
 
       if (cacheResult.rows.length > 0) {
