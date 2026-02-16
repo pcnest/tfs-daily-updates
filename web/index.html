@@ -3044,16 +3044,20 @@
           headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') }
         })
           .then(function (r) {
-            if (!r.ok) {
+            // Always parse JSON, handle errors in next .then() to avoid console errors
+            return r.json().then(function (data) {
+              return { ok: r.ok, status: r.status, data: data };
+            });
+          })
+          .then(function (result) {
+            if (!result.ok) {
               // For 400 (insufficient data), handle gracefully without console error
-              if (r.status === 400) {
-                return r.json().then(function (js) {
-                  return { error: 'insufficient_data', detail: js.detail || 'Not enough data to rank' };
-                });
+              if (result.status === 400) {
+                return { error: 'insufficient_data', detail: result.data.detail || 'Not enough data to rank' };
               }
-              return r.json();
+              return result.data;
             }
-            return r.json();
+            return result.data;
           })
           .then(function (js) {
             if (js.error) {
