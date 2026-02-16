@@ -330,6 +330,11 @@
       box-shadow: 0 10px 40px rgba(0, 0, 0, .35);
     }
 
+    .modal-card.wide {
+      width: min(90vw, 96vw);
+      max-width: 1400px;
+    }
+
     .modal-head {
       display: flex;
       align-items: center;
@@ -342,6 +347,17 @@
       padding: 14px;
       max-height: 70vh;
       overflow: auto;
+    }
+
+    .modal-body.no-padding {
+      padding: 0;
+    }
+
+    .snapshot-frame {
+      width: 100%;
+      height: 75vh;
+      border: none;
+      background: var(--bg);
     }
 
     .modal-foot {
@@ -1115,6 +1131,24 @@
           <button class="secondary" onclick="closeSPModal()">Cancel</button>
           <button id="submitBtn" onclick="submitProgress()">Submit</button>
           <span id="submitStatus" class="status" role="status" aria-live="polite"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Developer Snapshot Modal -->
+    <div id="snapshotBackdrop" class="modal-backdrop" onclick="closeSnapshotModal()"></div>
+    <div id="snapshotModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="snapshotTitle">
+      <div class="modal-card wide" onclick="event.stopPropagation()">
+        <div class="modal-head">
+          <h3 id="snapshotTitle">Developer Snapshot</h3>
+          <button class="modal-close" onclick="closeSnapshotModal()" aria-label="Close">Close</button>
+        </div>
+        <div class="modal-body no-padding">
+          <iframe id="snapshotFrame" class="snapshot-frame" title="Developer Snapshot"></iframe>
+        </div>
+        <div class="modal-foot">
+          <span id="snapshotStatus" class="status" role="status" aria-live="polite"></span>
+          <button class="secondary" onclick="closeSnapshotModal()">Close</button>
         </div>
       </div>
     </div>
@@ -3326,10 +3360,28 @@
       function openDevSnapshot(email, from, to) {
         var url = (API || location.origin) + '/api/reports/snapshots?format=html&developer=' + encodeURIComponent(email) + '&from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
         var tkn = localStorage.getItem('pocToken') || '';
+
+        var modal = byId('snapshotModal');
+        var backdrop = byId('snapshotBackdrop');
+        var frame = byId('snapshotFrame');
+        var title = byId('snapshotTitle');
+        var status = byId('snapshotStatus');
+
+        if (title) title.textContent = 'Developer Snapshot: ' + email;
+        if (status) { status.textContent = 'Loading...'; status.className = 'status'; }
+
+        // Open modal immediately
+        if (modal) modal.classList.add('open');
+        if (backdrop) backdrop.classList.add('open');
+
         if (!tkn) {
-          window.open(url, '_blank', 'noopener');
+          // No token - load directly in iframe
+          if (frame) frame.src = url;
+          if (status) status.textContent = '';
           return;
         }
+
+        // With token - fetch and inject into iframe
         fetch(url, {
           headers: { 'Authorization': 'Bearer ' + tkn, 'Accept': 'text/html' }
         })
@@ -3338,17 +3390,29 @@
             return r.text();
           })
           .then(function (html) {
-            var win = window.open('', '_blank', 'noopener');
-            if (win) {
-              win.document.write(html);
-              win.document.close();
-            } else {
-              alert('Popup blocked. Allow popups for this site.');
+            if (frame) {
+              var blob = new Blob([html], { type: 'text/html' });
+              frame.src = URL.createObjectURL(blob);
             }
+            if (status) { status.textContent = 'Loaded'; status.classList.add('ok'); }
+            setTimeout(function () { if (status) status.textContent = ''; }, 2000);
           })
           .catch(function (err) {
-            alert('Failed to open snapshot: ' + ((err && err.message) ? err.message : err));
+            if (status) {
+              status.textContent = 'Failed: ' + ((err && err.message) ? err.message : err);
+              status.classList.add('err');
+            }
           });
+      }
+
+      function closeSnapshotModal() {
+        var modal = byId('snapshotModal');
+        var backdrop = byId('snapshotBackdrop');
+        var frame = byId('snapshotFrame');
+        if (modal) modal.classList.remove('open');
+        if (backdrop) backdrop.classList.remove('open');
+        // Clear iframe src to stop any video/audio and free memory
+        if (frame) frame.src = 'about:blank';
       }
 
       function pmUnlockUser(btn) {
@@ -3979,6 +4043,7 @@
       window.renderDevAssistInModal = renderDevAssistInModal;
       window.openSnapshots = openSnapshots;
       window.openDevSnapshot = openDevSnapshot;
+      window.closeSnapshotModal = closeSnapshotModal;
       window.emailSnapshots = emailSnapshots;
       window.toggleAiRisk = toggleAiRisk;
 
