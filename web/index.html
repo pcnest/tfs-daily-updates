@@ -410,9 +410,84 @@
       color: #ffffff;
     }
 
+    .badge.err {
+      background: #ef4444;
+      color: #ffffff;
+    }
+
+    .badge.warning {
+      background: #f59e0b;
+      color: #ffffff;
+    }
+
     .badge.release {
       background: #f28c1b;
       color: #ffffff
+    }
+
+    /* Bonus Eligibility Styling */
+    .bonus-eligibility-card {
+      margin-top: 12px;
+      padding: 16px;
+      background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+      border: 1px solid #e2e8f0;
+      border-radius: 8px;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+
+    .bonus-eligibility-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      font-weight: 600;
+      color: #1e293b;
+    }
+
+    .bonus-eligibility-reasoning {
+      margin-bottom: 12px;
+      line-height: 1.6;
+      color: #475569;
+      font-size: 14px;
+    }
+
+    .bonus-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+      padding: 12px;
+      background: #ffffff;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+    }
+
+    .bonus-metric-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .bonus-metric-label {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      color: #64748b;
+      letter-spacing: 0.5px;
+    }
+
+    .bonus-metric-value {
+      font-size: 16px;
+      font-weight: 700;
+      color: #1e293b;
+    }
+
+    .bonus-eligibility-footer {
+      font-size: 12px;
+      color: #64748b;
+      font-style: italic;
+      padding-top: 8px;
+      border-top: 1px solid #e2e8f0;
     }
 
     .weekly-summary-head {
@@ -2939,26 +3014,42 @@
 
             var status = js.status || 'Unknown';
             var reasoning = js.reasoning || 'No reasoning provided.';
-            var cached = js.cached ? ' (from cache)' : '';
-            var badgeClass = status === 'Eligible' ? 'ok' : status === 'Not Eligible' ? 'err' : 'muted';
+            var cached = js.cached ? ' <span style="font-size:11px; color:#64748b;">(cached)</span>' : '';
+            var badgeClass = status === 'Eligible' ? 'ok' : status === 'Not Eligible' ? 'err' : 'warning';
 
             var metricsHtml = '';
             if (js.metrics) {
-              metricsHtml = '<div style="margin:8px 0; padding:8px; background:#fff; border-radius:4px; font-size:0.9rem; color:#555;">' +
-                '<strong>Metrics:</strong> ' +
-                js.metrics.throughput + ' finished, ' +
-                js.metrics.completion_pct + '% completion, ' +
-                (js.metrics.cycle_time_hours ? js.metrics.cycle_time_hours + 'h cycle time' : 'N/A cycle time') +
-                ', ' + js.metrics.blocker_rate + ' blocker rate' +
+              metricsHtml =
+                '<div class="bonus-metrics">' +
+                '<div class="bonus-metric-item">' +
+                '<div class="bonus-metric-label">Throughput</div>' +
+                '<div class="bonus-metric-value">' + js.metrics.throughput + ' finished</div>' +
+                '</div>' +
+                '<div class="bonus-metric-item">' +
+                '<div class="bonus-metric-label">Completion</div>' +
+                '<div class="bonus-metric-value">' + js.metrics.completion_pct + '%</div>' +
+                '</div>' +
+                '<div class="bonus-metric-item">' +
+                '<div class="bonus-metric-label">Cycle Time</div>' +
+                '<div class="bonus-metric-value">' + (js.metrics.cycle_time_hours ? js.metrics.cycle_time_hours + 'h' : 'N/A') + '</div>' +
+                '</div>' +
+                '<div class="bonus-metric-item">' +
+                '<div class="bonus-metric-label">Blocker Rate</div>' +
+                '<div class="bonus-metric-value">' + js.metrics.blocker_rate + '</div>' +
+                '</div>' +
                 '</div>';
             }
 
             container.innerHTML =
-              '<div style="padding:12px; background:#f9f9f9; border-left:3px solid #ddd; border-radius:4px; color:#333;">' +
-              '<div style="margin-bottom:8px; color:#333;"><strong>Bonus Eligibility:</strong> <span class="badge ' + badgeClass + '">' + esc(status) + '</span>' + esc(cached) + '</div>' +
-              '<div style="margin-bottom:8px; line-height:1.5; color:#333;">' + esc(reasoning) + '</div>' +
+              '<div class="bonus-eligibility-card">' +
+              '<div class="bonus-eligibility-header">' +
+              '<span>Bonus Eligibility:</span> ' +
+              '<span class="badge ' + badgeClass + '">' + esc(status) + '</span>' +
+              cached +
+              '</div>' +
+              '<div class="bonus-eligibility-reasoning">' + esc(reasoning) + '</div>' +
               metricsHtml +
-              '<div style="font-size:0.85rem; color:#666; font-style:italic;">This evaluation is advisory and AI-generated. Final bonus decisions require manager review.</div>' +
+              '<div class="bonus-eligibility-footer">This evaluation is advisory and AI-generated. Final bonus decisions require manager review.</div>' +
               '</div>';
           })
           .catch(function (err) {
