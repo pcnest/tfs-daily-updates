@@ -2891,12 +2891,6 @@
           var badge = match.lowSample ? '<span class="badge muted">low sample</span> ' : '';
           if (match.metrics && match.metrics.update_coverage < 0.5) badge += '<span class="badge muted">low coverage</span> ';
 
-          var snapLink = '';
-          if (__topWindow.from && __topWindow.to) {
-            var base = (API || location.origin) + '/api/reports/snapshots?format=html';
-            snapLink = '<a class="secondary" target="_blank" rel="noopener" href="' + esc(base + '&developer=' + encodeURIComponent(email) + '&from=' + encodeURIComponent(__topWindow.from) + '&to=' + encodeURIComponent(__topWindow.to)) + '">Open snapshot (HTML)</a>';
-          }
-
           var bullets = [
             'Throughput: ' + match.metrics.throughput + ' finished; completion ' + match.metrics.completion_pct.toFixed(1) + '%.',
             'Speed: ' + (match.metrics.cycle_time_hours == null ? 'n/a' : match.metrics.cycle_time_hours.toFixed(1) + 'h per item.'),
@@ -2911,7 +2905,6 @@
             '<div><strong>Insight for ' + esc(email) + '</strong> <span class="muted">(' + esc(__topWindow.from || '?') + ' to ' + esc(__topWindow.to || '?') + ')</span> ' + badge + '</div>' +
             '<ul style="margin:0;padding-left:18px;">' + bullets.map(function (b) { return '<li>' + esc(b) + '</li>'; }).join('') + '</ul>' +
             '<div class="insight-actions">' +
-            (snapLink || '') +
             '<button class="secondary" onclick="copyInsight(this)">Copy</button>' +
             '<button class="secondary" onclick="loadBonusEligibility(\'' + email.replace(/'/g, "\\'") + '\', \'' + currentMode + '\', this)">View Bonus Eligibility</button>' +
             '</div>' +
@@ -2952,11 +2945,6 @@
             var badge = '';
             if (js.item && js.item.lowSample) badge += '<span class="badge muted">low sample</span> ';
             if (js.item && js.item.metrics && js.item.metrics.update_coverage < 0.5) badge += '<span class="badge muted">low coverage</span> ';
-            var snapLink = '';
-            if (windowUsed.from && windowUsed.to) {
-              var base = (API || location.origin) + '/api/reports/snapshots?format=html';
-              snapLink = '<a class="secondary" target="_blank" rel="noopener" href="' + esc(base + '&developer=' + encodeURIComponent(email) + '&from=' + encodeURIComponent(windowUsed.from) + '&to=' + encodeURIComponent(windowUsed.to)) + '">Open snapshot (HTML)</a>';
-            }
 
             var bullets = insight.length
               ? '<ul style="margin:0;padding-left:18px;">' + insight.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ul>'
@@ -2968,7 +2956,6 @@
               '<div><strong>Insight for ' + esc(email) + '</strong> <span class="muted">(' + esc(windowUsed.from || '?') + ' to ' + esc(windowUsed.to || '?') + ')</span> ' + badge + '</div>' +
               bullets +
               '<div class="insight-actions">' +
-              (snapLink || '') +
               '<button class="secondary" onclick="copyInsight(this)">Copy</button>' +
               '<button class="secondary" onclick="loadBonusEligibility(\'' + email.replace(/'/g, "\\'") + '\', \'' + currentMode + '\', this)">View Bonus Eligibility</button>' +
               '</div>' +
@@ -3330,7 +3317,7 @@
               var snapshotLink = (snapFrom && snapTo && email)
                 ? ('<button class="secondary small" onclick="openDevSnapshot(\'' + email.replace(/'/g, "\\'") + '\',\'' + snapFrom + '\',\'' + snapTo + '\')">View snapshot</button>')
                 : '';
-              var insightBtn = '<button class="secondary" onclick="toggleInsight(\'' + email.replace(/'/g, "\\'") + '\')">View insight</button>';
+              var insightBtn = '<button class="secondary small" onclick="toggleInsight(\'' + email.replace(/'/g, "\\'") + '\')">View insight</button>';
 
               html += '<tr data-email="' + esc(email) + '">' +
                 '<td>' + esc(rank) + '</td>' +
@@ -3343,9 +3330,9 @@
                 '<td>' + esc(consistency) + '</td>' +
                 '<td>' + esc(coverage) + '</td>' +
                 '<td>' +
-                (snapshotLink ? snapshotLink + '<br>' : '') +
-                insightBtn + '<br>' +
-                (notes.length ? '<span class="badge muted">' + esc(notes.join(', ')) + '</span>' : '—') +
+                (snapshotLink ? snapshotLink + ' ' : '') +
+                insightBtn +
+                (notes.length ? '<br><span class="badge muted">' + esc(notes.join(', ')) + '</span>' : '') +
                 '</td>' +
                 '</tr>';
             }
