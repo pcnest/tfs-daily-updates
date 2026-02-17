@@ -3250,7 +3250,7 @@ async function computeTopDevs({
     windowFromISO = fromISO;
     windowToISO = toISO;
     windowModeUsed = 'custom';
-    iterationPaths = [];
+    iterationPaths = null;
   } else if (mode === 'iterations') {
     const currIter = await pool.query(
       `select value from meta where key='current_iteration' limit 1`,
