@@ -271,6 +271,12 @@
       white-space: nowrap;
     }
 
+    /* Date inputs in toolbar */
+    .snapshots-toolbar>input[type="date"] {
+      flex: 0 0 auto;
+      max-width: 150px;
+    }
+
     /* Optional: allow wrapping on very small screens */
     @media (max-width: 640px) {
       .row>.snapshots-toolbar {
@@ -1010,29 +1016,17 @@
             </div>
           </div>
 
-          <div class="grid-2">
-            <div class="field">
-              <label for="repFrom">From</label>
-              <input id="repFrom" type="date" />
-            </div>
-            <div class="field">
-              <label for="repTo">To</label>
-              <input id="repTo" type="date" />
-            </div>
-          </div>
-
-          <!-- Developer Snapshots -->
-          <div class="row" style="margin-top:10px;">
-            <label for="snapDev">Assigned to</label>
-            <div class="toolbar snapshots-toolbar">
-              <select id="snapDev">
-                <option value="all">— Select developer —</option>
-              </select>
-              <button class="secondary" onclick="reloadSnapshotDevList()">Reload</button> <!-- NEW -->
-              <button type="button" onclick="openSnapshots('html')">Preview (HTML)</button>
-              <button type="button" onclick="openSnapshots('pdf')">Download PDF</button>
-              <button type="button" onclick="emailSnapshots()">Email Snapshot</button>
-            </div>
+          <!-- Developer Snapshots - Single Row Layout -->
+          <div class="toolbar snapshots-toolbar" style="margin-top:10px;">
+            <input id="repFrom" type="date" placeholder="From" />
+            <input id="repTo" type="date" placeholder="To" />
+            <select id="snapDev">
+              <option value="all">— Select developer —</option>
+            </select>
+            <button class="secondary" onclick="reloadSnapshotDevList()">Reload</button>
+            <button type="button" onclick="openSnapshots('html')">Preview (HTML)</button>
+            <button type="button" id="snapPdfBtn" onclick="openSnapshots('pdf')">Download PDF</button>
+            <button type="button" id="snapEmailBtn" onclick="emailSnapshots()">Email Snapshot</button>
           </div>
 
 
@@ -1452,6 +1446,8 @@
         var weeklyCard = byId('weeklySummaryCard');
         var topDevsCard = byId('topDevsCard');
         var bonusAuditCard = byId('bonusAuditCard');
+        var snapPdfBtn = byId('snapPdfBtn');
+        var snapEmailBtn = byId('snapEmailBtn');
 
         if (loginCard) loginCard.classList.add('hidden');
         if (ticketsCard) ticketsCard.classList.remove('hidden');
@@ -1466,6 +1462,8 @@
         if (pmBox) pmBox.classList.toggle('hidden', !isManager);
         if (topDevsCard) topDevsCard.classList.toggle('hidden', !isAdmin); // admin-only card
         if (bonusAuditCard) bonusAuditCard.classList.toggle('hidden', !isAdmin); // admin-only card
+        if (snapPdfBtn) snapPdfBtn.classList.toggle('hidden', !isAdmin); // admin-only button
+        if (snapEmailBtn) snapEmailBtn.classList.toggle('hidden', !isAdmin); // admin-only button
 
         if (pmBox) {
           var controls = pmBox.querySelectorAll('button, a');
