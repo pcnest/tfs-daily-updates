@@ -1017,13 +1017,14 @@
 
           <!-- Developer Snapshots - Single Row Layout -->
           <div class="toolbar snapshots-toolbar" style="margin-top:10px;">
+            <label for="repFrom">From:</label>
             <input id="repFrom" type="date" placeholder="From" />
+            <label for="repTo">To:</label>
             <input id="repTo" type="date" placeholder="To" />
             <select id="snapDev">
               <option value="all">— Select developer —</option>
             </select>
             <button onclick="loadReportRange()">Load</button>
-            <button class="secondary" onclick="reloadSnapshotDevList()">Reload</button>
             <button type="button" onclick="openSnapshots('html')">Preview (HTML)</button>
             <button type="button" id="snapPdfBtn" onclick="openSnapshots('pdf')">Download PDF</button>
             <button type="button" id="snapEmailBtn" onclick="emailSnapshots()">Email Snapshot</button>
