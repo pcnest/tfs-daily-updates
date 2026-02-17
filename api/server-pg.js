@@ -2317,12 +2317,13 @@ function parseRangeFilters(req) {
 const RANGE_SQL = `
   SELECT
     u.at::date        AS "date",
-    t.assigned_to     AS "assignedTo",
     u.ticket_id       AS "ticketId",
     t.type            AS "type",
     t.title,
     t.state,
+    t.severity,
     u.code,
+    u.risk_level      AS "riskLevel",
     u.note
   FROM progress_updates u
   JOIN tickets t ON t.id = u.ticket_id
@@ -2332,7 +2333,7 @@ const RANGE_SQL = `
       OR lower(u.email) = $4
       OR split_part(lower(u.email),'@',1) = $5
     )
-  ORDER BY u.at::date DESC, t.assigned_to NULLS LAST, u.ticket_id
+  ORDER BY u.at::date DESC, u.ticket_id
 `;
 
 async function selectRangeRows({ from, to, devEmail, devLocal }) {
@@ -2367,17 +2368,19 @@ app.get('/api/updates/range.tsv', async (req, res) => {
     String(x == null ? '' : x)
       .replace(/\t/g, ' ')
       .replace(/\r?\n/g, ' ');
-  let out = 'date\tassignedTo\tticketId\ttitle\ttype\tstate\tcode\tnote\n';
+  let out =
+    'date\tticketId\ttype\ttitle\tstate\tseverity\tcode\triskLevel\tnote\n';
   for (const r of rows) {
     out +=
       [
         cell(r.date),
-        cell(r.assignedTo),
         cell(r.ticketId),
-        cell(r.title),
         cell(r.type),
+        cell(r.title),
         cell(r.state),
+        cell(r.severity),
         cell(r.code),
+        cell(r.riskLevel),
         cell(r.note),
       ].join('\t') + '\n';
   }
