@@ -2872,6 +2872,145 @@ app.get(
       }
       // -------------------------------------------------------------------------
 
+      // --- Deterministic family analysis fallback (always runs; AI replaces when ai=1) ---
+      function buildFamilyAnalysisFallback(families, periodDays) {
+        const pd = Number(periodDays) || 28;
+        const periodHours = pd * 24;
+        const famKeys = [
+          '100_xx',
+          '200_xx',
+          '300_xx',
+          '400_xx',
+          '500_xx',
+          '600_xx',
+          '700_xx',
+          '800_xx',
+        ];
+        const labels = {
+          '100_xx': 'Discovery / Starting Work',
+          '200_xx': 'In-Progress Development',
+          '300_xx': 'Testing / Debugging',
+          '400_xx': 'Peer / Code Review',
+          '500_xx': 'Completion / Handoffs',
+          '600_xx': 'Challenges',
+          '700_xx': 'Investigation',
+          '800_xx': 'Delays',
+        };
+        const totalTransitions = famKeys.reduce(
+          (s, k) => s + ((families[k] && families[k].transitions) || 0),
+          0,
+        );
+        const result = [];
+        for (const fk of famKeys) {
+          const f = (families && families[fk]) || {
+            transitions: 0,
+            hours_sum: 0,
+            hours_avg: 0,
+          };
+          if (!f.transitions) continue; // skip inactive families
+          const avg = Number(f.hours_avg) || 0;
+          const sum = Number(f.hours_sum) || 0;
+          const pctOfTotal = totalTransitions
+            ? Math.round((100 * f.transitions) / totalTransitions)
+            : 0;
+
+          let observation, likely_cause, signal;
+
+          if (fk === '100_xx') {
+            const days = (avg / 24).toFixed(1);
+            if (avg > 48) {
+              observation = `Tickets averaged ${days} days in the discovery/starting state before the next update — longer than a healthy handoff cadence.`;
+              likely_cause = `Tickets may be assigned but not immediately actioned due to context-switching or sprint loading; update hygiene (logging the first substantive update promptly) could also be a factor.`;
+              signal = 'bottleneck';
+            } else {
+              observation = `Discovery transitions averaged ${avg.toFixed(1)}h — tickets are being picked up and updated within a reasonable timeframe.`;
+              likely_cause = `Starting flow is healthy; the developer is engaging with new work without significant delays.`;
+              signal = 'healthy';
+            }
+          } else if (fk === '200_xx') {
+            const days = (avg / 24).toFixed(1);
+            if (avg < 48) {
+              observation = `Active development averaged ${avg.toFixed(1)}h per transition — updates are being posted at a steady, healthy cadence.`;
+              likely_cause = `Work is progressing without significant interruption; the developer is moving efficiently through in-progress tasks.`;
+              signal = 'healthy';
+            } else {
+              observation = `In-progress development averaged ${days} days per transition — longer gaps between updates than expected for active work.`;
+              likely_cause = `High WIP, context-switching across multiple tickets, or large task decomposition may be stretching the in-progress cycle.`;
+              signal = 'bottleneck';
+            }
+          } else if (fk === '300_xx') {
+            const pct300 = pctOfTotal;
+            if (pct300 < 5) {
+              observation = `Only ${f.transitions} testing/debugging transition${f.transitions !== 1 ? 's' : ''} logged (${pct300}% of total) — very low relative to overall activity.`;
+              likely_cause = `Testing effort is likely being absorbed into 200_xx (in-progress) updates rather than logged as a distinct 300_xx step; this is an update-hygiene gap, not evidence that testing is fast or absent.`;
+              signal = 'underreported';
+            } else {
+              observation = `Testing/debugging averaged ${avg.toFixed(1)}h per transition across ${f.transitions} logged events.`;
+              likely_cause = `Test cycles are being captured; average duration looks proportionate to the workload this period.`;
+              signal = 'healthy';
+            }
+          } else if (fk === '400_xx') {
+            const days = (avg / 24).toFixed(1);
+            if (avg > 72) {
+              observation = `Code review averaged ${days} days per transition — tickets are waiting significantly longer for review than a healthy PR cadence.`;
+              likely_cause = `This reflects team review throughput, not developer pace — reviewers have a slow turnaround, large PRs require extended back-and-forth, or the review queue is congested.`;
+              signal = 'bottleneck';
+            } else {
+              observation = `Code reviews averaged ${avg.toFixed(1)}h per transition — turnaround is within a reasonable range.`;
+              likely_cause = `Review throughput appears healthy; no systemic review lag detected this period.`;
+              signal = 'healthy';
+            }
+          } else if (fk === '500_xx') {
+            const threshold = periodHours * 0.25;
+            const days = (avg / 24).toFixed(1);
+            if (avg > threshold) {
+              observation = `Completion/handoff averaged ${days} days per transition — in a ${pd}-day window, each ticket sat in the done state for over ${Math.round((avg / periodHours) * 100)}% of the period after the developer marked it complete.`;
+              likely_cause = `Post-completion sign-off, acceptance, or deployment confirmation is not generating a follow-up update, leaving intervals open-ended until the report window closes. This is a process/tracking gap, not developer lag.`;
+              signal = 'process_gap';
+            } else {
+              observation = `Completion/handoff averaged ${avg.toFixed(1)}h per transition — reasonable turnaround after work is marked done.`;
+              likely_cause = `Handoff and sign-off steps are progressing without extended delays; closure is being recorded within the period.`;
+              signal = 'healthy';
+            }
+          } else if (fk === '600_xx') {
+            observation = `${f.transitions} challenge transition${f.transitions !== 1 ? 's' : ''} logged — challenges were surfaced and recorded during the period.`;
+            likely_cause =
+              avg > 72
+                ? `Challenges are taking more than ${(avg / 24).toFixed(1)} days to resolve on average — escalation or external dependency resolution may be the bottleneck.`
+                : `Challenge events were recorded and addressed within a reasonable timeframe.`;
+            signal = avg > 72 ? 'bottleneck' : 'healthy';
+          } else if (fk === '700_xx') {
+            observation = `${f.transitions} investigation transition${f.transitions !== 1 ? 's' : ''} logged; tickets spent time in a diagnostic or exploratory state.`;
+            likely_cause =
+              avg > 48
+                ? `Extended investigation time (${(avg / 24).toFixed(1)} days avg) may indicate unclear requirements, environment issues, or undocumented system behaviour.`
+                : `Investigation cycles are short and appear to be conclusive.`;
+            signal = avg > 48 ? 'bottleneck' : 'healthy';
+          } else if (fk === '800_xx') {
+            const days = (avg / 24).toFixed(1);
+            if (avg < 48) {
+              observation = `${f.transitions} delay transition${f.transitions !== 1 ? 's' : ''} logged; each resolved in an average of ${avg.toFixed(1)}h — blockers were surfaced and cleared quickly.`;
+              likely_cause = `Delays were identified and actioned promptly; the developer is escalating and resolving dependencies without letting tickets stall.`;
+              signal = 'healthy';
+            } else {
+              observation = `${f.transitions} delay transition${f.transitions !== 1 ? 's' : ''} averaging ${days} days — external waits are absorbing significant throughput capacity.`;
+              likely_cause = `Dependencies, environment issues, or waiting on external teams are extending delay cycles; the developer's pace is being constrained by factors outside their direct control.`;
+              signal = 'bottleneck';
+            }
+          }
+
+          result.push({
+            family: fk,
+            label: labels[fk],
+            observation,
+            likely_cause,
+            signal,
+          });
+        }
+        return result;
+      }
+      // -------------------------------------------------------------------------
+
       function renderSnapshotHTML({
         name,
         email,
@@ -2882,6 +3021,7 @@ app.get(
         families,
         insights,
         audience, // 'pm' (default) or 'dev' for the email path
+        periodDays,
       }) {
         const famKeys = [
           '100_xx',
@@ -3072,6 +3212,73 @@ app.get(
     </table>
     <div class="muted" style="margin-top:6px; font-size: 0.8rem;">Average cycle-time = Aggregate Hours ÷ Transitions per family; durations clipped to the report window.</div>
   </div>
+
+  ${(() => {
+    if (String(audience) === 'dev') return '';
+    // Use AI family_analysis if available, otherwise deterministic fallback
+    const familyEntries =
+      I && Array.isArray(I.family_analysis) && I.family_analysis.length
+        ? I.family_analysis.map((e) => ({
+            family: e.family,
+            label:
+              {
+                '100_xx': 'Discovery / Starting Work',
+                '200_xx': 'In-Progress Development',
+                '300_xx': 'Testing / Debugging',
+                '400_xx': 'Peer / Code Review',
+                '500_xx': 'Completion / Handoffs',
+                '600_xx': 'Challenges',
+                '700_xx': 'Investigation',
+                '800_xx': 'Delays',
+              }[e.family] || e.family,
+            observation: e.observation,
+            likely_cause: e.likely_cause,
+            signal: e.signal,
+          }))
+        : buildFamilyAnalysisFallback(families, periodDays);
+
+    if (!familyEntries.length) return '';
+
+    const signalBadge = (sig) => {
+      const map = {
+        healthy: { color: '#15803d', bg: '#dcfce7', label: 'Healthy' },
+        bottleneck: { color: '#9a3412', bg: '#ffedd5', label: 'Bottleneck' },
+        underreported: {
+          color: '#374151',
+          bg: '#f3f4f6',
+          label: 'Underreported',
+        },
+        process_gap: { color: '#b91c1c', bg: '#fee2e2', label: 'Process Gap' },
+        inactive: { color: '#6b7280', bg: '#f9fafb', label: 'Inactive' },
+      };
+      const s = map[sig] || map.inactive;
+      return `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:${s.bg};color:${s.color};margin-right:6px;">${s.label}</span>`;
+    };
+
+    const rows = familyEntries
+      .map(
+        (e) => `
+      <div style="border-bottom:1px solid #f0f0f0;padding:10px 0;">
+        <div style="font-weight:600;font-size:12.5px;margin-bottom:4px;">
+          ${signalBadge(e.signal)}${escapeHtml(e.family)} — ${escapeHtml(e.label || '')}
+        </div>
+        <div style="font-size:12px;color:#374151;margin-bottom:2px;"><strong>Observation:</strong> ${escapeHtml(e.observation || '')}</div>
+        <div style="font-size:12px;color:#6b7280;"><strong>Likely Cause:</strong> ${escapeHtml(e.likely_cause || '')}</div>
+      </div>`,
+      )
+      .join('');
+
+    const aiTag =
+      I && Array.isArray(I.family_analysis) && I.family_analysis.length
+        ? '<span style="font-size:10px;color:#6b7280;margin-left:6px;">AI-generated</span>'
+        : '<span style="font-size:10px;color:#9ca3af;margin-left:6px;">Rule-based</span>';
+
+    return `
+  <div class="card">
+    <div class="section-title">Status Family Interpretation${aiTag}</div>
+    ${rows}
+  </div>`;
+  })()}
 
   <div class="grid">
   <div class="card kb">
@@ -3264,6 +3471,7 @@ app.get(
           insights:
             insightsByEmail.get(String(r.email || '').toLowerCase()) || null,
           audience: String(audience) === 'dev' ? 'dev' : 'pm',
+          periodDays: spanDays,
         }),
       );
 
@@ -4603,11 +4811,37 @@ const SnapshotInsightsSchema = {
       // Executive summary fields — interpretive prose, not metric restatement
       exec_summary: { type: 'string' }, // manager/PO audience
       exec_summary_dev: { type: 'string' }, // developer coaching audience
+      // Per-family interpretive analysis — PM audience only, optional
+      family_analysis: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            family: { type: 'string' },
+            observation: { type: 'string' },
+            likely_cause: { type: 'string' },
+            signal: {
+              type: 'string',
+              enum: [
+                'healthy',
+                'bottleneck',
+                'underreported',
+                'process_gap',
+                'inactive',
+              ],
+            },
+          },
+          required: ['family', 'observation', 'likely_cause', 'signal'],
+        },
+        minItems: 1,
+        maxItems: 8,
+      },
     },
     required: ['key_findings', 'strengths', 'focus_areas', 'risk'],
   },
 };
-const SNAPSHOT_PROMPT_VERSION = 'snapshot_v4_exec_summary_2026-03-09';
+const SNAPSHOT_PROMPT_VERSION = 'snapshot_v5_family_analysis_2026-03-09';
 const SNAPSHOT_EVIDENCE_MAX_TICKETS = 12;
 const SNAPSHOT_RUN_RETENTION = Math.max(
   0,
@@ -4686,6 +4920,7 @@ async function aiSnapshotInsightsForDev({
   const system = `You are a delivery PM analyzing a developer's progress snapshot.
 You receive per-family metrics (100_xx..800_xx: transitions, hours_sum, hours_avg), ticket_volume, completion_pct, stalled_tickets,
 plus evidence_summary (top tickets + last updates + blocker themes), delta_summary (changes vs prior snapshot), and prior_insights.
+You also receive period_days (calendar length of the report window).
 
 Write concise outputs:
 - key_findings: 3-5 bullets (throughput, bottlenecks, balance across 100/200/300/400/500, blocker footprint 600/800).
@@ -4696,6 +4931,18 @@ Write concise outputs:
 - support_from_team_leads: 1-3 bullets, written as actions for the team lead/manager (not the developer), each <=20 words, concrete, next-week scope (cadence, escalations, pairing, env access, PR gates, 10-15 min unblock huddles).
 - exec_summary: 2–3 sentences for a non-technical manager or product owner. Synthesize cause and effect across the metrics; make a clear judgment call about delivery health. Do NOT restate raw numbers that are already visible in the report — interpret what they mean instead.
 - exec_summary_dev: 2–3 sentences written directly for the developer. Use a coaching tone, be forward-looking and actionable. Acknowledge what is working, then focus on one key lever the developer controls to improve next period.
+- family_analysis: For each family with transitions > 0, produce one entry with:
+  - family: the family code (e.g. "200_xx")
+  - observation: one sentence — what the number operationally means (NOT a raw number restatement). Contextualise hours_avg relative to period_days (e.g. "240h avg in a 28-day window means the ticket sat in this state for a third of the period").
+  - likely_cause: one sentence — infer the most probable operational cause using cross-family patterns. Do NOT attribute team/process delays to the developer.
+  - signal: one of "healthy" | "bottleneck" | "underreported" | "process_gap" | "inactive".
+  Cross-family inference rules (apply these):
+  * Low 300_xx transitions (< 5% of total) alongside high 200_xx aggregate → testing is likely absorbed into in-progress updates rather than logged separately (underreported, not genuinely fast).
+  * High 400_xx avg (> 3 days) → code review turnaround is a team/process bottleneck; attribute to review queue, not developer pace.
+  * High 500_xx avg relative to period (> 25% of period hours) → post-completion acceptance, sign-off, or deployment confirmation is not generating follow-up updates; this is a process gap, not developer lag.
+  * High 800_xx transitions but low avg (< 2 days each) → blockers are being surfaced and cleared promptly; healthy signal.
+  * High 100_xx avg (> 2 days) → tickets are assigned but context-switching or discovery delays the first substantive update.
+  * Omit families with 0 transitions from family_analysis entirely.
 
 Grounding rules (strict):
 - If you mention a specific ticket, include its ID in parentheses.
@@ -4706,10 +4953,19 @@ Grounding rules (strict):
 You also receive overall_avg_cycle_time (weighted across all families). Prefer it when summarizing "Cycle-time signals" and risk rationales.
 Keep outputs brief and practical, using the team's progress families.`;
 
+  const periodDaysForPrompt =
+    fromISO && toISO
+      ? Math.max(
+          1,
+          Math.round((Date.parse(toISO) - Date.parse(fromISO)) / 86400000) + 1,
+        )
+      : null;
+
   const user = `Developer period: ${trimmed.period}
 Input JSON:
 ${JSON.stringify({
   metrics: trimmed,
+  period_days: periodDaysForPrompt,
   evidence_summary: evidence,
   delta_summary: deltaSummary,
   prior_insights: priorInsights,
@@ -4729,7 +4985,7 @@ ${JSON.stringify({
         strict: !!SnapshotInsightsSchema.strict,
       },
     },
-    max_tokens: 800, // increased from 600; exec_summary + exec_summary_dev add ~40-60 tokens
+    max_tokens: 1400, // increased from 800; family_analysis adds ~560 tokens (8 families × ~70 tokens)
   });
 
   let js = parseOpenAIJson(resp);
