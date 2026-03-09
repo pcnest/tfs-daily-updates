@@ -2922,10 +2922,16 @@ app.get(
               observation = `Tickets averaged ${days} days in the discovery/starting state before the next update — longer than a healthy handoff cadence.`;
               likely_cause = `Tickets may be assigned but not immediately actioned due to context-switching or sprint loading; update hygiene (logging the first substantive update promptly) could also be a factor.`;
               signal = 'bottleneck';
+              attribution = 'developer';
+              coaching_tip =
+                'In 1:1, ask the developer to post an initial update within one working day of ticket assignment.';
             } else {
               observation = `Discovery transitions averaged ${avg.toFixed(1)}h — tickets are being picked up and updated within a reasonable timeframe.`;
               likely_cause = `Starting flow is healthy; the developer is engaging with new work without significant delays.`;
               signal = 'healthy';
+              attribution = 'developer';
+              coaching_tip =
+                'No action needed — starting cadence is healthy this period.';
             }
           } else if (fk === '200_xx') {
             const days = (avg / 24).toFixed(1);
@@ -2933,10 +2939,16 @@ app.get(
               observation = `Active development averaged ${avg.toFixed(1)}h per transition — updates are being posted at a steady, healthy cadence.`;
               likely_cause = `Work is progressing without significant interruption; the developer is moving efficiently through in-progress tasks.`;
               signal = 'healthy';
+              attribution = 'developer';
+              coaching_tip =
+                'No action needed — active development pace is healthy; consider acknowledging this in 1:1.';
             } else {
               observation = `In-progress development averaged ${days} days per transition — longer gaps between updates than expected for active work.`;
               likely_cause = `High WIP, context-switching across multiple tickets, or large task decomposition may be stretching the in-progress cycle.`;
               signal = 'bottleneck';
+              attribution = 'developer';
+              coaching_tip =
+                'Discuss WIP limits in 1:1 — capping concurrent tickets at 3 reduces context-switching and shortens update gaps.';
             }
           } else if (fk === '300_xx') {
             const pct300 = pctOfTotal;
@@ -2944,10 +2956,16 @@ app.get(
               observation = `Only ${f.transitions} testing/debugging transition${f.transitions !== 1 ? 's' : ''} logged (${pct300}% of total) — very low relative to overall activity.`;
               likely_cause = `Testing effort is likely being absorbed into 200_xx (in-progress) updates rather than logged as a distinct 300_xx step; this is an update-hygiene gap, not evidence that testing is fast or absent.`;
               signal = 'underreported';
+              attribution = 'developer';
+              coaching_tip =
+                'Coach the developer to log a distinct 300_xx update when testing begins, separate from 200_xx — this improves cycle-time visibility.';
             } else {
               observation = `Testing/debugging averaged ${avg.toFixed(1)}h per transition across ${f.transitions} logged events.`;
               likely_cause = `Test cycles are being captured; average duration looks proportionate to the workload this period.`;
               signal = 'healthy';
+              attribution = 'developer';
+              coaching_tip =
+                'No action needed — testing is being logged correctly; maintain this habit.';
             }
           } else if (fk === '400_xx') {
             const days = (avg / 24).toFixed(1);
@@ -2955,10 +2973,16 @@ app.get(
               observation = `Code review averaged ${days} days per transition — tickets are waiting significantly longer for review than a healthy PR cadence.`;
               likely_cause = `This reflects team review throughput, not developer pace — reviewers have a slow turnaround, large PRs require extended back-and-forth, or the review queue is congested.`;
               signal = 'bottleneck';
+              attribution = 'team';
+              coaching_tip =
+                'Raise PR review SLA expectations with the team lead; consider establishing a dedicated daily review window across the team.';
             } else {
               observation = `Code reviews averaged ${avg.toFixed(1)}h per transition — turnaround is within a reasonable range.`;
               likely_cause = `Review throughput appears healthy; no systemic review lag detected this period.`;
               signal = 'healthy';
+              attribution = 'team';
+              coaching_tip =
+                'No action needed — review cadence is healthy; reinforce with the team lead to maintain the current turnaround.';
             }
           } else if (fk === '500_xx') {
             const threshold = periodHours * 0.25;
@@ -2967,10 +2991,16 @@ app.get(
               observation = `Completion/handoff averaged ${days} days per transition — in a ${pd}-day window, each ticket sat in the done state for over ${Math.round((avg / periodHours) * 100)}% of the period after the developer marked it complete.`;
               likely_cause = `Post-completion sign-off, acceptance, or deployment confirmation is not generating a follow-up update, leaving intervals open-ended until the report window closes. This is a process/tracking gap, not developer lag.`;
               signal = 'process_gap';
+              attribution = 'process';
+              coaching_tip =
+                'Ask the PO or QA lead whether a formal acceptance step exists; if not, define a closure SOP so completed tickets are formally closed within 48h.';
             } else {
               observation = `Completion/handoff averaged ${avg.toFixed(1)}h per transition — reasonable turnaround after work is marked done.`;
               likely_cause = `Handoff and sign-off steps are progressing without extended delays; closure is being recorded within the period.`;
               signal = 'healthy';
+              attribution = 'process';
+              coaching_tip =
+                'No action needed — completion handoff is moving promptly; confirm acceptance steps are being formally recorded.';
             }
           } else if (fk === '600_xx') {
             observation = `${f.transitions} challenge transition${f.transitions !== 1 ? 's' : ''} logged — challenges were surfaced and recorded during the period.`;
@@ -2979,6 +3009,11 @@ app.get(
                 ? `Challenges are taking more than ${(avg / 24).toFixed(1)} days to resolve on average — escalation or external dependency resolution may be the bottleneck.`
                 : `Challenge events were recorded and addressed within a reasonable timeframe.`;
             signal = avg > 72 ? 'bottleneck' : 'healthy';
+            attribution = avg > 72 ? 'team' : 'process';
+            coaching_tip =
+              avg > 72
+                ? 'Escalation path for challenges may be unclear — discuss with the team lead this week to ensure a named owner for each open challenge.'
+                : 'No action needed — challenges are being resolved promptly; confirm escalation contacts are documented.';
           } else if (fk === '700_xx') {
             observation = `${f.transitions} investigation transition${f.transitions !== 1 ? 's' : ''} logged; tickets spent time in a diagnostic or exploratory state.`;
             likely_cause =
@@ -2986,16 +3021,27 @@ app.get(
                 ? `Extended investigation time (${(avg / 24).toFixed(1)} days avg) may indicate unclear requirements, environment issues, or undocumented system behaviour.`
                 : `Investigation cycles are short and appear to be conclusive.`;
             signal = avg > 48 ? 'bottleneck' : 'healthy';
+            attribution = 'process';
+            coaching_tip =
+              avg > 48
+                ? 'Probe whether requirements docs or environment access are insufficient — investigation drag is often preventable with better upfront clarity.'
+                : 'No action needed — investigation cycles are short; confirm findings are being documented for future reference.';
           } else if (fk === '800_xx') {
             const days = (avg / 24).toFixed(1);
             if (avg < 48) {
               observation = `${f.transitions} delay transition${f.transitions !== 1 ? 's' : ''} logged; each resolved in an average of ${avg.toFixed(1)}h — blockers were surfaced and cleared quickly.`;
               likely_cause = `Delays were identified and actioned promptly; the developer is escalating and resolving dependencies without letting tickets stall.`;
               signal = 'healthy';
+              attribution = 'team';
+              coaching_tip =
+                "No action needed — acknowledge the developer's responsiveness in clearing blockers; reinforce this habit in 1:1.";
             } else {
               observation = `${f.transitions} delay transition${f.transitions !== 1 ? 's' : ''} averaging ${days} days — external waits are absorbing significant throughput capacity.`;
               likely_cause = `Dependencies, environment issues, or waiting on external teams are extending delay cycles; the developer's pace is being constrained by factors outside their direct control.`;
               signal = 'bottleneck';
+              attribution = 'team';
+              coaching_tip =
+                'Identify the recurring blocking parties with the team lead and decide whether a daily chase or escalation protocol is needed.';
             }
           }
 
@@ -3005,6 +3051,8 @@ app.get(
             observation,
             likely_cause,
             signal,
+            attribution,
+            coaching_tip,
           });
         }
         return result;
@@ -3234,6 +3282,8 @@ app.get(
             observation: e.observation,
             likely_cause: e.likely_cause,
             signal: e.signal,
+            attribution: e.attribution,
+            coaching_tip: e.coaching_tip,
           }))
         : buildFamilyAnalysisFallback(families, periodDays);
 
@@ -3255,15 +3305,26 @@ app.get(
       return `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:${s.bg};color:${s.color};margin-right:6px;">${s.label}</span>`;
     };
 
+    const attributionBadge = (attr) => {
+      const map = {
+        developer: { color: '#1d4ed8', bg: '#dbeafe', label: 'Developer' },
+        team: { color: '#6d28d9', bg: '#ede9fe', label: 'Team' },
+        process: { color: '#374151', bg: '#f3f4f6', label: 'Process' },
+      };
+      const a = map[attr] || map.process;
+      return `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:${a.bg};color:${a.color};margin-right:6px;">${a.label}</span>`;
+    };
+
     const rows = familyEntries
       .map(
         (e) => `
       <div style="border-bottom:1px solid #f0f0f0;padding:10px 0;">
         <div style="font-weight:600;font-size:12.5px;margin-bottom:4px;">
-          ${signalBadge(e.signal)}${escapeHtml(e.family)} — ${escapeHtml(e.label || '')}
+          ${signalBadge(e.signal)}${attributionBadge(e.attribution)}${escapeHtml(e.family)} — ${escapeHtml(e.label || '')}
         </div>
         <div style="font-size:12px;color:#374151;margin-bottom:2px;"><strong>Observation:</strong> ${escapeHtml(e.observation || '')}</div>
-        <div style="font-size:12px;color:#6b7280;"><strong>Likely Cause:</strong> ${escapeHtml(e.likely_cause || '')}</div>
+        <div style="font-size:12px;color:#6b7280;margin-bottom:2px;"><strong>Likely Cause:</strong> ${escapeHtml(e.likely_cause || '')}</div>
+        ${e.coaching_tip ? `<div style="font-size:12px;color:#0369a1;border-left:3px solid #bae6fd;padding-left:8px;margin-top:4px;"><strong>Coaching Tip:</strong> ${escapeHtml(e.coaching_tip)}</div>` : ''}
       </div>`,
       )
       .join('');
@@ -4831,8 +4892,22 @@ const SnapshotInsightsSchema = {
                 'inactive',
               ],
             },
+            // Who owns the problem — drives badge colour and conversation framing
+            attribution: {
+              type: 'string',
+              enum: ['developer', 'team', 'process'],
+            },
+            // One PM-actionable sentence (≤25 words), written for the PM not the developer
+            coaching_tip: { type: 'string' },
           },
-          required: ['family', 'observation', 'likely_cause', 'signal'],
+          required: [
+            'family',
+            'observation',
+            'likely_cause',
+            'signal',
+            'attribution',
+            'coaching_tip',
+          ],
         },
         minItems: 1,
         maxItems: 8,
@@ -4841,7 +4916,7 @@ const SnapshotInsightsSchema = {
     required: ['key_findings', 'strengths', 'focus_areas', 'risk'],
   },
 };
-const SNAPSHOT_PROMPT_VERSION = 'snapshot_v5_family_analysis_2026-03-09';
+const SNAPSHOT_PROMPT_VERSION = 'snapshot_v6_coaching_2026-03-09';
 const SNAPSHOT_EVIDENCE_MAX_TICKETS = 12;
 const SNAPSHOT_RUN_RETENTION = Math.max(
   0,
@@ -4936,6 +5011,17 @@ Write concise outputs:
   - observation: one sentence — what the number operationally means (NOT a raw number restatement). Contextualise hours_avg relative to period_days (e.g. "240h avg in a 28-day window means the ticket sat in this state for a third of the period").
   - likely_cause: one sentence — infer the most probable operational cause using cross-family patterns. Do NOT attribute team/process delays to the developer.
   - signal: one of "healthy" | "bottleneck" | "underreported" | "process_gap" | "inactive".
+  - attribution: who owns the problem — "developer" (update hygiene, WIP, pacing), "team" (review throughput, shared standards, escalation), or "process" (sign-off workflows, deployment gates, ticket closure SOPs). Attribution rules:
+    * 100_xx avg high → developer; 200_xx avg high → developer; 300_xx underreported → developer
+    * 400_xx avg high → team; 600_xx avg high → team or process; 700_xx avg high → team or process; 800_xx avg high → team or process
+    * 500_xx process_gap → process
+    * healthy families → still assign the most likely owner if a coaching conversation is warranted
+  - coaching_tip: one sentence ≤25 words written FOR THE PM (not the developer), concrete and next-week scoped. Examples:
+    * 400_xx bottleneck → "Raise PR review SLA expectations with the team lead; consider a dedicated review window."
+    * 500_xx process_gap → "Ask the PO or QA lead whether a formal acceptance step exists; if not, define a closure SOP."
+    * 300_xx underreported → "Coach the developer to log a distinct 300_xx update when testing begins, separate from 200_xx."
+    * 100_xx bottleneck → "In 1:1, ask the developer to post an initial update within one working day of ticket assignment."
+    * 800_xx healthy → "No action needed — acknowledge the developer's responsiveness in clearing blockers."
   Cross-family inference rules (apply these):
   * Low 300_xx transitions (< 5% of total) alongside high 200_xx aggregate → testing is likely absorbed into in-progress updates rather than logged separately (underreported, not genuinely fast).
   * High 400_xx avg (> 3 days) → code review turnaround is a team/process bottleneck; attribute to review queue, not developer pace.
@@ -4985,7 +5071,7 @@ ${JSON.stringify({
         strict: !!SnapshotInsightsSchema.strict,
       },
     },
-    max_tokens: 1400, // increased from 800; family_analysis adds ~560 tokens (8 families × ~70 tokens)
+    max_tokens: 1700, // increased from 1400; coaching_tip + attribution add ~300 tokens (8 families × ~37 tokens)
   });
 
   let js = parseOpenAIJson(resp);
