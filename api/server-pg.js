@@ -877,6 +877,7 @@ async function buildSnapshotEmail(req, range, { ai = false } = {}) {
     developer: String(range.developer || 'all'),
     groupBy: 'month',
     format: 'html',
+    audience: 'dev', // signals developer-facing tone for exec summary
   });
   if (ai) qs.set('ai', '1');
 
@@ -2436,6 +2437,7 @@ app.get(
         developer = 'all',
         format = 'pdf',
         stallHours = '12',
+        audience = 'pm',
       } = req.query;
       // Record if caller asked for AI; we'll enable only for a targeted dev (not "all")
       const aiRequested = String(req.query.ai || '') === '1';
@@ -2646,7 +2648,15 @@ app.get(
   .grid { grid-template-columns: 1fr; }
   .grid .card { margin: 0 0 12px 0; }
     }
-
+  .exec-summary{border-left:3px solid #d1d5db;background:#f9fafb;}
+  .exec-summary--green{border-left-color:#16a34a;background:#f0fdf4;}
+  .exec-summary--yellow{border-left-color:#ca8a04;background:#fefce8;}
+  .exec-summary--red{border-left-color:#dc2626;background:#fef2f2;}
+  .exec-badge{display:inline-block;font-weight:700;font-size:12px;padding:3px 10px;border-radius:999px;margin-bottom:8px;background:rgba(0,0,0,0.06);}
+  .exec-summary--green .exec-badge{background:#dcfce7;color:#15803d;}
+  .exec-summary--yellow .exec-badge{background:#fef9c3;color:#854d0e;}
+  .exec-summary--red .exec-badge{background:#fee2e2;color:#b91c1c;}
+  .exec-body{margin:0;font-size:13px;line-height:1.6;color:#374151;}
 `;
 
       // No data → show a helpful HTML page instead of a blank response
@@ -2754,6 +2764,114 @@ app.get(
         );
       }
 
+      // --- Executive Summary helper -------------------------------------------
+      // Returns { badge, color, body } for the exec summary card.
+      // mode='pm'  → manager/PO audience: badge shown, uses exec_summary AI field
+      // mode='dev' → developer audience:  badge hidden, uses exec_summary_dev AI field
+      function buildExecSummary(
+        mode,
+        {
+          name,
+          email,
+          completionPct,
+          stalled,
+          families,
+          insights,
+          ticketVolume,
+        },
+      ) {
+        const stall = insights?.risk?.stall_risk || 'low';
+        const slip = insights?.risk?.slip_risk || 'low';
+        const cpct = Number(completionPct) || 0;
+
+        // Badge — always computed from raw metrics, never drifts with LLM calls
+        let badge, color;
+        if (cpct >= 70 && stall === 'low' && slip === 'low') {
+          badge = '🟢 On Track';
+          color = 'green';
+        } else if (stall === 'high' || slip === 'high') {
+          badge = '🔴 Needs Attention';
+          color = 'red';
+        } else {
+          badge = '🟡 Monitor';
+          color = 'yellow';
+        }
+
+        // Interpretive fallback — causal framing, NOT raw number restatement
+        function fallbackBody(devMode) {
+          const label = devMode
+            ? name || email || 'You'
+            : name || email || 'This developer';
+          const famK = [
+            '100_xx',
+            '200_xx',
+            '300_xx',
+            '400_xx',
+            '500_xx',
+            '600_xx',
+            '700_xx',
+            '800_xx',
+          ];
+          const gf = (k) =>
+            (families && families[k]) || {
+              transitions: 0,
+              hours_sum: 0,
+              hours_avg: 0,
+            };
+          const totT = famK.reduce((s, k) => s + (gf(k).transitions || 0), 0);
+          const totH = famK.reduce((s, k) => s + (gf(k).hours_sum || 0), 0);
+          const wAvg = totT ? (totH / totT).toFixed(2) : '0.00';
+          const vol = Number(ticketVolume || 0);
+          const blk =
+            (gf('600_xx').transitions || 0) + (gf('800_xx').transitions || 0);
+          const st = gf('100_xx').transitions || 0;
+          const fin = gf('500_xx').transitions || 0;
+          const a200 = Number(gf('200_xx').hours_avg || 0).toFixed(2);
+
+          const s1 =
+            cpct >= 70
+              ? `${label} maintained strong delivery this period, completing ${vol} ticket${vol !== 1 ? 's' : ''} at a ${cpct.toFixed(1)}% conversion rate.`
+              : `${label} completed ${vol} ticket${vol !== 1 ? 's' : ''} at ${cpct.toFixed(1)}% conversion — below the 70% healthy threshold, suggesting capacity or flow constraints worth examining.`;
+
+          const s2 =
+            blk > 0
+              ? `With ${blk} transition${blk !== 1 ? 's' : ''} in blocked or delayed states (600/800_xx) alongside a ${a200}h active-development average, throughput capacity is partially absorbed by dependency waits rather than execution gaps.`
+              : `Active development (200_xx) averaged ${a200}h per transition with an overall cycle-time of ${wAvg}h — flow appears unimpeded by external blockers this period.`;
+
+          const s3 =
+            fin >= st
+              ? `Starts-to-finishes ratio (${st} → ${fin}) indicates work is converting to completions at a sustainable pace.`
+              : `Starts (${st}) outpace finishes (${fin}), pointing to accumulating WIP that may inflate cycle-time next period if left unchecked.`;
+
+          const rLvl =
+            stall === 'high' || slip === 'high'
+              ? 'elevated'
+              : stall === 'medium' || slip === 'medium'
+                ? 'moderate'
+                : 'low';
+          const s4 =
+            Number(stalled) > 0
+              ? `${stalled} ticket${Number(stalled) > 1 ? 's are' : ' is'} currently stalled — delivery risk is ${rLvl}; ${devMode ? 'flag these to your team lead early' : 'team lead attention is recommended before the period closes'}.`
+              : `No stalled tickets detected; delivery risk remains ${rLvl} this period.`;
+
+          return [s1, s2, s3, s4].join(' ');
+        }
+
+        let body;
+        if (mode === 'dev') {
+          body = insights?.exec_summary_dev
+            ? escapeHtml(insights.exec_summary_dev)
+            : escapeHtml(fallbackBody(true));
+        } else {
+          body = insights?.exec_summary
+            ? escapeHtml(insights.exec_summary)
+            : escapeHtml(fallbackBody(false));
+        }
+
+        return { badge, color, body };
+      }
+      // -------------------------------------------------------------------------
+
       function renderSnapshotHTML({
         name,
         email,
@@ -2762,7 +2880,8 @@ app.get(
         completionPct,
         stalled,
         families,
-        insights, // NEW
+        insights,
+        audience, // 'pm' (default) or 'dev' for the email path
       }) {
         const famKeys = [
           '100_xx',
@@ -2868,6 +2987,16 @@ app.get(
             .join('');
         }
 
+        const execSummary = buildExecSummary(audience || 'pm', {
+          name,
+          email,
+          completionPct,
+          stalled,
+          families,
+          insights,
+          ticketVolume,
+        });
+
         return `<!doctype html>
 <html><head><meta charset="utf-8">
 <style>
@@ -2888,6 +3017,15 @@ app.get(
   .kb ul{margin:6px 0 0 16px;padding:0}
   .kb li{margin:4px 0}
   @media print {.card{page-break-inside:avoid}}
+  .exec-summary{border-left:3px solid #d1d5db;background:#f9fafb;}
+  .exec-summary--green{border-left-color:#16a34a;background:#f0fdf4;}
+  .exec-summary--yellow{border-left-color:#ca8a04;background:#fefce8;}
+  .exec-summary--red{border-left-color:#dc2626;background:#fef2f2;}
+  .exec-badge{display:inline-block;font-weight:700;font-size:12px;padding:3px 10px;border-radius:999px;margin-bottom:8px;background:rgba(0,0,0,0.06);}
+  .exec-summary--green .exec-badge{background:#dcfce7;color:#15803d;}
+  .exec-summary--yellow .exec-badge{background:#fef9c3;color:#854d0e;}
+  .exec-summary--red .exec-badge{background:#fee2e2;color:#b91c1c;}
+  .exec-body{margin:0;font-size:13px;line-height:1.6;color:#374151;}
 </style>
 </head>
 <body>
@@ -2895,6 +3033,15 @@ app.get(
   <div class="muted">Developer: <strong>${
     name || email || '—'
   }</strong> &nbsp;|&nbsp; Report Period: <strong>${period}</strong></div>
+
+  <div class="card exec-summary exec-summary--${execSummary.color}">
+    ${
+      audience === 'dev'
+        ? '<div class="exec-badge" style="background:none;padding-left:0;color:#374151">Period Summary</div>'
+        : `<div class="exec-badge">${execSummary.badge} &nbsp; Executive Summary</div>`
+    }
+    <p class="exec-body">${execSummary.body}</p>
+  </div>
 
   <div class="card">
     <div class="kpi">
@@ -3115,7 +3262,8 @@ app.get(
           stalled: Number(r.stalled_tickets) || 0,
           families: r.families || {},
           insights:
-            insightsByEmail.get(String(r.email || '').toLowerCase()) || null, // NEW
+            insightsByEmail.get(String(r.email || '').toLowerCase()) || null,
+          audience: String(audience) === 'dev' ? 'dev' : 'pm',
         }),
       );
 
@@ -4452,11 +4600,14 @@ const SnapshotInsightsSchema = {
         minItems: 1,
         maxItems: 3,
       },
+      // Executive summary fields — interpretive prose, not metric restatement
+      exec_summary: { type: 'string' }, // manager/PO audience
+      exec_summary_dev: { type: 'string' }, // developer coaching audience
     },
     required: ['key_findings', 'strengths', 'focus_areas', 'risk'],
   },
 };
-const SNAPSHOT_PROMPT_VERSION = 'snapshot_v3_rag_delta_2025-03-08';
+const SNAPSHOT_PROMPT_VERSION = 'snapshot_v4_exec_summary_2026-03-09';
 const SNAPSHOT_EVIDENCE_MAX_TICKETS = 12;
 const SNAPSHOT_RUN_RETENTION = Math.max(
   0,
@@ -4543,6 +4694,8 @@ Write concise outputs:
 - suggested_kpis: <=5 compact KPI statements (e.g., "Reduce 800_xx transitions by 25%").
 - risk: stall_risk & slip_risk = low/medium/high inferred from metrics, plus stall_why and slip_why (one-line, data-grounded reasons).
 - support_from_team_leads: 1-3 bullets, written as actions for the team lead/manager (not the developer), each <=20 words, concrete, next-week scope (cadence, escalations, pairing, env access, PR gates, 10-15 min unblock huddles).
+- exec_summary: 2–3 sentences for a non-technical manager or product owner. Synthesize cause and effect across the metrics; make a clear judgment call about delivery health. Do NOT restate raw numbers that are already visible in the report — interpret what they mean instead.
+- exec_summary_dev: 2–3 sentences written directly for the developer. Use a coaching tone, be forward-looking and actionable. Acknowledge what is working, then focus on one key lever the developer controls to improve next period.
 
 Grounding rules (strict):
 - If you mention a specific ticket, include its ID in parentheses.
@@ -4576,7 +4729,7 @@ ${JSON.stringify({
         strict: !!SnapshotInsightsSchema.strict,
       },
     },
-    max_tokens: 600,
+    max_tokens: 800, // increased from 600; exec_summary + exec_summary_dev add ~40-60 tokens
   });
 
   let js = parseOpenAIJson(resp);
