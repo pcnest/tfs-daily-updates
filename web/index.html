@@ -920,6 +920,18 @@
             <button onclick="loadMissing()">Refresh</button>
           </div>
         </section>
+        <!-- (2b) Stale In-Progress Items -->
+        <section class="card thin" id="staleCard" aria-labelledby="staleHeader">
+          <div class="row">
+            <h3 id="staleHeader" style="margin:0">Stale In-Progress <small class="badge muted"
+                title="Tickets in 'In Development' or 'Committed' with no progress update for 2+ days">?</small></h3>
+            <div class="toolbar right">
+              <button onclick="loadStale()">Refresh</button>
+              <span id="staleStatus" class="status" role="status" aria-live="polite"></span>
+            </div>
+          </div>
+          <div id="stale"></div>
+        </section>
         <!-- (3) Top performers (Admin-only) -->
         <section class="card thin" id="topDevsCard" aria-labelledby="topDevsHeader">
           <div class="row">
@@ -1491,7 +1503,7 @@
           ensureSnapshotDevDropdown();
 
           if (filters) filters.style.display = '';
-          loadToday(); loadBlockers(); loadMissing();
+          loadToday(); loadBlockers(); loadMissing(); loadStale();
           if (isManager) loadTopDevs(); // pm/admin
 
           presetReportThisWeek(false);
@@ -1893,11 +1905,23 @@
               window.__lastTickets = window.__lastTickets || {};
               window.__lastTickets[String(t.id)] = t;
 
+              // Stale in-progress detection (matches API threshold of 2 days)
+              var STALE_IP_DAYS = 2;
+              var tStateL = (t.state || '').toLowerCase();
+              var isStaleState = (tStateL === 'in development' || tStateL === 'committed');
+              var lastActMs = t.lastUpdateAt
+                ? Date.parse(t.lastUpdateAt)
+                : (t.stateChangeDate ? Date.parse(t.stateChangeDate) : null);
+              var daysStale = lastActMs != null ? Math.floor((Date.now() - lastActMs) / 86400000) : null;
+              var staleBadge = (isStaleState && !code && (daysStale == null || daysStale >= STALE_IP_DAYS))
+                ? ' <span class="badge warning" title="No update for ' + (daysStale != null ? daysStale + 'd' : 'unknown') + '">⚠ ' + (daysStale != null ? daysStale + 'd stale' : 'stale') + '</span>'
+                : '';
+
               tr2.innerHTML =
                 '<td>' + esc(t.id) + '</td>' +
                 '<td>' + esc(typ || '—') + '</td>' +
                 '<td><i>' + esc(t.title) + '</i></td>' +
-                '<td>' + esc(t.state) + '</td>' +
+                '<td>' + esc(t.state) + staleBadge + '</td>' +
                 '<td>' + esc(t.severity || '—') + '</td>' +
                 '<td>' + esc(code || '—') + '</td>' +
                 '<td>' + esc(note || '—') + '</td>' +
@@ -2822,6 +2846,70 @@
             for (var i = 0; i < js.missing.length; i++) { var m = js.missing[i]; html += '<li>' + esc(m.label) + ' <small>(' + esc(m.email) + ')</small></li>'; }
             html += '</ul>';
             box.innerHTML = html;
+          });
+      }
+
+      function loadStale() {
+        var box = byId('stale');
+        var st = byId('staleStatus');
+        if (!box) return;
+        if (st) { st.textContent = 'Loading...'; st.classList.remove('ok', 'err'); }
+        var tkn = localStorage.getItem('pocToken') || '';
+        fetch((API || location.origin) + '/api/tickets/stale', {
+          headers: { 'Authorization': 'Bearer ' + tkn }
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            if (js.error) {
+              box.innerHTML = '<p class="status err">' + esc(js.error) + '</p>';
+              if (st) { st.textContent = js.error; st.classList.add('err'); }
+              return;
+            }
+            var items = js.items || [];
+            var threshold = js.staleThresholdDays || 2;
+            if (st) {
+              st.textContent = items.length + ' item(s) · >' + threshold + 'd without update';
+              st.classList.add(items.length ? 'err' : 'ok');
+            }
+            if (!items.length) {
+              box.innerHTML = '<p class="help">No stale in-progress tickets — team is on track ✓</p>';
+              return;
+            }
+            var html = '<table><thead><tr>' +
+              '<th style="width:80px">ID</th>' +
+              '<th style="width:110px">Type</th>' +
+              '<th>Title</th>' +
+              '<th style="width:130px">State</th>' +
+              '<th style="width:140px">Assigned To</th>' +
+              '<th style="width:90px">Days Stale</th>' +
+              '</tr></thead><tbody>';
+            for (var i = 0; i < items.length; i++) {
+              var it = items[i];
+              // Strip DOMAIN\alias and "Display Name <alias>" formatting
+              var assignedLabel = (function (a) {
+                if (!a) return '—';
+                var lt = a.indexOf(' <'); if (lt > -1) a = a.slice(0, lt);
+                var bs = a.lastIndexOf('\\'); if (bs > -1) a = a.slice(bs + 1);
+                return a.trim() || '—';
+              })(it.assignedTo || '');
+              var days = (it.daysSinceUpdate != null) ? Number(it.daysSinceUpdate) : null;
+              var daysLabel = (days != null) ? days + 'd' : '—';
+              var daysBadgeClass = (days != null && days >= 5) ? 'off' : 'warning';
+              html += '<tr>' +
+                '<td>' + esc(String(it.id)) + '</td>' +
+                '<td>' + esc(it.type || '—') + '</td>' +
+                '<td><i>' + esc(it.title || '') + '</i></td>' +
+                '<td>' + esc(it.state || '') + '</td>' +
+                '<td>' + esc(assignedLabel) + '</td>' +
+                '<td><span class="badge ' + daysBadgeClass + '">' + esc(daysLabel) + '</span></td>' +
+                '</tr>';
+            }
+            html += '</tbody></table>';
+            box.innerHTML = html;
+          })
+          .catch(function () {
+            box.innerHTML = '<p class="help">Failed to load stale tickets.</p>';
+            if (st) { st.textContent = 'Failed'; st.classList.add('err'); }
           });
       }
 

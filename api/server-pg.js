@@ -702,6 +702,10 @@ const RISK_STALE_MEDIUM_DAYS = Math.max(
   0,
   parseInt(process.env.RISK_STALE_MEDIUM_DAYS || '2', 10) || 2,
 );
+const STALE_INPROGRESS_DAYS = Math.max(
+  1,
+  parseInt(process.env.STALE_INPROGRESS_DAYS || '2', 10) || 2,
+);
 
 function daysSince(ts, now = Date.now()) {
   const t = ts ? Date.parse(ts) : NaN;
@@ -1854,13 +1858,15 @@ app.get('/api/tickets', async (req, res) => {
         t.area_path   as "areaPath",
         t.iteration_path as "iterationPath",
         t.changed_date   as "changedDate",
+        t.state_change_date as "stateChangeDate",
         t.severity,
         t.tags,
         u.code as "lastCode",
-        u.note as "lastNote"
+        u.note as "lastNote",
+        u.at   as "lastUpdateAt"
       from tickets t
       left join lateral (
-        select code, note
+        select code, note, at
         from progress_updates
         where ticket_id = t.id and (${lateralPred})
         order by at desc
@@ -1878,6 +1884,7 @@ app.get('/api/tickets', async (req, res) => {
         t.area_path   as "areaPath",
         t.iteration_path as "iterationPath",
         t.changed_date   as "changedDate",
+        t.state_change_date as "stateChangeDate",
         t.severity,
         t.tags
       from tickets t
@@ -1888,6 +1895,81 @@ app.get('/api/tickets', async (req, res) => {
 
   const r = await pool.query(sql, params);
   res.json({ items: r.rows, count: r.rowCount });
+});
+
+// --- stale in-progress tickets (no update for N+ days while in an active state)
+// States treated as "in-progress" for staleness: 'in development', 'committed'
+// Threshold: STALE_INPROGRESS_DAYS env var (default 2 days)
+app.get('/api/tickets/stale', requireAuth, async (req, res) => {
+  try {
+    const me = await pool.query('select role from users where email=$1', [
+      req.userEmail,
+    ]);
+    const role = me.rows[0]?.role || 'dev';
+    const isManager = role === 'pm' || role === 'admin';
+
+    const threshold = STALE_INPROGRESS_DAYS;
+    const STALE_STATES = ['in development', 'committed'];
+
+    const params = [];
+    let i = 1;
+    const clauses = [
+      `coalesce(t.deleted, false) = false`,
+      `lower(t.state) = any($${i++}::text[])`,
+    ];
+    params.push(STALE_STATES);
+
+    if (!isManager) {
+      // dev: restrict to their own assigned tickets
+      const alias = normId(req.userEmail);
+      clauses.push(
+        `(lower(t.assigned_to) like $${i++} OR lower(regexp_replace(t.assigned_to,'^.*\\\\','')) like $${i++})`,
+      );
+      params.push(`%${alias}%`, `%${alias}%`);
+    }
+
+    const where = `WHERE ${clauses.join(' AND ')}`;
+    params.push(String(threshold));
+    const thresholdParam = `$${i++}`;
+
+    const sql = `
+      SELECT
+        t.id,
+        t.type,
+        t.title,
+        t.state,
+        t.severity,
+        t.assigned_to        AS "assignedTo",
+        t.iteration_path     AS "iterationPath",
+        t.state_change_date  AS "stateChangeDate",
+        MAX(p.at)            AS "lastUpdateAt",
+        ROUND(
+          EXTRACT(EPOCH FROM (
+            NOW() - COALESCE(MAX(p.at), t.state_change_date, t.changed_date)
+          )) / 86400
+        )::int               AS "daysSinceUpdate"
+      FROM tickets t
+      LEFT JOIN progress_updates p ON p.ticket_id = t.id
+      ${where}
+      GROUP BY
+        t.id, t.type, t.title, t.state, t.severity,
+        t.assigned_to, t.iteration_path, t.state_change_date, t.changed_date
+      HAVING
+        COALESCE(MAX(p.at), t.state_change_date, t.changed_date)
+          < NOW() - (${thresholdParam}::int * interval '1 day')
+      ORDER BY "daysSinceUpdate" DESC NULLS LAST, t.id::bigint
+    `;
+
+    const r = await pool.query(sql, params);
+    res.json({
+      items: r.rows,
+      count: r.rowCount,
+      staleThresholdDays: threshold,
+    });
+  } catch (e) {
+    console.error('[stale] error:', e);
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // --- progress submit (with note requirement and optional hard lock)
