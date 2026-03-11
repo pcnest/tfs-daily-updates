@@ -1916,6 +1916,15 @@ app.get('/api/tickets/stale', requireAuth, async (req, res) => {
     const clauses = [
       `coalesce(t.deleted, false) = false`,
       `lower(t.state) = any($${i++}::text[])`,
+      // Exclude unassigned tickets
+      `t.assigned_to IS NOT NULL`,
+      `t.assigned_to <> ''`,
+      // Only show tickets assigned to a registered dev-role user
+      `EXISTS (
+        SELECT 1 FROM users u
+        WHERE u.role = 'dev'
+          AND lower(t.assigned_to) LIKE '%' || lower(split_part(u.email,'@',1)) || '%'
+      )`,
     ];
     params.push(STALE_STATES);
 
@@ -1928,9 +1937,10 @@ app.get('/api/tickets/stale', requireAuth, async (req, res) => {
       params.push(`%${alias}%`, `%${alias}%`);
     }
 
-    const where = `WHERE ${clauses.join(' AND ')}`;
     params.push(String(threshold));
     const thresholdParam = `$${i++}`;
+
+    const where = `WHERE ${clauses.join(' AND ')}`;
 
     const sql = `
       SELECT
@@ -1942,20 +1952,23 @@ app.get('/api/tickets/stale', requireAuth, async (req, res) => {
         t.assigned_to        AS "assignedTo",
         t.iteration_path     AS "iterationPath",
         t.state_change_date  AS "stateChangeDate",
-        MAX(p.at)            AS "lastUpdateAt",
+        pu.last_at           AS "lastUpdateAt",
+        pu.last_code         AS "lastCode",
         ROUND(
           EXTRACT(EPOCH FROM (
-            NOW() - COALESCE(MAX(p.at), t.state_change_date, t.changed_date)
+            NOW() - COALESCE(pu.last_at, t.state_change_date, t.changed_date)
           )) / 86400
         )::int               AS "daysSinceUpdate"
       FROM tickets t
-      LEFT JOIN progress_updates p ON p.ticket_id = t.id
+      LEFT JOIN LATERAL (
+        SELECT at AS last_at, code AS last_code
+        FROM progress_updates
+        WHERE ticket_id = t.id
+        ORDER BY at DESC
+        LIMIT 1
+      ) pu ON true
       ${where}
-      GROUP BY
-        t.id, t.type, t.title, t.state, t.severity,
-        t.assigned_to, t.iteration_path, t.state_change_date, t.changed_date
-      HAVING
-        COALESCE(MAX(p.at), t.state_change_date, t.changed_date)
+        AND COALESCE(pu.last_at, t.state_change_date, t.changed_date)
           < NOW() - (${thresholdParam}::int * interval '1 day')
       ORDER BY "daysSinceUpdate" DESC NULLS LAST, t.id::bigint
     `;

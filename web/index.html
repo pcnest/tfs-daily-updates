@@ -2881,6 +2881,8 @@
               '<th>Title</th>' +
               '<th style="width:130px">State</th>' +
               '<th style="width:140px">Assigned To</th>' +
+              '<th style="width:80px">Last Code</th>' +
+              '<th style="width:105px">Last Code Date</th>' +
               '<th style="width:90px">Days Stale</th>' +
               '</tr></thead><tbody>';
             for (var i = 0; i < items.length; i++) {
@@ -2895,12 +2897,25 @@
               var days = (it.daysSinceUpdate != null) ? Number(it.daysSinceUpdate) : null;
               var daysLabel = (days != null) ? days + 'd' : '—';
               var daysBadgeClass = (days != null && days >= 5) ? 'off' : 'warning';
+              // Last code badge (same colour family as the rest of the UI)
+              var codeCellHtml = (function (code) {
+                if (!code) return '<span class="muted">—</span>';
+                var fam = String(code).slice(0, 3);
+                return '<span class="badge code-' + fam + '">' + esc(code) + '</span>';
+              })(it.lastCode || '');
+              // Last code date — just the YYYY-MM-DD portion
+              var codeDateLabel = (function (at) {
+                if (!at) return '<span class="muted">—</span>';
+                return esc(String(at).slice(0, 10));
+              })(it.lastUpdateAt || '');
               html += '<tr>' +
                 '<td>' + esc(String(it.id)) + '</td>' +
                 '<td>' + esc(it.type || '—') + '</td>' +
                 '<td><i>' + esc(it.title || '') + '</i></td>' +
                 '<td>' + esc(it.state || '') + '</td>' +
                 '<td>' + esc(assignedLabel) + '</td>' +
+                '<td>' + codeCellHtml + '</td>' +
+                '<td>' + codeDateLabel + '</td>' +
                 '<td><span class="badge ' + daysBadgeClass + '">' + esc(daysLabel) + '</span></td>' +
                 '</tr>';
             }
