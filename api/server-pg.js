@@ -1919,12 +1919,13 @@ app.get('/api/tickets/stale', requireAuth, async (req, res) => {
       // Exclude unassigned tickets
       `t.assigned_to IS NOT NULL`,
       `t.assigned_to <> ''`,
-      // Only show tickets assigned to a registered dev-role user
-      `EXISTS (
+      // Exclude tickets positively assigned to a non-dev role (pm/admin/lead)
+      `NOT EXISTS (
         SELECT 1 FROM users u
-        WHERE u.role = 'dev'
+        WHERE u.role IN ('pm', 'admin', 'lead')
           AND lower(t.assigned_to) LIKE '%' || lower(split_part(u.email,'@',1)) || '%'
       )`,
+      // NOTE: unregistered assignees (no users row) are included — they are assumed to be devs.
     ];
     params.push(STALE_STATES);
 

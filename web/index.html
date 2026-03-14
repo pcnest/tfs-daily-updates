@@ -1840,7 +1840,9 @@
               var isStaleState = (tStateL === 'in development' || tStateL === 'committed');
               var lastActMs = t.lastUpdateAt
                 ? Date.parse(t.lastUpdateAt)
-                : (t.stateChangeDate ? Date.parse(t.stateChangeDate) : null);
+                : (t.stateChangeDate
+                  ? Date.parse(t.stateChangeDate)
+                  : (t.changedDate ? Date.parse(t.changedDate) : null));
               var daysStale = lastActMs != null ? Math.floor((Date.now() - lastActMs) / 86400000) : null;
               var staleBadge = (isStaleState && !code && (daysStale == null || daysStale >= STALE_IP_DAYS))
                 ? ' <span class="badge warning" title="No update for ' + (daysStale != null ? daysStale + 'd' : 'unknown') + '">⚠ ' + (daysStale != null ? daysStale + 'd stale' : 'stale') + '</span>'
@@ -2068,7 +2070,9 @@
               var isStaleState = (tStateL === 'in development' || tStateL === 'committed');
               var lastActMs = t.lastUpdateAt
                 ? Date.parse(t.lastUpdateAt)
-                : (t.stateChangeDate ? Date.parse(t.stateChangeDate) : null);
+                : (t.stateChangeDate
+                  ? Date.parse(t.stateChangeDate)
+                  : (t.changedDate ? Date.parse(t.changedDate) : null));
               var daysStale = lastActMs != null ? Math.floor((Date.now() - lastActMs) / 86400000) : null;
               var staleBadge = (isStaleState && !code && (daysStale == null || daysStale >= STALE_IP_DAYS))
                 ? ' <span class="badge warning" title="No update for ' + (daysStale != null ? daysStale + 'd' : 'unknown') + '">⚠ ' + (daysStale != null ? daysStale + 'd stale' : 'stale') + '</span>'
