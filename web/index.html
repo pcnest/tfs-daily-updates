@@ -1474,6 +1474,7 @@
         if (!email) {
           var lc = byId('loginCard'); if (lc) lc.classList.remove('hidden');
           var tc = byId('ticketsCard'); if (tc) tc.classList.add('hidden');
+          var dtc = byId('devTicketsCard'); if (dtc) dtc.classList.add('hidden');
           var sc = byId('submitCard'); if (sc) sc.classList.add('hidden');
           var pm = byId('pm'); if (pm) pm.classList.add('hidden');
         }
@@ -1626,6 +1627,7 @@
           var lb = byId("logoutBtn"); if (lb) lb.classList.add("hidden");
           var lc = byId('loginCard'); if (lc) lc.classList.remove('hidden');
           var tc = byId('ticketsCard'); if (tc) tc.classList.add('hidden');
+          var dtc = byId('devTicketsCard'); if (dtc) dtc.classList.add('hidden');
           var sc = byId('submitCard'); if (sc) sc.classList.add('hidden');
           var pm = byId('pm'); if (pm) pm.classList.add('hidden');
         };
