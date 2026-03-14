@@ -1557,6 +1557,11 @@
           ensureSnapshotDevDropdown();
 
           if (filters) filters.style.display = '';
+          // Lead sees their own tickets only — hide the free-text filter fields
+          var assignedRow = byId('assigned') ? byId('assigned').closest('.row') : null;
+          var qRow = byId('q') ? byId('q').closest('.row') : null;
+          if (assignedRow) assignedRow.style.display = isLead ? 'none' : '';
+          if (qRow) qRow.style.display = isLead ? 'none' : '';
           loadToday(); loadStale();
           if (!isLead) { loadBlockers(); loadMissing(); } // lead excluded from these
           if (isLead) loadTickets(); // lead also loads own assigned tickets
