@@ -926,7 +926,12 @@
             <th>Note</th>
           </tr>
         </thead>
-        <tbody></tbody>
+        <tbody>
+          <tr>
+            <td colspan="7" class="help" style="text-align:center;padding:1rem">Select a developer from the dropdown
+              above to load tickets.</td>
+          </tr>
+        </tbody>
       </table>
     </section>
 
@@ -1552,7 +1557,7 @@
           ensureSnapshotDevDropdown();
 
           if (filters) filters.style.display = '';
-          loadToday(); loadStale(); loadDevTickets();
+          loadToday(); loadStale();
           if (!isLead) { loadBlockers(); loadMissing(); } // lead excluded from these
           if (isLead) loadTickets(); // lead also loads own assigned tickets
           if (isManager) loadTopDevs(); // pm/admin/lead
