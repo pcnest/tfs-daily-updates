@@ -901,7 +901,7 @@
     <section id="pm" class="card hidden" data-role="pm-only" aria-labelledby="pmHeader">
       <div class="section-grid">
         <!-- (1) Pre-Meeting Updates -->
-        <section class="card thin" aria-labelledby="preHeader">
+        <section id="preMeetingSection" class="card thin" aria-labelledby="preHeader">
           <div class="row">
             <h3 id="preHeader" style="margin:0">Pre-Meeting Updates</h3>
             <div class="toolbar right">
@@ -1464,6 +1464,7 @@
         var snapEmailBtn = byId('snapEmailBtn');
         var missingSection = byId('missingSection');
         var blockersSection = byId('blockersSection');
+        var preMeetingSection = byId('preMeetingSection');
         var snapHtmlBtn = byId('snapHtmlBtn');
         var aiRiskToggle = byId('aiRiskToggle');
 
@@ -1484,6 +1485,7 @@
         if (snapPdfBtn) snapPdfBtn.classList.toggle('hidden', !isAdmin); // admin-only button
         if (snapEmailBtn) snapEmailBtn.classList.toggle('hidden', !isAdmin); // admin-only button
         // Lead-excluded sections and buttons (pm/admin only)
+        if (preMeetingSection) preMeetingSection.classList.toggle('hidden', !isPM && !isAdmin);
         if (missingSection) missingSection.classList.toggle('hidden', !isPM && !isAdmin);
         if (blockersSection) blockersSection.classList.toggle('hidden', !isPM && !isAdmin);
         if (aiRiskToggle) aiRiskToggle.classList.toggle('hidden', !isPM && !isAdmin);
