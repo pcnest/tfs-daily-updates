@@ -913,7 +913,7 @@
         </section>
 
         <!-- (2) Who hasn't updated yet -->
-        <section class="card thin" aria-labelledby="missingHeader">
+        <section id="missingSection" class="card thin" aria-labelledby="missingHeader">
           <h3 id="missingHeader">Who hasn't updated yet</h3>
           <div id="missing"></div>
           <div class="toolbar">
@@ -1037,7 +1037,7 @@
               <option value="all">— Select developer —</option>
             </select>
             <button onclick="loadReportRange()">Load</button>
-            <button type="button" onclick="openSnapshots('html')">Preview (HTML)</button>
+            <button type="button" id="snapHtmlBtn" onclick="openSnapshots('html')">Preview (HTML)</button>
             <button type="button" id="snapPdfBtn" onclick="openSnapshots('pdf')">Download PDF</button>
             <button type="button" id="snapEmailBtn" onclick="emailSnapshots()">Email Snapshot</button>
           </div>
@@ -1066,7 +1066,7 @@
         </section>
 
         <!-- (5) Blockers radar -->
-        <section class="card thin" aria-labelledby="blockersHeader">
+        <section id="blockersSection" class="card thin" aria-labelledby="blockersHeader">
           <div class="row">
             <h3 id="blockersHeader" style="margin:0">Blockers Radar</h3>
             <div class="toolbar right">
@@ -1450,7 +1450,8 @@
         var isPM = (role === 'pm');
         var isAdmin = (role === 'admin');
         var isDev = (role === 'dev');
-        var isManager = isPM || isAdmin; // PM-like capabilities
+        var isLead = (role === 'lead');
+        var isManager = isPM || isAdmin || isLead; // PM-like capabilities (team dashboard)
         window.__role = role;
         var loginCard = byId('loginCard');
         var ticketsCard = byId('ticketsCard');
@@ -1461,12 +1462,17 @@
         var bonusAuditCard = byId('bonusAuditCard');
         var snapPdfBtn = byId('snapPdfBtn');
         var snapEmailBtn = byId('snapEmailBtn');
+        var missingSection = byId('missingSection');
+        var blockersSection = byId('blockersSection');
+        var snapHtmlBtn = byId('snapHtmlBtn');
+        var aiRiskToggle = byId('aiRiskToggle');
 
         if (loginCard) loginCard.classList.add('hidden');
         if (ticketsCard) ticketsCard.classList.remove('hidden');
-        if (submitCard) submitCard.classList.toggle('hidden', isManager); // hide for PM/Admin
-        if (weeklyCard) weeklyCard.classList.toggle('hidden', isManager);
-        if (isDev) {
+        // Lead keeps submitCard (has own tickets) — only hide for pure PM/Admin
+        if (submitCard) submitCard.classList.toggle('hidden', isPM || isAdmin);
+        if (weeklyCard) weeklyCard.classList.toggle('hidden', isPM || isAdmin);
+        if (isDev || isLead) {
           var p = checkLockStatus();
           if (p && typeof p.then === 'function') p.then(function () { loadWeeklySummary(); });
           else loadWeeklySummary();
@@ -1477,6 +1483,11 @@
         if (bonusAuditCard) bonusAuditCard.classList.toggle('hidden', !isAdmin); // admin-only card
         if (snapPdfBtn) snapPdfBtn.classList.toggle('hidden', !isAdmin); // admin-only button
         if (snapEmailBtn) snapEmailBtn.classList.toggle('hidden', !isAdmin); // admin-only button
+        // Lead-excluded sections and buttons (pm/admin only)
+        if (missingSection) missingSection.classList.toggle('hidden', !isPM && !isAdmin);
+        if (blockersSection) blockersSection.classList.toggle('hidden', !isPM && !isAdmin);
+        if (aiRiskToggle) aiRiskToggle.classList.toggle('hidden', !isPM && !isAdmin);
+        if (snapHtmlBtn) snapHtmlBtn.classList.toggle('hidden', !isPM && !isAdmin);
 
         if (pmBox) {
           var controls = pmBox.querySelectorAll('button, a');
@@ -1492,7 +1503,7 @@
           me.innerHTML = esc(txt);
           var badge = document.createElement('span');
           badge.className = 'badge';
-          badge.textContent = isAdmin ? 'ADMIN' : (isPM ? 'PM' : 'DEV');
+          badge.textContent = isAdmin ? 'ADMIN' : (isPM ? 'PM' : (isLead ? 'LEAD' : 'DEV'));
           me.appendChild(document.createTextNode(' '));
           me.appendChild(badge);
         }
@@ -1503,8 +1514,10 @@
           ensureSnapshotDevDropdown();
 
           if (filters) filters.style.display = '';
-          loadToday(); loadBlockers(); loadMissing(); loadStale();
-          if (isManager) loadTopDevs(); // pm/admin
+          loadToday(); loadStale();
+          if (!isLead) { loadBlockers(); loadMissing(); } // lead excluded from these
+          if (isLead) loadTickets(); // lead also loads own assigned tickets
+          if (isManager) loadTopDevs(); // pm/admin/lead
 
           presetReportThisWeek(false);
           if (!window.__exportTimer) {

@@ -1906,7 +1906,7 @@ app.get('/api/tickets/stale', requireAuth, async (req, res) => {
       req.userEmail,
     ]);
     const role = me.rows[0]?.role || 'dev';
-    const isManager = role === 'pm' || role === 'admin';
+    const isManager = role === 'pm' || role === 'admin' || role === 'lead';
 
     const threshold = STALE_INPROGRESS_DAYS;
     const STALE_STATES = ['in development', 'committed'];
@@ -2498,8 +2498,8 @@ async function requirePMOnly(req, res, next) {
       req.userEmail,
     ]);
     const role = me.rows[0]?.role || 'dev';
-    if (role !== 'pm' && role !== 'admin')
-      return res.status(403).json({ error: 'pm/admin only' });
+    if (role !== 'pm' && role !== 'admin' && role !== 'lead')
+      return res.status(403).json({ error: 'pm/admin/lead only' });
     next();
   } catch (e) {
     res.status(500).json({ error: e.message });
