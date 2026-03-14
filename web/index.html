@@ -898,6 +898,38 @@
       </section>
     </section>
 
+    <section class="card hidden" id="devTicketsCard">
+      <h3>Development Tickets <small id="devIterLabel" class="badge muted" title="Active iteration">—</small></h3>
+      <div class="row"><label for="devAssigned">Assigned to</label>
+        <select id="devAssigned" aria-label="Assigned to" style="min-width:220px">
+          <option value="">— All / Anyone —</option>
+        </select>
+      </div>
+      <div class="row"><label for="devQ">Contains</label><input id="devQ" placeholder="search title/id (optional)" />
+      </div>
+      <div class="row">
+        <div></div>
+        <div class="toolbar">
+          <button id="devLoadBtn" onclick="loadDevTickets()">Load</button>
+          <span id="devLoadStatus" class="status" role="status" aria-live="polite"></span>
+        </div>
+      </div>
+      <table id="devTicketsTbl" aria-live="polite">
+        <thead>
+          <tr>
+            <th style="width:100px">ID</th>
+            <th style="width:110px">Type</th>
+            <th style="width:350px">Title</th>
+            <th style="width:120px">State</th>
+            <th style="width:120px">Severity</th>
+            <th style="width:75px">Code</th>
+            <th>Note</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+
     <section id="pm" class="card hidden" data-role="pm-only" aria-labelledby="pmHeader">
       <div class="section-grid">
         <!-- (1) Pre-Meeting Updates -->
@@ -1415,6 +1447,7 @@
         var q = byId('q'); if (q) q.value = '';
         var filters = byId('findFilters'); if (filters) filters.style.display = '';
         var tbody = document.querySelector('#ticketsTbl tbody'); if (tbody) tbody.innerHTML = '';
+        var dtbody = document.querySelector('#devTicketsTbl tbody'); if (dtbody) dtbody.innerHTML = '';
         var sec = ['today', 'blockers', 'missing'];
         for (var j = 0; j < sec.length; j++) { var el2 = byId(sec[j]); if (el2) el2.innerHTML = ''; }
         var ws = byId('weeklySummaryBody'); if (ws) ws.innerHTML = 'Log in to see your last 7 days of progress.';
@@ -1455,6 +1488,7 @@
         window.__role = role;
         var loginCard = byId('loginCard');
         var ticketsCard = byId('ticketsCard');
+        var devTicketsCard = byId('devTicketsCard');
         var submitCard = byId('submitCard');
         var pmBox = byId('pm');
         var weeklyCard = byId('weeklySummaryCard');
@@ -1469,7 +1503,8 @@
         var aiRiskToggle = byId('aiRiskToggle');
 
         if (loginCard) loginCard.classList.add('hidden');
-        if (ticketsCard) ticketsCard.classList.remove('hidden');
+        if (ticketsCard) ticketsCard.classList.toggle('hidden', !isDev && !isLead); // dev + lead only
+        if (devTicketsCard) devTicketsCard.classList.toggle('hidden', !isManager); // pm, admin, lead
         // Lead keeps submitCard (has own tickets) — only hide for pure PM/Admin
         if (submitCard) submitCard.classList.toggle('hidden', isPM || isAdmin);
         if (weeklyCard) weeklyCard.classList.toggle('hidden', isPM || isAdmin);
@@ -1512,11 +1547,11 @@
 
         var filters = byId('findFilters');
         if (isManager) {
-          ensureAssignedDropdownForPM();
+          ensureDevAssignedDropdown();
           ensureSnapshotDevDropdown();
 
           if (filters) filters.style.display = '';
-          loadToday(); loadStale();
+          loadToday(); loadStale(); loadDevTickets();
           if (!isLead) { loadBlockers(); loadMissing(); } // lead excluded from these
           if (isLead) loadTickets(); // lead also loads own assigned tickets
           if (isManager) loadTopDevs(); // pm/admin/lead
@@ -1724,6 +1759,106 @@
             if (loadBtn) loadBtn.click();
           });
         });
+      }
+
+      function ensureDevAssignedDropdown() {
+        var sel = byId('devAssigned');
+        if (!sel) return;
+        if (sel.getAttribute('data-loaded') === '1') return;
+
+        populateTeamSelect(sel, {
+          includeBlank: true,
+          blankLabel: '— All / Anyone —',
+          setDataEmail: true,
+          getValue: function (m) { return (m.alias || '').trim(); },
+          getLabel: function (m) { return (m.display_name || m.alias || m.email || '').trim(); }
+        }).then(function () {
+          sel.addEventListener('change', function () {
+            var btn = byId('devLoadBtn');
+            if (btn) btn.click();
+          });
+        });
+      }
+
+      function loadDevTickets() {
+        var assigned = byId('devAssigned');
+        var q = byId('devQ');
+        var btn = byId('devLoadBtn');
+        var status = byId('devLoadStatus');
+        if (!btn || !status) return;
+        status.textContent = 'Loading...';
+        btn.disabled = true;
+
+        var tbody = document.querySelector('#devTicketsTbl tbody');
+        tbody.innerHTML = '';
+        for (var i = 0; i < 5; i++) {
+          var tr = document.createElement('tr'); tr.className = 'skeleton';
+          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
+          tbody.appendChild(tr);
+        }
+
+        var url = new URL((API || location.origin) + '/api/tickets');
+        // Always load all work item types (same as PM mode)
+        url.searchParams.set('types', 'all');
+        url.searchParams.set('typesOverride', '1');
+        if (assigned && assigned.value.trim()) {
+          url.searchParams.set('assignedTo', assigned.value.trim());
+          var opt = assigned.options[assigned.selectedIndex];
+          var em = opt && opt.getAttribute('data-email');
+          var by = em || assigned.value.trim();
+          if (by) url.searchParams.set('updatesBy', by);
+        }
+        if (q && q.value.trim()) url.searchParams.set('q', q.value.trim());
+
+        var hdrs = {};
+        var tkn = localStorage.getItem('pocToken');
+        if (tkn) hdrs['Authorization'] = 'Bearer ' + tkn;
+
+        fetch(url, { headers: hdrs })
+          .then(function (res) { return res.json(); })
+          .then(function (js) {
+            status.textContent = 'Loaded ' + (js.count || 0) + ' ticket(s)';
+            tbody.innerHTML = '';
+            var items = js.items || [];
+            for (var k = 0; k < items.length; k++) {
+              var t = items[k];
+              var tr2 = document.createElement('tr');
+              tr2.setAttribute('data-id', String(t.id));
+              var code = t.lastCode || t.progressCode || t.code || '';
+              var note = t.lastNote || t.progressNote || t.note || '';
+              var typ = t.type || t.workItemType || t.itemType || t.kind || '';
+
+              var STALE_IP_DAYS = 2;
+              var tStateL = (t.state || '').toLowerCase();
+              var isStaleState = (tStateL === 'in development' || tStateL === 'committed');
+              var lastActMs = t.lastUpdateAt
+                ? Date.parse(t.lastUpdateAt)
+                : (t.stateChangeDate ? Date.parse(t.stateChangeDate) : null);
+              var daysStale = lastActMs != null ? Math.floor((Date.now() - lastActMs) / 86400000) : null;
+              var staleBadge = (isStaleState && !code && (daysStale == null || daysStale >= STALE_IP_DAYS))
+                ? ' <span class="badge warning" title="No update for ' + (daysStale != null ? daysStale + 'd' : 'unknown') + '">⚠ ' + (daysStale != null ? daysStale + 'd stale' : 'stale') + '</span>'
+                : '';
+
+              tr2.innerHTML =
+                '<td>' + esc(t.id) + '</td>' +
+                '<td>' + esc(typ || '—') + '</td>' +
+                '<td><i>' + esc(t.title) + '</i></td>' +
+                '<td>' + esc(t.state) + staleBadge + '</td>' +
+                '<td>' + esc(t.severity || '—') + '</td>' +
+                '<td>' + esc(code || '—') + '</td>' +
+                '<td>' + esc(note || '—') + '</td>';
+
+              tbody.appendChild(tr2);
+              var cells = tr2.getElementsByTagName('td');
+              renderCodeBadge(cells[5], code);
+            }
+          })
+          .catch(function () {
+            status.textContent = 'Failed to load';
+            status.classList.add('err');
+            tbody.innerHTML = '<tr><td colspan="7">Unable to load tickets. Check network or try again.</td></tr>';
+          })
+          .finally(function () { btn.disabled = false; });
       }
 
       function ensureSnapshotDevDropdown() {
@@ -1941,7 +2076,7 @@
                 '<td>' + esc(code || '—') + '</td>' +
                 '<td>' + esc(note || '—') + '</td>' +
                 '<td>' + (
-                  (window.__role !== 'dev' || window.__lockedToday)
+                  ((window.__role !== 'dev' && window.__role !== 'lead') || window.__lockedToday)
                     ? ''
                     : (
                       '<div class="toolbar" role="group">'
@@ -2663,11 +2798,17 @@
       }
 
       function setIterationLabel(name) {
-        var el = byId('iterLabel');
-        if (!el) return;
         name = (name || '').trim();
-        if (name) { el.textContent = name; el.classList.remove('muted'); }
-        else { el.textContent = '—'; el.classList.add('muted'); }
+        var el = byId('iterLabel');
+        if (el) {
+          if (name) { el.textContent = name; el.classList.remove('muted'); }
+          else { el.textContent = '—'; el.classList.add('muted'); }
+        }
+        var el2 = byId('devIterLabel');
+        if (el2) {
+          if (name) { el2.textContent = name; el2.classList.remove('muted'); }
+          else { el2.textContent = '—'; el2.classList.add('muted'); }
+        }
       }
 
       function refreshIterationBadge() {
@@ -4113,6 +4254,7 @@
       window.login = login;
       window.logout = logout;
       window.loadTickets = loadTickets;
+      window.loadDevTickets = loadDevTickets;
       window.loadWeeklySummary = loadWeeklySummary;
       window.prefill = prefill;
       window.submitProgress = submitProgress;
