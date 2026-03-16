@@ -1843,10 +1843,10 @@ app.get('/api/tickets', async (req, res) => {
 
     const lateralPred =
       updatesEmail && updatesAlias
-        ? `email = ${emailParam} OR split_part(email,'@',1) = ${aliasParam}`
+        ? `lower(email) = ${emailParam} OR lower(split_part(email,'@',1)) = ${aliasParam}`
         : updatesEmail
-          ? `email = ${emailParam}`
-          : `split_part(email,'@',1) = ${aliasParam}`;
+          ? `lower(email) = ${emailParam}`
+          : `lower(split_part(email,'@',1)) = ${aliasParam}`;
 
     sql = `
       select
