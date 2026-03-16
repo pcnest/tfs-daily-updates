@@ -1814,14 +1814,14 @@ app.get('/api/tickets', async (req, res) => {
       }
     }
 
-    // PMs may view others; non-PMs are limited to themselves
+    // PMs, admins, and leads may view others; plain devs are limited to themselves
     if (updatesEmail && updatesEmail !== requester) {
       const roleRow = await pool.query(
         'select role from users where email=$1 limit 1',
         [requester],
       );
-      const isPM = roleRow.rows[0]?.role === 'pm';
-      if (!isPM) updatesEmail = requester;
+      const isManager = ['pm', 'admin', 'lead'].includes(roleRow.rows[0]?.role);
+      if (!isManager) updatesEmail = requester;
     }
 
     if (!updatesEmail) updatesEmail = requester;
