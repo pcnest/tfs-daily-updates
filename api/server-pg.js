@@ -1955,7 +1955,7 @@ app.get('/api/tickets/stale', requireAuth, async (req, res) => {
         t.state_change_date  AS "stateChangeDate",
         pu.last_at           AS "lastUpdateAt",
         pu.last_code         AS "lastCode",
-        ROUND(
+        FLOOR(
           EXTRACT(EPOCH FROM (
             NOW() - COALESCE(pu.last_at, t.state_change_date, t.changed_date)
           )) / 86400
