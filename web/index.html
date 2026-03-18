@@ -289,6 +289,10 @@
     }
 
     /* Report filter bar */
+    #reportFilterBar {
+      flex-wrap: nowrap;
+    }
+
     #fTicket {
       flex: 0 0 auto;
       max-width: 145px;
@@ -296,7 +300,7 @@
 
     #fTitle {
       flex: 1;
-      min-width: 140px;
+      min-width: 80px;
     }
 
     #fType {
@@ -1095,7 +1099,8 @@
           </div>
 
           <!-- Report table filters -->
-          <div class="toolbar" id="reportFilterBar" style="margin-top:8px;">
+          <div class="toolbar" id="reportFilterBar" style="margin-top:8px; display:none;">
+            <span style="font-weight:600; color:var(--muted); font-size:13px; white-space:nowrap;">Filter by:</span>
             <label for="fTicket">Ticket:</label>
             <input id="fTicket" type="text" placeholder="Ticket ID…" oninput="filterReportTable()" />
             <label for="fTitle">Title:</label>
@@ -2785,6 +2790,8 @@
             tb.innerHTML = html || '<tr><td colspan="9"><em>No rows for the selected range.</em></td></tr>';
             populateTypeFilter(items);
             filterReportTable();
+            var rfb = document.getElementById('reportFilterBar');
+            if (rfb) rfb.style.display = '';
           })
           .catch(function () {
             var tb = document.querySelector('#reportTbl tbody');
