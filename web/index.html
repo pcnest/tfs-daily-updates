@@ -288,6 +288,21 @@
       }
     }
 
+    /* Report filter bar */
+    #fTicket {
+      flex: 0 0 auto;
+      max-width: 145px;
+    }
+
+    #fTitle {
+      flex: 1;
+      min-width: 140px;
+    }
+
+    #fType {
+      flex: 0 0 auto;
+    }
+
 
     /* override global select { width:100% } */
 
@@ -1079,6 +1094,18 @@
             <button type="button" id="snapEmailBtn" onclick="emailSnapshots()">Email Snapshot</button>
           </div>
 
+          <!-- Report table filters -->
+          <div class="toolbar" id="reportFilterBar" style="margin-top:8px;">
+            <label for="fTicket">Ticket:</label>
+            <input id="fTicket" type="text" placeholder="Ticket ID…" oninput="filterReportTable()" />
+            <label for="fTitle">Title:</label>
+            <input id="fTitle" type="text" placeholder="Title…" oninput="filterReportTable()" />
+            <label for="fType">Type:</label>
+            <select id="fType" onchange="filterReportTable()">
+              <option value="">All types</option>
+            </select>
+            <button type="button" onclick="clearReportFilters()">Clear filters</button>
+          </div>
 
           <div class="table-wrap">
             <table id="reportTbl">
@@ -2756,6 +2783,8 @@
                 '</tr>';
             }
             tb.innerHTML = html || '<tr><td colspan="9"><em>No rows for the selected range.</em></td></tr>';
+            populateTypeFilter(items);
+            filterReportTable();
           })
           .catch(function () {
             var tb = document.querySelector('#reportTbl tbody');
@@ -2790,6 +2819,51 @@
         var first = new Date(now.getFullYear(), now.getMonth(), 1);
         var last = new Date(now.getFullYear(), now.getMonth() + 1, 0);
         setReportRange(first, last, !!autoLoad);
+      }
+
+      function filterReportTable() {
+        var ticket = (document.getElementById('fTicket') || {}).value || '';
+        var title = (document.getElementById('fTitle') || {}).value || '';
+        var type = (document.getElementById('fType') || {}).value || '';
+        var tktLc = ticket.toLowerCase();
+        var ttlLc = title.toLowerCase();
+        var rows = document.querySelectorAll('#reportTbl tbody tr');
+        for (var i = 0; i < rows.length; i++) {
+          var cells = rows[i].cells;
+          if (!cells || cells.length < 4) { rows[i].style.display = ''; continue; }
+          var matchTicket = !tktLc || (cells[1].textContent || '').toLowerCase().indexOf(tktLc) !== -1;
+          var matchType = !type || (cells[2].textContent || '').trim() === type;
+          var matchTitle = !ttlLc || (cells[3].textContent || '').toLowerCase().indexOf(ttlLc) !== -1;
+          rows[i].style.display = (matchTicket && matchType && matchTitle) ? '' : 'none';
+        }
+      }
+
+      function clearReportFilters() {
+        var fTicket = document.getElementById('fTicket');
+        var fTitle = document.getElementById('fTitle');
+        var fType = document.getElementById('fType');
+        if (fTicket) fTicket.value = '';
+        if (fTitle) fTitle.value = '';
+        if (fType) fType.selectedIndex = 0;
+        filterReportTable();
+      }
+
+      function populateTypeFilter(items) {
+        var sel = document.getElementById('fType');
+        if (!sel) return;
+        var current = sel.value;
+        var types = {};
+        for (var i = 0; i < items.length; i++) {
+          var t = items[i].type || items[i].workItemType || items[i].itemType || items[i].kind || '';
+          if (t) types[t] = true;
+        }
+        var sorted = Object.keys(types).sort();
+        var html = '<option value="">All types</option>';
+        for (var j = 0; j < sorted.length; j++) {
+          var selected = sorted[j] === current ? ' selected' : '';
+          html += '<option value="' + esc(sorted[j]) + '"' + selected + '>' + esc(sorted[j]) + '</option>';
+        }
+        sel.innerHTML = html;
       }
 
       function renderCodeBadge(cell, code) {
