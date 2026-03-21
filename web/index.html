@@ -615,6 +615,52 @@
       color: #ffffff;
     }
 
+    /* TFS priority badges (muted) */
+    .badge.priority-1 {
+      background: #fecaca;
+      color: #991b1b;
+    }
+
+    .badge.priority-2 {
+      background: #fed7aa;
+      color: #9a3412;
+    }
+
+    .badge.priority-3 {
+      background: #fef08a;
+      color: #713f12;
+    }
+
+    .badge.priority-4 {
+      background: var(--accent-weak);
+      color: var(--fg);
+    }
+
+    /* Urgent flag button */
+    .flag-btn {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 1rem;
+      padding: 2px 5px;
+      line-height: 1;
+      border-radius: 4px;
+      color: var(--fg-muted, #6b7280);
+    }
+
+    .flag-btn:hover {
+      background: var(--accent-weak);
+    }
+
+    .flag-btn.active {
+      color: #ef4444;
+    }
+
+    .flag-btn:disabled {
+      opacity: 0.35;
+      cursor: not-allowed;
+    }
+
     /* Desktop: PM grid in 2 columns */
     @media (min-width: 1024px) {
       .section-grid {
@@ -879,9 +925,11 @@
             <th style="width:350px">Title</th>
             <th style="width:120px">State</th>
             <th style="width:120px">Severity</th>
+            <th style="width:60px">Priority</th>
             <th style="width:75px">Code</th>
             <th>Note</th>
             <th style="width:75px">Action</th>
+            <th style="width:45px">Flag</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -943,13 +991,15 @@
             <th style="width:350px">Title</th>
             <th style="width:120px">State</th>
             <th style="width:120px">Severity</th>
+            <th style="width:60px">Priority</th>
             <th style="width:75px">Code</th>
             <th>Note</th>
+            <th style="width:45px">Flag</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td colspan="7" class="help" style="text-align:center;padding:1rem">Select a developer from the dropdown
+            <td colspan="9" class="help" style="text-align:center;padding:1rem">Select a developer from the dropdown
               above to load tickets.</td>
           </tr>
         </tbody>
@@ -1192,6 +1242,11 @@
               placeholder="short, concrete update"></textarea></div>
           <div class="row"><label>&nbsp;</label><small id="noteHint" class="help">A note may be required for some
               codes.</small></div>
+          <!-- Urgent flag -->
+          <div class="row">
+            <label for="flagUrgent">Flag as Urgent</label>
+            <input type="checkbox" id="flagUrgent" />
+          </div>
           <!-- AI assist panel (suggested code + results) -->
           <div class="row">
             <label>AI Assist</label>
@@ -1888,24 +1943,34 @@
                 ? ' <span class="badge ' + staleBadgeClass + '" title="No update for ' + (daysStale != null ? daysStale + 'd' : 'unknown') + '">⚠ ' + (daysStale != null ? daysStale + 'd stale' : 'stale') + '</span>'
                 : '';
 
+              var priBadge = t.priority ? '<span class="badge priority-' + t.priority + '">P' + t.priority + '</span>' : '—';
+              var isFlagged = !!t.isFlagged;
+              var flaggedBy = t.flaggedBy || '';
+              var flagTitle = isFlagged ? ('Flagged by ' + flaggedBy) : 'Flag as urgent';
+              var flagBtn = '<button class="flag-btn' + (isFlagged ? ' active' : '') + '" title="' + esc(flagTitle) + '" onclick="toggleFlag(' + Number(t.id) + ',' + (!isFlagged) + ')" aria-label="' + (isFlagged ? 'Unflag' : 'Flag') + ' ticket ' + esc(t.id) + '">' + (isFlagged ? '⚑' : '⚐') + '</button>';
+              tr2.setAttribute('data-flagged', isFlagged ? '1' : '0');
+              tr2.setAttribute('data-flagged-by', flaggedBy);
+
               tr2.innerHTML =
                 '<td>' + esc(t.id) + '</td>' +
                 '<td>' + esc(typ || '—') + '</td>' +
                 '<td><i>' + esc(t.title) + '</i></td>' +
                 '<td>' + esc(t.state) + staleBadge + '</td>' +
                 '<td>' + esc(t.severity || '—') + '</td>' +
+                '<td>' + priBadge + '</td>' +
                 '<td>' + esc(code || '—') + '</td>' +
-                '<td>' + esc(note || '—') + '</td>';
+                '<td>' + esc(note || '—') + '</td>' +
+                '<td>' + flagBtn + '</td>';
 
               tbody.appendChild(tr2);
               var cells = tr2.getElementsByTagName('td');
-              renderCodeBadge(cells[5], code);
+              renderCodeBadge(cells[6], code);
             }
           })
           .catch(function () {
             status.textContent = 'Failed to load';
             status.classList.add('err');
-            tbody.innerHTML = '<tr><td colspan="7">Unable to load tickets. Check network or try again.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="9">Unable to load tickets. Check network or try again.</td></tr>';
           })
           .finally(function () { btn.disabled = false; });
       }
@@ -2065,7 +2130,7 @@
         tbody.innerHTML = "";
         for (var i = 0; i < 5; i++) {
           var tr = document.createElement('tr'); tr.className = 'skeleton';
-          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
+          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
           tbody.appendChild(tr);
         }
         var url = new URL((API || location.origin) + "/api/tickets");
@@ -2119,12 +2184,21 @@
                 ? ' <span class="badge ' + staleBadgeClass + '" title="No update for ' + (daysStale != null ? daysStale + 'd' : 'unknown') + '">⚠ ' + (daysStale != null ? daysStale + 'd stale' : 'stale') + '</span>'
                 : '';
 
+              var priBadge = t.priority ? '<span class="badge priority-' + t.priority + '">P' + t.priority + '</span>' : '—';
+              var isFlagged = !!t.isFlagged;
+              var flaggedBy = t.flaggedBy || '';
+              var flagTitle = isFlagged ? ('Flagged by ' + flaggedBy) : 'Flag as urgent';
+              var flagBtn = '<button class="flag-btn' + (isFlagged ? ' active' : '') + '" title="' + esc(flagTitle) + '" onclick="toggleFlag(' + Number(t.id) + ',' + (!isFlagged) + ')" aria-label="' + (isFlagged ? 'Unflag' : 'Flag') + ' ticket ' + esc(t.id) + '">' + (isFlagged ? '⚑' : '⚐') + '</button>';
+              tr2.setAttribute('data-flagged', isFlagged ? '1' : '0');
+              tr2.setAttribute('data-flagged-by', flaggedBy);
+
               tr2.innerHTML =
                 '<td>' + esc(t.id) + '</td>' +
                 '<td>' + esc(typ || '—') + '</td>' +
                 '<td><i>' + esc(t.title) + '</i></td>' +
                 '<td>' + esc(t.state) + staleBadge + '</td>' +
                 '<td>' + esc(t.severity || '—') + '</td>' +
+                '<td>' + priBadge + '</td>' +
                 '<td>' + esc(code || '—') + '</td>' +
                 '<td>' + esc(note || '—') + '</td>' +
                 '<td>' + (
@@ -2136,25 +2210,19 @@
                       + '<button class="secondary" onclick="openSPModal(' + Number(t.id) + ')" aria-label="Select ticket ' + esc(t.id) + '">Select</button>'
                       + '</div>'
                     )
-                ) + '</td>';
-
-
-
-
-
-
+                ) + '</td>' +
+                '<td>' + flagBtn + '</td>';
 
               tbody.appendChild(tr2);
               var cells = tr2.getElementsByTagName('td');
-              renderCodeBadge(cells[5], code);
+              renderCodeBadge(cells[6], code);
             }
           })
           .catch(function () {
             status.textContent = "Failed to load";
             status.classList.add('err');
-            tbody.innerHTML = '<tr><td colspan="8">Unable to load tickets. Check network or try again.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10">Unable to load tickets. Check network or try again.</td></tr>';
           })
-          .finally(function () { btn.disabled = false; });
       }
 
       function loadWeeklySummary() {
@@ -2295,11 +2363,17 @@
         var m = byId('spModal'), b = byId('spBackdrop');
         if (id != null) byId('tId').value = String(id);
 
+        // Pre-fill urgent flag checkbox from row state
+        var flagCb = byId('flagUrgent');
+        if (flagCb && id != null) {
+          var activeRow = document.querySelector('#ticketsTbl tbody tr[data-id="' + String(id) + '"]');
+          var rowFlagged = activeRow ? (activeRow.getAttribute('data-flagged') === '1') : false;
+          flagCb.checked = rowFlagged;
+          window.__originalFlagged = rowFlagged;
+        }
+
         if (window.syncNoteRequirement) syncNoteRequirement();
-
-        // now only resets panel + wires listeners; no network yet
         prepareDevAssistUI(String(id || byId('tId').value || ''));
-
         m.classList.add('open'); b.classList.add('open');
         setTimeout(function () { var t = byId('tId'); if (t) t.focus(); }, 0);
       }
@@ -2411,6 +2485,42 @@
         if (typeof syncNoteRequirement === 'function') syncNoteRequirement();
       }
 
+      // --- Urgent flag toggle (shared per-ticket, all roles) ---
+      function toggleFlag(ticketId, newState) {
+        var tkn = token();
+        if (!tkn) return;
+        var tid = String(ticketId);
+        fetch((API || location.origin) + '/api/tickets/' + tid + '/flag', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + tkn },
+          body: JSON.stringify({ flagged: newState })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            if (js && js.error) { console.warn('[flag] error:', js.error); return; }
+            var flagged = !!js.flagged;
+            var flaggedBy = js.flaggedBy || '';
+            var rows = document.querySelectorAll('tr[data-id="' + tid + '"]');
+            for (var i = 0; i < rows.length; i++) {
+              rows[i].setAttribute('data-flagged', flagged ? '1' : '0');
+              rows[i].setAttribute('data-flagged-by', flaggedBy);
+              var btn = rows[i].querySelector('.flag-btn');
+              if (btn) {
+                btn.classList.toggle('active', flagged);
+                btn.textContent = flagged ? '⚑' : '⚐';
+                btn.title = flagged ? ('Flagged by ' + flaggedBy) : 'Flag as urgent';
+                btn.setAttribute('onclick', 'toggleFlag(' + tid + ',' + (!flagged) + ')');
+              }
+            }
+            var modalTid = byId('tId');
+            if (modalTid && String(modalTid.value).trim() === tid) {
+              var cb = byId('flagUrgent');
+              if (cb) cb.checked = flagged;
+            }
+          })
+          .catch(function (e) { console.error('[flag] network error:', e); });
+      }
+
 
       document.addEventListener('keydown', function (ev) {
         if (ev.key === 'Escape') { closeSPModal(); }
@@ -2441,12 +2551,17 @@
               window.__progressCount = (window.__progressCount || 0) + 1;
               updateLockButtonState();
               byId("note").value = "";
+              var flagCb = byId('flagUrgent');
+              if (flagCb && flagCb.checked !== !!window.__originalFlagged) {
+                toggleFlag(ticket, flagCb.checked);
+                window.__originalFlagged = flagCb.checked;
+              }
               closeSPModal();
               var row = document.querySelector('#ticketsTbl tbody tr[data-id="' + ticket + '"]');
               if (row) {
                 var cells = row.getElementsByTagName('td');
-                if (cells[5]) renderCodeBadge(cells[5], code || '');
-                if (cells[6]) cells[6].textContent = note || '—';
+                if (cells[6]) renderCodeBadge(cells[6], code || '');
+                if (cells[7]) cells[7].textContent = note || '—';
               } else {
                 if (typeof loadTickets === 'function') { loadTickets(); }
               }
@@ -2697,9 +2812,11 @@
                   out.push('<th style="width:350px">Title</th>');
                   out.push('<th style="width:120px">State</th>');
                   out.push('<th style="width:120px">Severity</th>');
+                  out.push('<th style="width:60px">Priority</th>');
                   out.push('<th style="width:75px">Code</th>');
                   out.push('<th style="width:90px">Risk</th>');
                   out.push('<th>Note</th>');
+                  out.push('<th style="width:45px">Flag</th>');
                   out.push('</tr></thead><tbody>');
 
                   for (var m = 0; m < arr.length; m++) {
@@ -2717,6 +2834,8 @@
                     out.push('<td><i>' + esc(it2.title || '') + '</i></td>');
                     out.push('<td>' + esc(it2.state || '-') + '</td>');
                     out.push('<td>' + esc(it2.severity || '-') + '</td>');
+                    var priCell2 = it2.priority ? '<span class="badge priority-' + it2.priority + '">P' + it2.priority + '</span>' : '—';
+                    out.push('<td>' + priCell2 + '</td>');
                     out.push('<td>' + codeBadge + '</td>');
                     out.push('<td>' + riskBadge + '</td>');
                     var ai = getAiRiskForTicket(it2.ticketId);
@@ -2725,6 +2844,10 @@
                       aiHtml = '<div class="ai-rationale"><span class="badge">AI ' + esc(ai.riskLevel || 'low') + '</span> ' + esc(ai.rationale) + '</div>';
                     }
                     out.push('<td>' + esc(it2.note || '') + aiHtml + '</td>');
+                    var flagCell = it2.isFlagged
+                      ? '<span title="' + esc('Flagged by ' + (it2.flaggedBy || 'someone')) + '" style="color:#ef4444">⚑</span>'
+                      : '—';
+                    out.push('<td>' + flagCell + '</td>');
                     out.push('</tr>');
                   }
 
@@ -4373,6 +4496,7 @@
       window.toggleBonusAudit = toggleBonusAudit;
       window.loadBonusAudit = loadBonusAudit;
       window.openSPModal = openSPModal;
+      window.toggleFlag = toggleFlag;
       window.closeSPModal = closeSPModal;
       window.loadReportRange = loadReportRange;
       window.presetReportThisWeek = presetReportThisWeek;

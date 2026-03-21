@@ -1861,10 +1861,15 @@ app.get('/api/tickets', async (req, res) => {
         t.state_change_date as "stateChangeDate",
         t.severity,
         t.tags,
+        t.priority,
+        (tf.ticket_id is not null) as "isFlagged",
+        fb.name as "flaggedBy",
         u.code as "lastCode",
         u.note as "lastNote",
         u.at   as "lastUpdateAt"
       from tickets t
+      left join ticket_flags tf on tf.ticket_id = t.id
+      left join users fb on fb.id = tf.flagged_by
       left join lateral (
         select code, note, at
         from progress_updates
@@ -1886,8 +1891,13 @@ app.get('/api/tickets', async (req, res) => {
         t.changed_date   as "changedDate",
         t.state_change_date as "stateChangeDate",
         t.severity,
-        t.tags
+        t.tags,
+        t.priority,
+        (tf.ticket_id is not null) as "isFlagged",
+        fb.name as "flaggedBy"
       from tickets t
+      left join ticket_flags tf on tf.ticket_id = t.id
+      left join users fb on fb.id = tf.flagged_by
       ${where}
       order by t.changed_date desc nulls last, t.id::bigint nulls last
     `;
@@ -1982,6 +1992,129 @@ app.get('/api/tickets/stale', requireAuth, async (req, res) => {
     });
   } catch (e) {
     console.error('[stale] error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- flag/unflag a ticket (shared urgent marker) ---
+// dev: only own assigned tickets; lead/pm/admin: any ticket
+app.post('/api/tickets/:id/flag', requireAuth, async (req, res) => {
+  try {
+    const ticketId = Number(req.params.id);
+    if (!Number.isFinite(ticketId))
+      return res.status(400).json({ error: 'invalid ticket id' });
+
+    const { flagged } = req.body;
+    if (typeof flagged !== 'boolean')
+      return res.status(400).json({ error: 'flagged must be boolean' });
+
+    const me = await pool.query('select id, role from users where email=$1', [
+      req.userEmail,
+    ]);
+    const user = me.rows[0];
+    if (!user) return res.status(403).json({ error: 'user not found' });
+
+    const isManager = ['pm', 'admin', 'lead'].includes(user.role);
+    if (!isManager) {
+      // dev: can only flag tickets assigned to them
+      const tkt = await pool.query(
+        'select assigned_to from tickets where id=$1',
+        [ticketId],
+      );
+      if (!tkt.rows[0])
+        return res.status(404).json({ error: 'ticket not found' });
+      const assignedTo = (tkt.rows[0].assigned_to || '').toLowerCase();
+      const email = req.userEmail.toLowerCase();
+      const alias = email.split('@')[0];
+      const owns =
+        assignedTo === email ||
+        assignedTo.endsWith('\\' + alias) ||
+        assignedTo === alias ||
+        assignedTo.includes(alias);
+      if (!owns)
+        return res
+          .status(403)
+          .json({ error: 'You can only flag your own assigned tickets.' });
+    }
+
+    if (flagged) {
+      await pool.query(
+        `insert into ticket_flags(ticket_id, flagged_by)
+         values($1, $2)
+         on conflict (ticket_id) do update set flagged_by=$2, flagged_at=now()`,
+        [ticketId, user.id],
+      );
+    } else {
+      await pool.query('delete from ticket_flags where ticket_id=$1', [
+        ticketId,
+      ]);
+    }
+
+    let flaggedBy = null;
+    if (flagged) {
+      const nr = await pool.query('select name from users where id=$1', [
+        user.id,
+      ]);
+      flaggedBy = nr.rows[0]?.name || req.userEmail;
+    }
+    res.json({ ok: true, flagged, flaggedBy });
+  } catch (e) {
+    console.error('[flag] error:', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// --- list flagged tickets ---
+// dev: own assigned flagged tickets; lead/pm/admin: all flagged tickets
+app.get('/api/tickets/flagged', requireAuth, async (req, res) => {
+  try {
+    const me = await pool.query('select id, role from users where email=$1', [
+      req.userEmail,
+    ]);
+    const user = me.rows[0];
+    if (!user) return res.status(403).json({ error: 'user not found' });
+
+    const isManager = ['pm', 'admin', 'lead'].includes(user.role);
+    let sql, params;
+
+    if (isManager) {
+      sql = `
+        select t.id, t.type, t.title, t.state, t.priority, t.severity,
+               t.assigned_to as "assignedTo",
+               fb.name as "flaggedBy", fb.role as "flaggedByRole",
+               tf.flagged_at as "flaggedAt"
+        from ticket_flags tf
+        join tickets t on t.id = tf.ticket_id
+        join users fb on fb.id = tf.flagged_by
+        where coalesce(t.deleted, false) = false
+        order by tf.flagged_at desc
+      `;
+      params = [];
+    } else {
+      const email = req.userEmail.toLowerCase();
+      const alias = email.split('@')[0];
+      sql = `
+        select t.id, t.type, t.title, t.state, t.priority, t.severity,
+               t.assigned_to as "assignedTo",
+               fb.name as "flaggedBy", fb.role as "flaggedByRole",
+               tf.flagged_at as "flaggedAt"
+        from ticket_flags tf
+        join tickets t on t.id = tf.ticket_id
+        join users fb on fb.id = tf.flagged_by
+        where coalesce(t.deleted, false) = false
+          and (
+            lower(t.assigned_to) like $1
+            or lower(regexp_replace(t.assigned_to, '^.*\\\\', '')) = $2
+          )
+        order by tf.flagged_at desc
+      `;
+      params = ['%' + alias + '%', alias];
+    }
+
+    const r = await pool.query(sql, params);
+    res.json({ items: r.rows });
+  } catch (e) {
+    console.error('[flagged] error:', e.message);
     res.status(500).json({ error: e.message });
   }
 });
@@ -2150,9 +2283,14 @@ app.get('/api/updates/today', async (_req, res) => {
             u.impact_area as "impactArea", u.at,
             t.title, t.state, t.type, t.severity,
             t.state_change_date as "stateChangeDate",
-            t.assigned_to as "assignedTo", t.iteration_path as "iterationPath"
+            t.assigned_to as "assignedTo", t.iteration_path as "iterationPath",
+            t.priority,
+            (tf.ticket_id is not null) as "isFlagged",
+            fb.name as "flaggedBy"
      from progress_updates u
      left join tickets t on t.id = u.ticket_id
+     left join ticket_flags tf on tf.ticket_id = u.ticket_id
+     left join users fb on fb.id = tf.flagged_by
      where u.date = $1`,
     [date],
   );
@@ -6505,4 +6643,22 @@ pool
   })
   .catch((e) => {
     console.error('[boot] bonus_evaluations table ensure failed:', e);
+  });
+
+// --- boot: ensure ticket_flags table exists (shared urgent flag per ticket) ---
+pool
+  .query(
+    `
+  create table if not exists ticket_flags (
+    ticket_id  bigint  not null primary key references tickets(id),
+    flagged_by integer not null references users(id),
+    flagged_at timestamptz default now()
+  )
+`,
+  )
+  .then(() => {
+    console.log('[boot] ticket_flags table is ready');
+  })
+  .catch((e) => {
+    console.error('[boot] ticket_flags table ensure failed:', e);
   });
