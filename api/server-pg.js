@@ -6651,7 +6651,7 @@ pool
     `
   create table if not exists ticket_flags (
     ticket_id  text        not null primary key,
-    flagged_by integer     not null references users(id),
+    flagged_by uuid        not null,
     flagged_at timestamptz default now()
   )
 `,
