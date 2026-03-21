@@ -2000,8 +2000,8 @@ app.get('/api/tickets/stale', requireAuth, async (req, res) => {
 // dev: only own assigned tickets; lead/pm/admin: any ticket
 app.post('/api/tickets/:id/flag', requireAuth, async (req, res) => {
   try {
-    const ticketId = Number(req.params.id);
-    if (!Number.isFinite(ticketId))
+    const ticketId = String(req.params.id || '').trim();
+    if (!/^\d+$/.test(ticketId))
       return res.status(400).json({ error: 'invalid ticket id' });
 
     const { flagged } = req.body;
@@ -6650,8 +6650,8 @@ pool
   .query(
     `
   create table if not exists ticket_flags (
-    ticket_id  bigint  not null primary key references tickets(id),
-    flagged_by integer not null references users(id),
+    ticket_id  text        not null primary key,
+    flagged_by integer     not null references users(id),
     flagged_at timestamptz default now()
   )
 `,
