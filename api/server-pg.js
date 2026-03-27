@@ -2845,6 +2845,90 @@ app.get(
         devLocal, // $6
       ]);
 
+      // Second query: per-developer ticket-level detail (volume list + stalled list)
+      const detailSql = `
+      with windowed2 as (
+        select
+          email as dev,
+          ticket_id,
+          code,
+          at AT TIME ZONE $3 as ts_local,
+          lead(at) over (partition by ticket_id order by at) AT TIME ZONE $3 as next_ts_local
+        from progress_updates
+        where at >= ($1::timestamptz - interval '7 days')
+          and at <  ($2::timestamptz + interval '1 day')
+          and (
+            ($5::text is null and $6::text is null)
+            or lower(email) = $5::text
+            or split_part(lower(email),'@',1) = $6::text
+          )
+      ),
+      coded2 as (
+        select
+          dev, ticket_id,
+          split_part(code,'_',1) || '_xx' as family,
+          greatest(ts_local, $1::date AT TIME ZONE $3) as seg_start,
+          least(coalesce(next_ts_local, $2::date AT TIME ZONE $3), $2::date AT TIME ZONE $3) as seg_end
+        from windowed2
+      ),
+      latest_in_window as (
+        select distinct on (ticket_id)
+          ticket_id,
+          at AT TIME ZONE $3 as last_ts_local,
+          split_part(code,'_',1) || '_xx' as last_family
+        from progress_updates
+        where at <= ($2::timestamptz)
+        order by ticket_id, at desc
+      ),
+      ticket_list as (
+        select
+          c.dev,
+          c.ticket_id,
+          lt.last_family,
+          bool_or(c.family = '500_xx') as completed
+        from coded2 c
+        join latest_in_window lt on lt.ticket_id = c.ticket_id
+        group by c.dev, c.ticket_id, lt.last_family
+      ),
+      stalled_list as (
+        select
+          c.dev,
+          c.ticket_id,
+          lt.last_family,
+          round(extract(epoch from (($2::date AT TIME ZONE $3) - lt.last_ts_local))/3600.0, 1) as stalled_hours
+        from coded2 c
+        join latest_in_window lt on lt.ticket_id = c.ticket_id
+        where lt.last_ts_local between ($1::date AT TIME ZONE $3) and ($2::date AT TIME ZONE $3)
+          and lt.last_family in ('200_xx','600_xx','800_xx')
+          and (($2::date AT TIME ZONE $3) - lt.last_ts_local) >= (interval '1 hour' * $4::int)
+        group by c.dev, c.ticket_id, lt.last_family, lt.last_ts_local
+      )
+      select
+        dev,
+        jsonb_agg(jsonb_build_object('id', ticket_id, 'last_family', last_family, 'completed', completed)
+                  order by ticket_id) as ticket_list,
+        (select jsonb_agg(jsonb_build_object('id', sl.ticket_id, 'last_family', sl.last_family, 'stalled_hours', sl.stalled_hours)
+                          order by sl.stalled_hours desc)
+         from stalled_list sl where sl.dev = tl.dev) as stalled_list
+      from ticket_list tl
+      group by dev;
+      `;
+
+      const { rows: detailRows } = await pool.query(detailSql, [
+        fromISO,
+        toISO,
+        APP_TZ,
+        parseInt(stallHours, 10) || 12,
+        devEmail,
+        devLocal,
+      ]);
+
+      // Index detail rows by dev email for easy lookup
+      const detailByDev = new Map();
+      for (const dr of detailRows) {
+        detailByDev.set(S(dr.dev).toLowerCase(), dr);
+      }
+
       // optional filter by a specific developer (email)
       const rowsF =
         devEmail || devLocal
@@ -3304,6 +3388,8 @@ app.get(
         insights,
         audience, // 'pm' (default) or 'dev' for the email path
         periodDays,
+        ticketList = [],
+        stalledList = [],
       }) {
         const famKeys = [
           '100_xx',
@@ -3474,6 +3560,66 @@ app.get(
       <div class="pill">Avg Cycle-Time: ${h(weightedAvg)}h</div>
     </div>
   </div>
+
+  ${(() => {
+    const famLabels = {
+      '100_xx': 'Discovery / Starting',
+      '200_xx': 'In-Progress Dev',
+      '300_xx': 'Testing / Debugging',
+      '400_xx': 'Peer / Code Review',
+      '500_xx': 'Completion / Handoff',
+      '600_xx': 'Challenges',
+      '700_xx': 'Investigation',
+      '800_xx': 'Delays',
+    };
+
+    // Ticket volume breakdown
+    const volRows = ticketList.length
+      ? ticketList
+          .map((t) => {
+            const fam = famLabels[t.last_family] || t.last_family || '—';
+            const done = t.completed
+              ? '<span style="color:#15803d;font-weight:700;">✓</span>'
+              : '<span style="color:#9ca3af;">—</span>';
+            return `<tr><td>${escapeHtml(String(t.id || '—'))}</td><td>${escapeHtml(fam)}</td><td style="text-align:center;">${done}</td></tr>`;
+          })
+          .join('')
+      : `<tr><td colspan="3" class="muted">No ticket detail available.</td></tr>`;
+
+    // Stalled tickets breakdown
+    const stallRows = stalledList.length
+      ? stalledList
+          .map((t) => {
+            const fam = famLabels[t.last_family] || t.last_family || '—';
+            const hrs = Number(t.stalled_hours) || 0;
+            const hrsDisplay =
+              hrs >= 24 ? `${(hrs / 24).toFixed(1)}d (${hrs}h)` : `${hrs}h`;
+            const urgentStyle =
+              hrs >= 48 ? 'color:#b91c1c;font-weight:600;' : 'color:#9a3412;';
+            return `<tr><td>${escapeHtml(String(t.id || '—'))}</td><td>${escapeHtml(fam)}</td><td class="num" style="${urgentStyle}">${hrsDisplay}</td></tr>`;
+          })
+          .join('')
+      : `<tr><td colspan="3" class="muted">No stalled tickets.</td></tr>`;
+
+    return `
+  <div class="grid">
+    <div class="card">
+      <div class="section-title">Ticket Volume Breakdown <span class="muted" style="font-size:11px;font-weight:400;">(${ticketList.length} ticket${ticketList.length !== 1 ? 's' : ''})</span></div>
+      <table>
+        <thead><tr><th>Ticket ID</th><th>Last Status</th><th style="text-align:center;">Completed</th></tr></thead>
+        <tbody>${volRows}</tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div class="section-title">Stalled Tickets <span class="muted" style="font-size:11px;font-weight:400;">(${stalledList.length} ticket${stalledList.length !== 1 ? 's' : ''})</span></div>
+      <table>
+        <thead><tr><th>Ticket ID</th><th>Last Status</th><th class="num">Time Stalled</th></tr></thead>
+        <tbody>${stallRows}</tbody>
+      </table>
+      ${stalledList.length ? '<div class="muted" style="margin-top:6px;font-size:0.75rem;">Red = stalled ≥ 48h. Time measured from last update to report end.</div>' : ''}
+    </div>
+  </div>`;
+  })()}
 
   <div class="card">
     <div class="section-title">Progress Status (Aggregate & Average)</div>
@@ -3754,21 +3900,28 @@ app.get(
         users.forEach((u) => namesByEmail.set(u.email, u.name || ''));
       }
 
-      const docs = rowsF.map((r) =>
-        renderSnapshotHTML({
-          name: namesByEmail.get((r.email || '').toLowerCase()) || '',
+      const docs = rowsF.map((r) => {
+        const devKey = S(r.email || '').toLowerCase();
+        const detail = detailByDev.get(devKey) || {};
+        return renderSnapshotHTML({
+          name: namesByEmail.get(devKey) || '',
           email: r.email,
           period: periodLabel,
           ticketVolume: Number(r.ticket_volume) || 0,
           completionPct: Number(r.completion_pct) || 0,
           stalled: Number(r.stalled_tickets) || 0,
           families: r.families || {},
-          insights:
-            insightsByEmail.get(String(r.email || '').toLowerCase()) || null,
+          insights: insightsByEmail.get(devKey) || null,
           audience: String(audience) === 'dev' ? 'dev' : 'pm',
           periodDays: spanDays,
-        }),
-      );
+          ticketList: Array.isArray(detail.ticket_list)
+            ? detail.ticket_list
+            : [],
+          stalledList: Array.isArray(detail.stalled_list)
+            ? detail.stalled_list
+            : [],
+        });
+      });
 
       if (format === 'html') {
         return res
