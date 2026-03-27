@@ -3561,66 +3561,6 @@ app.get(
     </div>
   </div>
 
-  ${(() => {
-    const famLabels = {
-      '100_xx': 'Discovery / Starting',
-      '200_xx': 'In-Progress Dev',
-      '300_xx': 'Testing / Debugging',
-      '400_xx': 'Peer / Code Review',
-      '500_xx': 'Completion / Handoff',
-      '600_xx': 'Challenges',
-      '700_xx': 'Investigation',
-      '800_xx': 'Delays',
-    };
-
-    // Ticket volume breakdown
-    const volRows = ticketList.length
-      ? ticketList
-          .map((t) => {
-            const fam = famLabels[t.last_family] || t.last_family || '—';
-            const done = t.completed
-              ? '<span style="color:#15803d;font-weight:700;">✓</span>'
-              : '<span style="color:#9ca3af;">—</span>';
-            return `<tr><td>${escapeHtml(String(t.id || '—'))}</td><td>${escapeHtml(fam)}</td><td style="text-align:center;">${done}</td></tr>`;
-          })
-          .join('')
-      : `<tr><td colspan="3" class="muted">No ticket detail available.</td></tr>`;
-
-    // Stalled tickets breakdown
-    const stallRows = stalledList.length
-      ? stalledList
-          .map((t) => {
-            const fam = famLabels[t.last_family] || t.last_family || '—';
-            const hrs = Number(t.stalled_hours) || 0;
-            const hrsDisplay =
-              hrs >= 24 ? `${(hrs / 24).toFixed(1)}d (${hrs}h)` : `${hrs}h`;
-            const urgentStyle =
-              hrs >= 48 ? 'color:#b91c1c;font-weight:600;' : 'color:#9a3412;';
-            return `<tr><td>${escapeHtml(String(t.id || '—'))}</td><td>${escapeHtml(fam)}</td><td class="num" style="${urgentStyle}">${hrsDisplay}</td></tr>`;
-          })
-          .join('')
-      : `<tr><td colspan="3" class="muted">No stalled tickets.</td></tr>`;
-
-    return `
-  <div class="grid">
-    <div class="card">
-      <div class="section-title">Ticket Volume Breakdown <span class="muted" style="font-size:11px;font-weight:400;">(${ticketList.length} ticket${ticketList.length !== 1 ? 's' : ''})</span></div>
-      <table>
-        <thead><tr><th>Ticket ID</th><th>Last Status</th><th style="text-align:center;">Completed</th></tr></thead>
-        <tbody>${volRows}</tbody>
-      </table>
-    </div>
-    <div class="card">
-      <div class="section-title">Stalled Tickets <span class="muted" style="font-size:11px;font-weight:400;">(${stalledList.length} ticket${stalledList.length !== 1 ? 's' : ''})</span></div>
-      <table>
-        <thead><tr><th>Ticket ID</th><th>Last Status</th><th class="num">Time Stalled</th></tr></thead>
-        <tbody>${stallRows}</tbody>
-      </table>
-      ${stalledList.length ? '<div class="muted" style="margin-top:6px;font-size:0.75rem;">Red = stalled ≥ 48h. Time measured from last update to report end.</div>' : ''}
-    </div>
-  </div>`;
-  })()}
-
   <div class="card">
     <div class="section-title">Progress Status (Aggregate & Average)</div>
     <table>
@@ -3884,6 +3824,66 @@ app.get(
            </ul>`
     }
   </div>
+
+  ${(() => {
+    const famLabels = {
+      '100_xx': 'Discovery / Starting Work (100_xx)',
+      '200_xx': 'In-Progress Development (200_xx)',
+      '300_xx': 'Testing / Debugging (300_xx)',
+      '400_xx': 'Peer / Code Review (400_xx)',
+      '500_xx': 'Completion / Handoff (500_xx)',
+      '600_xx': 'Challenges (600_xx)',
+      '700_xx': 'Investigation (700_xx)',
+      '800_xx': 'Delays (800_xx)',
+    };
+
+    // Ticket volume breakdown
+    const volRows = ticketList.length
+      ? ticketList
+          .map((t) => {
+            const fam = famLabels[t.last_family] || t.last_family || '—';
+            const done = t.completed
+              ? '<span style="color:#15803d;font-weight:700;">✓</span>'
+              : '<span style="color:#9ca3af;">—</span>';
+            return `<tr><td>${escapeHtml(String(t.id || '—'))}</td><td>${escapeHtml(fam)}</td><td style="text-align:center;">${done}</td></tr>`;
+          })
+          .join('')
+      : `<tr><td colspan="3" class="muted">No ticket detail available.</td></tr>`;
+
+    // Stalled tickets breakdown
+    const stallRows = stalledList.length
+      ? stalledList
+          .map((t) => {
+            const fam = famLabels[t.last_family] || t.last_family || '—';
+            const hrs = Number(t.stalled_hours) || 0;
+            const hrsDisplay =
+              hrs >= 24 ? `${(hrs / 24).toFixed(1)}d (${hrs}h)` : `${hrs}h`;
+            const urgentStyle =
+              hrs >= 48 ? 'color:#b91c1c;font-weight:600;' : 'color:#9a3412;';
+            return `<tr><td>${escapeHtml(String(t.id || '—'))}</td><td>${escapeHtml(fam)}</td><td class="num" style="${urgentStyle}">${hrsDisplay}</td></tr>`;
+          })
+          .join('')
+      : `<tr><td colspan="3" class="muted">No stalled tickets.</td></tr>`;
+
+    return `
+  <div class="grid">
+    <div class="card">
+      <div class="section-title">Ticket Volume Breakdown <span class="muted" style="font-size:11px;font-weight:400;">(${ticketList.length} ticket${ticketList.length !== 1 ? 's' : ''})</span></div>
+      <table>
+        <thead><tr><th>Ticket ID</th><th>Last Status</th><th style="text-align:center;">Completed</th></tr></thead>
+        <tbody>${volRows}</tbody>
+      </table>
+    </div>
+    <div class="card">
+      <div class="section-title">Stalled Tickets <span class="muted" style="font-size:11px;font-weight:400;">(${stalledList.length} ticket${stalledList.length !== 1 ? 's' : ''})</span></div>
+      <table>
+        <thead><tr><th>Ticket ID</th><th>Last Status</th><th class="num">Time Stalled</th></tr></thead>
+        <tbody>${stallRows}</tbody>
+      </table>
+      ${stalledList.length ? '<div class="muted" style="margin-top:6px;font-size:0.75rem;">Red = stalled ≥ 48h. Time measured from last update to report end.</div>' : ''}
+    </div>
+  </div>`;
+  })()}
 
 </body></html>`;
       }
