@@ -4020,6 +4020,295 @@ function deriveIterationPaths(currentPath, count) {
   return out;
 }
 
+// --- Analyze: AI developer snapshot analysis report (PM/admin only) ----------
+app.get(
+  '/api/reports/analyze',
+  requireAuth,
+  requirePMOnly,
+  async (req, res) => {
+    try {
+      const { from, to, developer = 'all', stallHours = '12' } = req.query;
+
+      const rawDev = S(developer || 'all').toLowerCase();
+      if (!rawDev || rawDev === 'all') {
+        return res
+          .status(400)
+          .json({
+            error: 'A specific developer must be selected for analysis.',
+          });
+      }
+
+      // Resolve developer to email + local-part (same logic as /api/reports/snapshots)
+      let devEmail = null;
+      let devLocal = null;
+      {
+        const candidate = rawDev.includes('\\')
+          ? rawDev.split('\\').pop()
+          : rawDev;
+        if (candidate.includes('@')) {
+          devEmail = candidate;
+          devLocal = candidate.split('@')[0];
+        } else {
+          const r = await pool.query(
+            `select lower(email) as email
+               from tfs_users
+              where active=true
+                and lower(regexp_replace(alias,'^.*\\\\','')) = $1
+              limit 1`,
+            [candidate],
+          );
+          devEmail = r.rowCount ? r.rows[0].email : null;
+          devLocal = candidate;
+        }
+      }
+      if (devEmail && devEmail.length > 120) devEmail = devEmail.slice(0, 120);
+      if (devLocal && devLocal.length > 120) devLocal = devLocal.slice(0, 120);
+
+      const today = todayISO();
+      const d7 = new Date(Date.now() - 6 * 24 * 3600 * 1000)
+        .toISOString()
+        .slice(0, 10);
+      const fromISO = parseDateParam(from, d7);
+      const toISO = parseDateParam(to, today);
+
+      const MAX_DAYS = 90;
+      const spanDays = Math.floor(
+        (Date.parse(toISO) - Date.parse(fromISO)) / 86400000,
+      );
+      if (!Number.isFinite(spanDays) || spanDays < 0 || spanDays > MAX_DAYS) {
+        return res
+          .status(400)
+          .json({ error: `Range too large (max ${MAX_DAYS} days)` });
+      }
+
+      const emailKey = (devEmail || devLocal || '').toLowerCase();
+      const periodLabel = `${fromISO} to ${toISO}`;
+
+      // Check cache (2-hour window)
+      const cacheRow = await pool.query(
+        `select ai_output
+           from ai_snapshot_runs
+          where dev_email = $1
+            and period_start = $2::date
+            and period_end   = $3::date
+            and prompt_version = $4
+            and created_at > now() - interval '2 hours'
+          order by created_at desc
+          limit 1`,
+        [emailKey, fromISO, toISO, ANALYZE_PROMPT_VERSION],
+      );
+      if (cacheRow.rowCount) {
+        const cached = parseJsonMaybe(cacheRow.rows[0].ai_output);
+        if (cached && cached.overall_status) {
+          return res.json({
+            cached: true,
+            developer: emailKey,
+            period: { from: fromISO, to: toISO },
+            ...cached,
+          });
+        }
+      }
+
+      if (!openai) {
+        return res.status(501).json({
+          error: 'AI not configured. Set OPENAI_API_KEY in the environment.',
+        });
+      }
+
+      // Run aggregate metrics SQL (same CTE as /api/reports/snapshots)
+      const sql = `
+      with windowed as (
+        select
+          email as dev,
+          ticket_id,
+          code,
+          at AT TIME ZONE $3 as ts_local,
+          lead(at) over (partition by ticket_id order by at) AT TIME ZONE $3 as next_ts_local
+        from progress_updates
+        where at >= ($1::timestamptz - interval '7 days')
+          and at <  ($2::timestamptz + interval '1 day')
+          and (
+            ($5::text is null and $6::text is null)
+            or lower(email) = $5::text
+            or split_part(lower(email),'@',1) = $6::text
+          )
+      ),
+      segments as (
+        select
+          dev, ticket_id, code,
+          greatest(ts_local, $1::date AT TIME ZONE $3) as seg_start,
+          least(coalesce(next_ts_local, $2::date AT TIME ZONE $3), $2::date AT TIME ZONE $3) as seg_end
+        from windowed
+      ),
+      usable as (
+        select *,
+               case when seg_end > seg_start
+                 then extract(epoch from (seg_end - seg_start))/3600.0
+                 else 0 end as hours
+        from segments
+        where seg_end > seg_start
+      ),
+      coded as (
+        select
+          dev, ticket_id,
+          split_part(code,'_',1) || '_xx' as family,
+          hours
+        from usable
+      ),
+      per_dev_family as (
+        select dev, family,
+               count(*) as transitions,
+               sum(hours) as hours_sum,
+               case when count(*)>0 then sum(hours)/count(*) else 0 end as hours_avg
+        from coded
+        group by dev, family
+      ),
+      ticket_touch as (
+        select dev, count(distinct ticket_id) as ticket_volume
+        from coded
+        group by dev
+      ),
+      completion as (
+        select dev,
+               count(distinct ticket_id) filter (where family='500_xx') as completed_tickets,
+               count(distinct ticket_id) as touched_tickets
+        from coded
+        group by dev
+      ),
+      latest_ticket as (
+        select distinct on (ticket_id)
+          ticket_id,
+          at AT TIME ZONE $3 as last_ts_local,
+          split_part(code,'_',1) || '_xx' as last_family
+        from progress_updates
+        where at <= ($2::timestamptz)
+        order by ticket_id, at desc
+      ),
+      stalled as (
+        select c.dev, count(distinct c.ticket_id) as stalled_tickets
+        from coded c
+        join latest_ticket lt on lt.ticket_id = c.ticket_id
+        where lt.last_ts_local between ($1::date AT TIME ZONE $3) and ($2::date AT TIME ZONE $3)
+          and lt.last_family in ('200_xx','600_xx','800_xx')
+          and (($2::date AT TIME ZONE $3) - lt.last_ts_local) >= (interval '1 hour' * $4::int)
+        group by c.dev
+      )
+      select
+        p.dev as email,
+        jsonb_object_agg(p.family, jsonb_build_object(
+          'transitions', p.transitions,
+          'hours_sum', round(p.hours_sum::numeric, 2),
+          'hours_avg', round(p.hours_avg::numeric, 2)
+        )) as families,
+        coalesce(t.ticket_volume,0) as ticket_volume,
+        coalesce(c.completed_tickets,0) as completed_tickets,
+        coalesce(c.touched_tickets,0) as touched_tickets,
+        case when coalesce(c.touched_tickets,0)>0
+             then round(100.0*c.completed_tickets/c.touched_tickets,1) else 0 end as completion_pct,
+        coalesce(s.stalled_tickets,0) as stalled_tickets
+      from per_dev_family p
+      left join ticket_touch t on t.dev = p.dev
+      left join completion   c on c.dev = p.dev
+      left join stalled      s on s.dev = p.dev
+      group by p.dev, t.ticket_volume, c.completed_tickets, c.touched_tickets, s.stalled_tickets
+      order by p.dev;
+      `;
+
+      const { rows } = await pool.query(sql, [
+        fromISO,
+        toISO,
+        APP_TZ,
+        parseInt(stallHours, 10) || 12,
+        devEmail,
+        devLocal,
+      ]);
+
+      const metrics = rows[0] || {
+        email: emailKey,
+        families: {},
+        ticket_volume: 0,
+        completed_tickets: 0,
+        touched_tickets: 0,
+        completion_pct: 0,
+        stalled_tickets: 0,
+      };
+
+      // Build ticket-level evidence
+      const evidence = await buildSnapshotEvidence({
+        fromISO,
+        toISO,
+        devEmail: devEmail || null,
+        devLocal: devLocal || null,
+      });
+
+      // Generate AI analysis
+      const result = await generateSnapshotAnalysis({
+        devEmail: emailKey,
+        devLocal,
+        fromISO,
+        toISO,
+        periodLabel,
+        metrics,
+        evidence,
+      });
+
+      // Cache in ai_snapshot_runs
+      try {
+        await pool.query(
+          `insert into ai_snapshot_runs
+             (dev_email, period_start, period_end, period_label, prompt_version, metrics_summary, evidence_summary, ai_output)
+            values ($1, $2::date, $3::date, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb)`,
+          [
+            emailKey,
+            fromISO,
+            toISO,
+            periodLabel,
+            ANALYZE_PROMPT_VERSION,
+            JSON.stringify({
+              ticket_volume: metrics.ticket_volume,
+              completion_pct: metrics.completion_pct,
+              stalled_tickets: metrics.stalled_tickets,
+              families: metrics.families,
+            }),
+            JSON.stringify({
+              totals: evidence?.totals || {},
+              stale_ticket_count: evidence?.stale_ticket_count || 0,
+              top_ticket_ids: (evidence?.top_tickets || []).map((t) => t.id),
+            }),
+            JSON.stringify(result),
+          ],
+        );
+        if (SNAPSHOT_RUN_RETENTION > 0) {
+          await pool.query(
+            `with to_delete as (
+               select id
+                 from ai_snapshot_runs
+                where dev_email = $1 and prompt_version = $2
+                order by created_at desc
+                offset $3
+             )
+             delete from ai_snapshot_runs where id in (select id from to_delete)`,
+            [emailKey, ANALYZE_PROMPT_VERSION, SNAPSHOT_RUN_RETENTION],
+          );
+        }
+      } catch (e) {
+        console.warn('[analyze] failed to cache run:', e.message);
+      }
+
+      return res.json({
+        cached: false,
+        developer: emailKey,
+        period: { from: fromISO, to: toISO },
+        ...result,
+      });
+    } catch (e) {
+      const http = e?.status || e?.response?.status || 500;
+      console.error('[analyze] error:', e.message);
+      return res.status(http).json({ error: e?.message || 'analyze_failed' });
+    }
+  },
+);
+
 // --- Helper: count weekdays inclusive (Mon–Fri) ------------------------------
 function countWeekdays(fromISO, toISO) {
   const start = new Date(`${fromISO}T00:00:00Z`);
@@ -6215,6 +6504,181 @@ async function buildBonusContext({ devEmail, fromISO, toISO, maxPBIs = 2 }) {
     hadBlockers: t.hadBlockers,
     riskLevel: t.riskLevel,
   }));
+}
+
+// --- generateSnapshotAnalysis: AI management analysis (9-section template) ---
+const ANALYZE_PROMPT_VERSION = 'analyze_mgmt_v1';
+
+async function generateSnapshotAnalysis({
+  devEmail,
+  devLocal,
+  fromISO,
+  toISO,
+  periodLabel,
+  metrics,
+  evidence,
+}) {
+  if (!openai)
+    throw Object.assign(new Error('AI not configured'), { status: 501 });
+
+  const fams = metrics.families || {};
+  const famKeys = [
+    '100_xx',
+    '200_xx',
+    '300_xx',
+    '400_xx',
+    '500_xx',
+    '600_xx',
+    '700_xx',
+    '800_xx',
+  ];
+  const famLabels = {
+    '100_xx': 'Planned / Not Yet Started',
+    '200_xx': 'In Progress (Early Stage)',
+    '300_xx': 'Collaboration / Handoff',
+    '400_xx': 'In Review / Testing',
+    '500_xx': 'Finished / Done',
+    '600_xx': 'Blocked',
+    '700_xx': 'Investigating',
+    '800_xx': 'Waiting / Dependency',
+  };
+  const totH = famKeys.reduce((s, k) => s + (fams[k]?.hours_sum || 0), 0);
+  const totT = famKeys.reduce((s, k) => s + (fams[k]?.transitions || 0), 0);
+  const avgCycleHours = totT > 0 ? +(totH / totT).toFixed(2) : null;
+
+  const famRows = famKeys
+    .filter((k) => fams[k])
+    .map((k) => {
+      const f = fams[k];
+      return `  ${k} (${famLabels[k]}): ${f.transitions} transitions, ${f.hours_sum}h total, ${f.hours_avg}h avg`;
+    })
+    .join('\n');
+
+  const topTickets = (evidence?.top_tickets || []).slice(0, 8);
+  const ticketRows = topTickets.length
+    ? topTickets
+        .map((t) => {
+          const note = t.last_note
+            ? `"${String(t.last_note).slice(0, 120)}"`
+            : '(no note)';
+          return `  Ticket ${t.id} [${t.last_code || '?'}] state="${t.state || '?'}" stale=${t.staleness_days ?? '?'}d — ${note}`;
+        })
+        .join('\n')
+    : '  (no ticket evidence available)';
+
+  const devName = devEmail || devLocal || 'Unknown Developer';
+
+  const systemPrompt = `You are a senior engineering manager writing a formal Developer Snapshot Analysis Report for a project manager audience.
+Ground every observation in the provided metrics and ticket evidence — never invent findings not supported by the data.
+Write in clear, direct business English. Use full sentences in narrative sections. Be honest and specific.
+All sections are required. Output valid JSON matching the schema exactly.`;
+
+  const userPrompt = `Developer: ${devName}
+Period: ${periodLabel || `${fromISO} to ${toISO}`}
+
+AGGREGATED METRICS:
+- Ticket volume touched: ${metrics.ticket_volume}
+- Tickets completed (reached 500_xx): ${metrics.completed_tickets} of ${metrics.touched_tickets} touched (${metrics.completion_pct}%)
+- Stalled tickets (aging in 200_xx/600_xx/800_xx): ${metrics.stalled_tickets}
+- Average cycle-time across all active families: ${avgCycleHours !== null ? avgCycleHours + 'h' : 'N/A'}
+- Total transitions in window: ${totT}
+- Total hours attributed in window: ${totH.toFixed(1)}h
+
+FAMILY BREAKDOWN (code family → transitions, total hours, avg hours per transition):
+${famRows || '  (no family data)'}
+
+TICKET-LEVEL EVIDENCE (top tickets by activity/risk):
+${ticketRows}
+
+BLOCKER SIGNALS:
+- Blocker updates: ${evidence?.totals?.blocker_updates || 0}
+- High-risk updates: ${evidence?.totals?.high_risk_updates || 0}
+- Blocker keywords seen: ${(evidence?.blocker_keywords || []).join(', ') || 'none'}
+
+Write the Developer Snapshot Analysis Report. Instructions per section:
+- overall_status: one of Healthy / Watch / Needs Attention / High Risk
+- executive_read: 2–4 sentence narrative overview of this developer's snapshot
+- cycle_time_note: 3–5 sentences interpreting what the avg cycle-time means for this developer and overall assessment
+- what_stands_out: 3–5 bullet strings, each naming a specific family or metric and its implication
+- plain_english: 3–5 sentences explaining what the pattern means operationally
+- ticket_evidence: 2–5 strings referencing specific ticket IDs from the evidence above, with observations
+- ownership_split.developer_owned: 2–4 signals the developer controls
+- ownership_split.team_owned: 1–3 signals that are systemic or team-driven
+- management_conclusion: 2–4 sentence conclusion for the manager on how to handle this
+- coaching_message: 2–4 sentence 1:1 coaching note addressed directly to the developer
+- next_actions.developer: 2–3 specific action items for the developer
+- next_actions.lead_team: 1–2 action items for the lead or team
+- next_actions.pm_process: 1–2 action items for PM or process improvement`;
+
+  const resp = await openai.chat.completions.create({
+    model: OPENAI_MODEL,
+    messages: [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: userPrompt },
+    ],
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        name: 'snapshot_analysis',
+        strict: false,
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          required: [
+            'overall_status',
+            'executive_read',
+            'cycle_time_note',
+            'what_stands_out',
+            'plain_english',
+            'ticket_evidence',
+            'ownership_split',
+            'management_conclusion',
+            'coaching_message',
+            'next_actions',
+          ],
+          properties: {
+            overall_status: {
+              type: 'string',
+              enum: ['Healthy', 'Watch', 'Needs Attention', 'High Risk'],
+            },
+            executive_read: { type: 'string' },
+            cycle_time_note: { type: 'string' },
+            what_stands_out: { type: 'array', items: { type: 'string' } },
+            plain_english: { type: 'string' },
+            ticket_evidence: { type: 'array', items: { type: 'string' } },
+            ownership_split: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['developer_owned', 'team_owned'],
+              properties: {
+                developer_owned: { type: 'array', items: { type: 'string' } },
+                team_owned: { type: 'array', items: { type: 'string' } },
+              },
+            },
+            management_conclusion: { type: 'string' },
+            coaching_message: { type: 'string' },
+            next_actions: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['developer', 'lead_team', 'pm_process'],
+              properties: {
+                developer: { type: 'array', items: { type: 'string' } },
+                lead_team: { type: 'array', items: { type: 'string' } },
+                pm_process: { type: 'array', items: { type: 'string' } },
+              },
+            },
+          },
+        },
+      },
+    },
+    max_tokens: 2000,
+  });
+
+  const parsed = parseOpenAIJson(resp);
+  if (!parsed || !parsed.overall_status || !parsed.executive_read) {
+    throw new Error('AI analysis response was incomplete or failed to parse');
+  }
+  return parsed;
 }
 
 // --- generateBonusEligibility: call OpenAI to evaluate bonus eligibility ---

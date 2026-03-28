@@ -1146,6 +1146,7 @@
             </select>
             <button onclick="loadReportRange()">Load</button>
             <button type="button" id="snapHtmlBtn" onclick="openSnapshots('html')">Preview (HTML)</button>
+            <button type="button" id="snapAnalyzeBtn" onclick="openAnalyze()">Analyze</button>
             <button type="button" id="snapPdfBtn" onclick="openSnapshots('pdf')">Download PDF</button>
             <button type="button" id="snapEmailBtn" onclick="emailSnapshots()">Email Snapshot</button>
           </div>
@@ -2117,6 +2118,142 @@
         });
       }
 
+      // --- Analyze: AI-assisted developer snapshot analysis report ----------
+      function openAnalyze() {
+        var fEl = document.getElementById('repFrom');
+        var tEl = document.getElementById('repTo');
+        var dEl = document.getElementById('snapDev');
+
+        var f = (fEl && fEl.value) ? fEl.value : new Date().toISOString().slice(0, 10);
+        var t = (tEl && tEl.value) ? tEl.value : f;
+        var dev = (dEl && typeof dEl.value === 'string') ? dEl.value.trim().toLowerCase() : 'all';
+        if (!dev) dev = 'all';
+
+        if (dev === 'all') {
+          alert('Please select a specific developer to analyze.');
+          return;
+        }
+
+        var btn = document.getElementById('snapAnalyzeBtn');
+        if (btn) { btn.disabled = true; btn.textContent = 'Analyzing…'; }
+
+        var tkn = localStorage.getItem('pocToken') || '';
+        var url = (window.API || location.origin) + '/api/reports/analyze'
+          + '?from=' + encodeURIComponent(f)
+          + '&to=' + encodeURIComponent(t)
+          + '&developer=' + encodeURIComponent(dev);
+
+        fetch(url, {
+          headers: { 'Authorization': 'Bearer ' + tkn }
+        })
+          .then(function (r) {
+            if (!r.ok) {
+              return r.json().then(function (e) {
+                throw new Error(e.error || ('HTTP ' + r.status));
+              }).catch(function (e) {
+                if (e instanceof Error) throw e;
+                throw new Error('HTTP ' + r.status);
+              });
+            }
+            return r.json();
+          })
+          .then(function (data) {
+            renderAnalyzeReport(data, f, t);
+          })
+          .catch(function (err) {
+            alert('Analysis failed: ' + (err && err.message ? err.message : String(err)));
+          })
+          .finally(function () {
+            if (btn) { btn.disabled = false; btn.textContent = 'Analyze'; }
+          });
+      }
+
+      function renderAnalyzeReport(data, from, to) {
+        var w = window.open('about:blank', '_blank');
+        if (!w) {
+          alert('Popup blocked. Allow popups for this site and try again.');
+          return;
+        }
+
+        var statusColors = {
+          'Healthy': { bg: '#dcfce7', border: '#16a34a', text: '#14532d' },
+          'Watch': { bg: '#fef9c3', border: '#ca8a04', text: '#713f12' },
+          'Needs Attention': { bg: '#ffedd5', border: '#ea580c', text: '#7c2d12' },
+          'High Risk': { bg: '#fee2e2', border: '#dc2626', text: '#7f1d1d' }
+        };
+        var sc = statusColors[data.overall_status] || { bg: '#f1f5f9', border: '#94a3b8', text: '#1e293b' };
+
+        function li(arr) {
+          if (!Array.isArray(arr) || !arr.length) return '<li><em>(none)</em></li>';
+          return arr.map(function (s) { return '<li>' + esc(String(s)) + '</li>'; }).join('');
+        }
+        function p(s) { return '<p>' + esc(String(s || '')) + '</p>'; }
+        var cached = data.cached
+          ? '<span style="font-size:12px;color:#64748b;margin-left:8px;">(cached result)</span>'
+          : '';
+        var os = data.ownership_split || {};
+        var na = data.next_actions || {};
+
+        var html = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8">'
+          + '<title>Snapshot Analysis — ' + esc(data.developer || '') + '</title>'
+          + '<style>'
+          + 'body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:14px;line-height:1.6;color:#1e293b;background:#f8fafc;margin:0;padding:0;}'
+          + '.report{max-width:820px;margin:32px auto;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:36px 44px;box-shadow:0 2px 8px rgba(0,0,0,.06);}'
+          + 'h1{font-size:22px;font-weight:700;margin:0 0 6px;}'
+          + '.meta{color:#475569;font-size:13px;margin-bottom:18px;}'
+          + '.status-badge{display:inline-block;padding:4px 14px;border-radius:20px;font-weight:600;font-size:13px;border:1.5px solid;margin-top:4px;}'
+          + 'section{margin-top:28px;padding-top:20px;border-top:1px solid #e2e8f0;}'
+          + 'h2{font-size:15px;font-weight:700;color:#0f172a;margin:0 0 10px;letter-spacing:.01em;}'
+          + 'h3{font-size:13px;font-weight:600;color:#334155;margin:14px 0 6px;}'
+          + 'p{margin:6px 0;color:#334155;}'
+          + 'ul{margin:6px 0 6px 20px;padding:0;color:#334155;}'
+          + 'li{margin-bottom:4px;}'
+          + '.coaching{background:#f0f9ff;border-left:4px solid #0284c7;padding:14px 16px;border-radius:4px;font-style:italic;color:#0c4a6e;}'
+          + '.footer{margin-top:32px;padding-top:16px;border-top:1px solid #e2e8f0;font-size:11px;color:#94a3b8;text-align:center;}'
+          + '@media print{body{background:#fff;}.report{box-shadow:none;border:none;padding:20px;}}'
+          + '</style></head><body><div class="report">'
+          + '<h1>Developer Snapshot Analysis Report</h1>'
+          + '<div class="meta">'
+          + '<div><strong>Developer:</strong> ' + esc(data.developer || '—') + '</div>'
+          + '<div><strong>Period:</strong> ' + esc(from) + ' – ' + esc(to) + '</div>'
+          + '<div><strong>Overall Status:</strong> '
+          + '<span class="status-badge" style="background:' + sc.bg + ';border-color:' + sc.border + ';color:' + sc.text + '">'
+          + esc(data.overall_status || 'Unknown') + '</span>' + cached + '</div>'
+          + '</div>'
+
+          + '<section><h2>1) Executive Read</h2>' + p(data.executive_read) + '</section>'
+
+          + '<section><h2>2) Cycle Time Note</h2>' + p(data.cycle_time_note) + '</section>'
+
+          + '<section><h2>3) What Stands Out Most</h2><ul>' + li(data.what_stands_out) + '</ul></section>'
+
+          + '<section><h2>4) Plain-English Interpretation</h2>' + p(data.plain_english) + '</section>'
+
+          + '<section><h2>5) Ticket-Level Evidence</h2>'
+          + '<p style="font-size:12px;color:#64748b;">From the ticket notes and raw activity, the pattern appears real:</p>'
+          + '<ul>' + li(data.ticket_evidence) + '</ul></section>'
+
+          + '<section><h2>6) Ownership Split</h2>'
+          + '<h3>Developer-Owned Signals</h3><ul>' + li(os.developer_owned) + '</ul>'
+          + '<h3>Team / System-Owned Signals</h3><ul>' + li(os.team_owned) + '</ul></section>'
+
+          + '<section><h2>7) Fair Management Conclusion</h2>' + p(data.management_conclusion) + '</section>'
+
+          + '<section><h2>8) Suggested 1:1 Coaching Message</h2>'
+          + '<div class="coaching">' + esc(String(data.coaching_message || '')) + '</div></section>'
+
+          + '<section><h2>9) Immediate Next Actions</h2>'
+          + '<h3>For the Developer</h3><ul>' + li(na.developer) + '</ul>'
+          + '<h3>For the Lead / Team</h3><ul>' + li(na.lead_team) + '</ul>'
+          + '<h3>For PM / Process</h3><ul>' + li(na.pm_process) + '</ul></section>'
+
+          + '<div class="footer">This report is AI-generated and advisory. Review alongside direct observations before acting.</div>'
+          + '</div></body></html>';
+
+        w.document.open();
+        w.document.write(html);
+        w.document.close();
+      }
 
       function loadTickets() {
         var assigned = byId("assigned");
