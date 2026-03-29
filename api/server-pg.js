@@ -4031,11 +4031,9 @@ app.get(
 
       const rawDev = S(developer || 'all').toLowerCase();
       if (!rawDev || rawDev === 'all') {
-        return res
-          .status(400)
-          .json({
-            error: 'A specific developer must be selected for analysis.',
-          });
+        return res.status(400).json({
+          error: 'A specific developer must be selected for analysis.',
+        });
       }
 
       // Resolve developer to email + local-part (same logic as /api/reports/snapshots)
@@ -6597,18 +6595,17 @@ BLOCKER SIGNALS:
 
 Write the Developer Snapshot Analysis Report. Instructions per section:
 - overall_status: one of Healthy / Watch / Needs Attention / High Risk
-- executive_read: 2–4 sentence narrative overview of this developer's snapshot
-- cycle_time_note: 3–5 sentences interpreting what the avg cycle-time means for this developer and overall assessment
-- what_stands_out: 3–5 bullet strings, each naming a specific family or metric and its implication
-- plain_english: 3–5 sentences explaining what the pattern means operationally
-- ticket_evidence: 2–5 strings referencing specific ticket IDs from the evidence above, with observations
-- ownership_split.developer_owned: 2–4 signals the developer controls
-- ownership_split.team_owned: 1–3 signals that are systemic or team-driven
-- management_conclusion: 2–4 sentence conclusion for the manager on how to handle this
-- coaching_message: 2–4 sentence 1:1 coaching note addressed directly to the developer
-- next_actions.developer: 2–3 specific action items for the developer
-- next_actions.lead_team: 1–2 action items for the lead or team
-- next_actions.pm_process: 1–2 action items for PM or process improvement`;
+- executive_read: 2-4 sentence narrative overview of this developer's snapshot
+- cycle_time_note: 3-5 sentences interpreting what the avg cycle-time means for this developer and overall assessment
+- what_stands_out: 3-5 bullet strings, each naming a specific family or metric and its implication
+- plain_english: 3-5 sentences explaining what the pattern means operationally
+- ticket_evidence: 2-5 strings referencing specific ticket IDs from the evidence above, with observations
+- ownership_split.developer_owned: 2-4 signals the developer controls
+- ownership_split.team_owned: 1-3 signals that are systemic or team-driven
+- management_conclusion: 2-4 sentence conclusion for the manager on how to handle this
+- next_actions.developer: 2-3 specific action items for the developer
+- next_actions.lead_team: 1-2 action items for the lead or team
+- next_actions.pm_process: 1-2 action items for PM or process improvement`;
 
   const resp = await openai.chat.completions.create({
     model: OPENAI_MODEL,
@@ -6633,7 +6630,6 @@ Write the Developer Snapshot Analysis Report. Instructions per section:
             'ticket_evidence',
             'ownership_split',
             'management_conclusion',
-            'coaching_message',
             'next_actions',
           ],
           properties: {
@@ -6656,7 +6652,6 @@ Write the Developer Snapshot Analysis Report. Instructions per section:
               },
             },
             management_conclusion: { type: 'string' },
-            coaching_message: { type: 'string' },
             next_actions: {
               type: 'object',
               additionalProperties: false,
