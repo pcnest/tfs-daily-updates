@@ -2233,14 +2233,11 @@
           + '<p style="font-size:12px;color:#64748b;">From the ticket notes and raw activity, the pattern appears real:</p>'
           + '<ul>' + li(data.ticket_evidence) + '</ul></section>'
 
-          + '<section>Where the Signals Point</h2>'
+          + '<section><h2>Where the Signals Point</h2>'
           + '<h3>Developer-Owned Signals</h3><ul>' + li(os.developer_owned) + '</ul>'
           + '<h3>Team / System-Owned Signals</h3><ul>' + li(os.team_owned) + '</ul></section>'
 
           + '<section><h2>Management Read</h2>' + p(data.management_conclusion) + '</section>'
-
-          + '<section><h2>8) Suggested 1:1 Coaching Message</h2>'
-          + '<div class="coaching">' + esc(String(data.coaching_message || '')) + '</div></section>'
 
           + '<section><h2>Immediate Next Actions</h2>'
           + '<h3>For the Developer</h3><ul>' + li(na.developer) + '</ul>'
