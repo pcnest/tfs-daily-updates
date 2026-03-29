@@ -1243,10 +1243,13 @@
               placeholder="short, concrete update"></textarea></div>
           <div class="row"><label>&nbsp;</label><small id="noteHint" class="help">A note may be required for some
               codes.</small></div>
-          <!-- Urgent flag -->
+          <!-- Priority flag -->
           <div class="row">
-            <label for="flagUrgent">Flag as Urgent</label>
-            <input type="checkbox" id="flagUrgent" />
+            <label>&nbsp;</label>
+            <label for="flagUrgent" style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+              <input type="checkbox" id="flagUrgent" style="margin:0;" />
+              Flag as Priority
+            </label>
           </div>
           <!-- AI assist panel (suggested code + results) -->
           <div class="row">
