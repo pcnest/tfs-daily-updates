@@ -491,9 +491,26 @@
 
     .bonus-eligibility-reasoning {
       margin-bottom: 12px;
-      line-height: 1.6;
       color: #475569;
       font-size: 14px;
+      padding-left: 18px;
+      margin-left: 0;
+    }
+
+    .bonus-eligibility-reasoning li {
+      margin-bottom: 6px;
+      line-height: 1.5;
+    }
+
+    .bonus-period-label {
+      font-size: 12px;
+      color: #64748b;
+      margin-bottom: 10px;
+    }
+
+    .bonus-eval-time {
+      font-size: 11px;
+      color: #94a3b8;
     }
 
     .bonus-metrics {
@@ -3673,8 +3690,26 @@
 
             var status = js.status || 'Unknown';
             var reasoning = js.reasoning || 'No reasoning provided.';
-            var cached = js.cached ? ' <span style="font-size:11px; color:#64748b;">(cached)</span>' : '';
             var badgeClass = status === 'Eligible' ? 'ok' : status === 'Not Eligible' ? 'err' : 'warning';
+
+            // Evaluation timestamp (always shown)
+            var evalTime = '';
+            if (js.evaluatedAt) {
+              var minsAgo = Math.round((Date.now() - new Date(js.evaluatedAt)) / 60000);
+              evalTime = ' <span class="bonus-eval-time">Evaluated: ' + (minsAgo < 1 ? 'just now' : minsAgo + ' min ago') + '</span>';
+            }
+
+            // Reasoning as bullet list — split on sentence boundaries
+            var reasoningBullets = reasoning.split(/\.\s+(?=[A-Z])/).map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 10; });
+            var reasoningHtml = '<ul class="bonus-eligibility-reasoning">' +
+              reasoningBullets.map(function (s) { return '<li>' + esc(s.replace(/\.$/, '')) + '.</li>'; }).join('') +
+              '</ul>';
+
+            // Period label
+            var periodHtml = '';
+            if (js.windowUsed && js.windowUsed.from && js.windowUsed.to) {
+              periodHtml = '<div class="bonus-period-label">Period: ' + esc(js.windowUsed.from) + ' \u2192 ' + esc(js.windowUsed.to) + '</div>';
+            }
 
             var metricsHtml = '';
             if (js.metrics) {
@@ -3696,6 +3731,14 @@
                 '<div class="bonus-metric-label">Blocker Rate</div>' +
                 '<div class="bonus-metric-value">' + js.metrics.blocker_rate + '</div>' +
                 '</div>' +
+                '<div class="bonus-metric-item">' +
+                '<div class="bonus-metric-label">Consistency \u03c3</div>' +
+                '<div class="bonus-metric-value">' + (js.metrics.consistency_stddev != null ? Number(js.metrics.consistency_stddev).toFixed(2) : 'N/A') + '</div>' +
+                '</div>' +
+                '<div class="bonus-metric-item">' +
+                '<div class="bonus-metric-label">Update Coverage</div>' +
+                '<div class="bonus-metric-value">' + (js.metrics.update_coverage != null ? (js.metrics.update_coverage * 100).toFixed(0) + '%' : 'N/A') + '</div>' +
+                '</div>' +
                 '</div>';
             }
 
@@ -3704,9 +3747,10 @@
               '<div class="bonus-eligibility-header">' +
               '<span>Bonus Eligibility:</span> ' +
               '<span class="badge ' + badgeClass + '">' + esc(status) + '</span>' +
-              cached +
+              evalTime +
               '</div>' +
-              '<div class="bonus-eligibility-reasoning">' + esc(reasoning) + '</div>' +
+              periodHtml +
+              reasoningHtml +
               metricsHtml +
               '<div class="bonus-eligibility-footer">This evaluation is advisory and AI-generated. Final bonus decisions require manager review.</div>' +
               '</div>';

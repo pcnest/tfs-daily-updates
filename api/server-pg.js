@@ -5192,12 +5192,18 @@ app.get(
             `select status, reasoning, ticket_context_used, created_at
              from bonus_evaluations
              where dev_email = $1::text
-               and period_end = $2::date
-               and mode = $3::text
+               and period_start = $2::date
+               and period_end = $3::date
+               and mode = $4::text
                and created_at > (now() - interval '1 hour')
              order by created_at desc
              limit 1`,
-            [developer, computed.windowUsed.to, computed.windowUsed.mode],
+            [
+              developer,
+              computed.windowUsed.from,
+              computed.windowUsed.to,
+              computed.windowUsed.mode,
+            ],
           );
 
           if (cacheResult.rows.length > 0) {
@@ -5215,7 +5221,7 @@ app.get(
               devEmail: developer,
               fromISO: computed.windowUsed.from,
               toISO: computed.windowUsed.to,
-              maxPBIs: 2,
+              maxPBIs: (item.metrics.ticket_volume || 0) > 10 ? 4 : 2,
             });
 
             const evaluation = await generateBonusEligibility({
@@ -5488,11 +5494,12 @@ app.get(
       }
 
       // Build PBI context
+      const adaptiveMaxPBIs = (devItem.metrics.ticket_volume || 0) > 10 ? 4 : 2;
       const pbiContexts = await buildBonusContext({
         devEmail: developer,
         fromISO: windowUsed.from,
         toISO: windowUsed.to,
-        maxPBIs: 2,
+        maxPBIs: adaptiveMaxPBIs,
       });
 
       // Generate evaluation
@@ -6759,19 +6766,26 @@ async function buildBonusContext({ devEmail, fromISO, toISO, maxPBIs = 2 }) {
         updateCount: Number(r.updateCount || 0),
         riskLevel: clampText(r.riskLevel || 'low', 16),
         hadBlockers: false,
+        lastCode: '',
       });
     }
     const tkt = ticketMap.get(tid);
     const code = String(r.code || '');
     if (isBlockerCode(code)) tkt.hadBlockers = true;
-    const note = clampText(scrub(r.note || ''), 150);
+    // Track the last status code seen (rows are ORDER BY at ASC)
+    tkt.lastCode = code;
+    const note = clampText(scrub(r.note || ''), 200);
     if (note) tkt.notes.push(note);
   }
 
   // Score tickets for relevance
   const tickets = Array.from(ticketMap.values()).map((t) => {
     let score = 0;
-    if (t.hadBlockers) score += 3;
+    if (t.hadBlockers) {
+      // De-weight blockers that were ultimately resolved (reached Done/500_xx family)
+      const wasResolved = String(t.lastCode || '').startsWith('500_');
+      score += wasResolved ? 1 : 3;
+    }
     const risk = String(t.riskLevel || '').toLowerCase();
     if (risk === 'high') score += 2;
     if (risk === 'medium') score += 1;
@@ -6786,7 +6800,7 @@ async function buildBonusContext({ devEmail, fromISO, toISO, maxPBIs = 2 }) {
   // Return simplified context (no ticket IDs)
   return topPBIs.map((t) => ({
     title: t.title,
-    notesSummary: t.notes.join(' → ').slice(0, 150),
+    notesSummary: t.notes.join(' → ').slice(0, 350),
     hadBlockers: t.hadBlockers,
     riskLevel: t.riskLevel,
   }));
