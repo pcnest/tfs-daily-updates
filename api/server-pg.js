@@ -2885,7 +2885,8 @@ app.get(
           c.dev,
           c.ticket_id,
           lt.last_family,
-          bool_or(c.family = '500_xx') as completed
+          bool_or(c.family = '500_xx') as completed,
+          round(sum(case when c.seg_end > c.seg_start then extract(epoch from (c.seg_end - c.seg_start))/3600.0 else 0 end)::numeric, 2) as total_hours
         from coded2 c
         join latest_in_window lt on lt.ticket_id = c.ticket_id
         group by c.dev, c.ticket_id, lt.last_family
@@ -2905,7 +2906,7 @@ app.get(
       )
       select
         dev,
-        jsonb_agg(jsonb_build_object('id', ticket_id, 'last_family', last_family, 'completed', completed)
+        jsonb_agg(jsonb_build_object('id', ticket_id, 'last_family', last_family, 'completed', completed, 'total_hours', total_hours)
                   order by ticket_id) as ticket_list,
         (select jsonb_agg(jsonb_build_object('id', sl.ticket_id, 'last_family', sl.last_family, 'stalled_hours', sl.stalled_hours)
                           order by sl.stalled_hours desc)
@@ -2975,6 +2976,45 @@ app.get(
   .exec-summary--yellow .exec-badge{background:#fef9c3;color:#854d0e;}
   .exec-summary--red .exec-badge{background:#fee2e2;color:#b91c1c;}
   .exec-body{margin:0;font-size:13px;line-height:1.6;color:#374151;}
+  .delta-card{background:#f8faff;border:1px solid #c7d2fe;border-radius:12px;padding:14px 16px;margin:12px 0;}
+  .delta-title{font-weight:700;font-size:13px;margin-bottom:10px;color:#1e40af;}
+  .delta-flex{display:flex;gap:20px;flex-wrap:wrap;}
+  .delta-item{display:flex;flex-direction:column;min-width:120px;}
+  .delta-label{font-size:11px;color:#6b7280;margin-bottom:3px;text-transform:uppercase;letter-spacing:.03em;}
+  .delta-val{font-size:22px;font-weight:700;color:#111;line-height:1.1;margin-bottom:3px;}
+  .delta-was{font-size:11px;font-weight:500;color:#6b7280;}
+  .delta-arrow-up{color:#15803d;}
+  .delta-arrow-down{color:#b91c1c;}
+  .badge{display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;margin-right:4px;}
+  .badge-healthy{background:#dcfce7;color:#15803d;}
+  .badge-bottleneck{background:#ffedd5;color:#9a3412;}
+  .badge-underreported{background:#f3f4f6;color:#374151;}
+  .badge-process-gap{background:#fce7f3;color:#9d174d;}
+  .badge-inactive{background:#f9fafb;color:#6b7280;}
+  .attr-dev{background:#dbeafe;color:#1d4ed8;}
+  .attr-team{background:#ede9fe;color:#6d28d9;}
+  .attr-process{background:#f3f4f6;color:#374151;}
+  .fam-entry{border-bottom:1px solid #f0f0f0;padding:10px 0;}
+  .fam-entry:last-child{border-bottom:none;}
+  .fam-header{font-weight:600;font-size:12.5px;margin-bottom:4px;}
+  .fam-obs{font-size:12px;color:#374151;margin-bottom:2px;}
+  .fam-cause{font-size:12px;color:#6b7280;}
+  .bench-bar{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px;font-size:11px;color:#6b7280;align-items:center;}
+  .bench-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:3px;}
+  .dot-green{background:#16a34a;} .dot-yellow{background:#ca8a04;} .dot-red{background:#dc2626;}
+  .blocker-callout{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 16px;margin:12px 0;}
+  .blocker-title{font-weight:700;font-size:13px;color:#92400e;margin-bottom:8px;}
+  .blocker-tags{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;}
+  .blocker-tag{background:#fef3c7;border:1px solid #fcd34d;border-radius:999px;padding:3px 10px;font-size:12px;font-weight:600;color:#78350f;}
+  .own-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:4px 0;}
+  .card-dev{border-left:4px solid #1d4ed8;} .card-team{border-left:4px solid #6d28d9;}
+  .own-title-dev{color:#1d4ed8;font-weight:700;font-size:13px;margin-bottom:8px;}
+  .own-title-team{color:#6d28d9;font-weight:700;font-size:13px;margin-bottom:8px;}
+  .own-list{margin:0 0 0 16px;padding:0;font-size:12.5px;} .own-list li{margin:4px 0;}
+  .stall-hint{font-size:11px;color:#92400e;background:#fffbeb;border-radius:6px;padding:4px 8px;margin-top:3px;display:block;}
+  .cycle-highlights{display:flex;gap:10px;margin-top:10px;margin-bottom:6px;}
+  .cycle-best{background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:8px 12px;font-size:12px;flex:1;}
+  .cycle-worst{background:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:8px 12px;font-size:12px;flex:1;}
 `;
 
       // No data → show a helpful HTML page instead of a blank response
@@ -3045,6 +3085,7 @@ app.get(
 
       // If AI is requested, precompute insights ONLY for targeted dev(s)
       const insightsByEmail = new Map();
+      const deltaByEmail = new Map();
       if (useAI && openai && rowsF.length > 0) {
         for (const r of rowsF) {
           try {
@@ -3056,7 +3097,14 @@ app.get(
               devEmail: String(r.email || '').toLowerCase(),
               devLocal: toLocalPart(String(r.email || '').toLowerCase()),
             });
-            insightsByEmail.set(String(r.email || '').toLowerCase(), got);
+            insightsByEmail.set(
+              String(r.email || '').toLowerCase(),
+              got.insights,
+            );
+            deltaByEmail.set(String(r.email || '').toLowerCase(), {
+              delta: got.delta,
+              blockerKeywords: got.blockerKeywords || [],
+            });
           } catch (e) {
             console.warn(
               '[snapshots][ai] insight error for',
@@ -3390,6 +3438,8 @@ app.get(
         periodDays,
         ticketList = [],
         stalledList = [],
+        delta = null,
+        blockerKeywords = [],
       }) {
         const famKeys = [
           '100_xx',
@@ -3551,15 +3601,82 @@ app.get(
     <p class="exec-body">${execSummary.body}</p>
   </div>
 
-  <div class="card">
-    <div class="kpi">
-      <div class="pill">Ticket Volume: ${ticketVolume}</div>
-      <div class="pill">Completion Rate: ${pct(completionPct)}</div>
-      <div class="pill">Stalled Tickets: ${stalled}</div>
-      <div class="pill">Total Transitions: ${totalTransitions}</div>
-      <div class="pill">Avg Cycle-Time: ${h(weightedAvg)}h</div>
-    </div>
-  </div>
+  ${(() => {
+    const hasDelta = delta !== null;
+    const priorCpctN = hasDelta
+      ? Number(completionPct) - Number(delta.completion_pct_delta || 0)
+      : null;
+    const priorVolN = hasDelta
+      ? ticketVolume - (delta.ticket_volume_delta || 0)
+      : null;
+    const priorCycleN = hasDelta
+      ? weightedAvg - (delta.overall_avg_cycle_time_delta || 0)
+      : null;
+    const priorStallN = hasDelta
+      ? stalled - (delta.stalled_tickets_delta || 0)
+      : null;
+    function wasSpan(currentN, priorN, formatFn, invertedMetric) {
+      if (priorN === null) return '';
+      const improved = invertedMetric ? currentN <= priorN : currentN >= priorN;
+      const arrow = improved ? '↑' : '↓';
+      const cls = improved ? 'delta-arrow-up' : 'delta-arrow-down';
+      const suffix = improved && invertedMetric ? ' — improved' : '';
+      return (
+        '<span class="delta-was ' +
+        cls +
+        '">' +
+        arrow +
+        ' was ' +
+        escapeHtml(formatFn(priorN)) +
+        suffix +
+        '</span>'
+      );
+    }
+    const priorLabelStr = hasDelta ? delta.prior_period_label || '' : '';
+    const cardTitle = hasDelta
+      ? '📈 This Period vs Last Period' +
+        (priorLabelStr ? ' (' + escapeHtml(priorLabelStr) + ')' : '')
+      : '📊 This Period at a Glance';
+    return (
+      '<div class="delta-card">' +
+      '<div class="delta-title">' +
+      cardTitle +
+      '</div>' +
+      '<div class="delta-flex">' +
+      '<div class="delta-item"><span class="delta-label">Completion Rate</span><span class="delta-val">' +
+      pct(completionPct) +
+      '</span>' +
+      wasSpan(Number(completionPct), priorCpctN, pct, false) +
+      '</div>' +
+      '<div class="delta-item"><span class="delta-label">Ticket Volume</span><span class="delta-val">' +
+      ticketVolume +
+      '</span>' +
+      wasSpan(ticketVolume, priorVolN, String, false) +
+      '</div>' +
+      '<div class="delta-item"><span class="delta-label">Avg Cycle-Time</span><span class="delta-val">' +
+      h(weightedAvg) +
+      'h</span>' +
+      wasSpan(weightedAvg, priorCycleN, (n) => h(n) + 'h', true) +
+      '</div>' +
+      '<div class="delta-item"><span class="delta-label">Stalled Tickets</span><span class="delta-val">' +
+      stalled +
+      '</span>' +
+      wasSpan(stalled, priorStallN, String, true) +
+      '</div>' +
+      '<div class="delta-item"><span class="delta-label">Total Transitions</span><span class="delta-val">' +
+      totalTransitions +
+      '</span>' +
+      (hasDelta
+        ? '<span class="delta-was" style="color:#9ca3af;">this period</span>'
+        : '') +
+      '</div>' +
+      '</div>' +
+      (!hasDelta
+        ? '<div style="margin-top:10px;font-size:11px;color:#9ca3af;">First snapshot — no prior period to compare.</div>'
+        : '') +
+      '</div>'
+    );
+  })()}
 
   <div class="card">
     <div class="section-title">Progress Status (Aggregate & Average)</div>
@@ -3579,10 +3696,11 @@ app.get(
       </tbody>
     </table>
     <div class="muted" style="margin-top:6px; font-size: 0.8rem;">Average cycle-time = Aggregate Hours ÷ Transitions per family; durations clipped to the report window.</div>
+    <div class="bench-bar"><strong style="color:#374151;">Healthy targets:</strong><span><span class="bench-dot dot-green"></span>100_xx &lt;24h</span><span><span class="bench-dot dot-green"></span>200_xx &lt;48h</span><span><span class="bench-dot dot-yellow"></span>400_xx &lt;72h (team-side)</span><span><span class="bench-dot dot-red"></span>600/800_xx — minimise</span><span><span class="bench-dot dot-green"></span>500_xx — high = good</span></div>
   </div>
 
   ${(() => {
-    if (String(audience) === 'dev') return '';
+    const isDevAudience = String(audience) === 'dev';
     // Use AI family_analysis if available, otherwise deterministic fallback
     const familyEntries =
       I && Array.isArray(I.family_analysis) && I.family_analysis.length
@@ -3626,13 +3744,25 @@ app.get(
     };
 
     const attributionBadge = (attr) => {
+      const devLabels = {
+        developer: 'In your control',
+        team: 'Team-side',
+        process: 'Process gap',
+      };
       const map = {
-        developer: { color: '#1d4ed8', bg: '#dbeafe', label: 'Developer' },
-        team: { color: '#6d28d9', bg: '#ede9fe', label: 'Team' },
-        process: { color: '#374151', bg: '#f3f4f6', label: 'Process' },
+        developer: { color: '#1d4ed8', bg: '#dbeafe' },
+        team: { color: '#6d28d9', bg: '#ede9fe' },
+        process: { color: '#374151', bg: '#f3f4f6' },
       };
       const a = map[attr] || map.process;
-      return `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:${a.bg};color:${a.color};margin-right:6px;">${a.label}</span>`;
+      const label = isDevAudience
+        ? devLabels[attr] || attr
+        : attr === 'developer'
+          ? 'Developer'
+          : attr === 'team'
+            ? 'Team'
+            : 'Process';
+      return `<span style="display:inline-block;font-size:10px;font-weight:700;padding:2px 8px;border-radius:999px;background:${a.bg};color:${a.color};margin-right:6px;">${label}</span>`;
     };
 
     const rows = familyEntries
@@ -3644,7 +3774,7 @@ app.get(
         </div>
         <div style="font-size:12px;color:#374151;margin-bottom:2px;"><strong>Observation:</strong> ${escapeHtml(e.observation || '')}</div>
         <div style="font-size:12px;color:#6b7280;margin-bottom:2px;"><strong>Likely Cause:</strong> ${escapeHtml(e.likely_cause || '')}</div>
-        ${e.coaching_tip ? `<div style="font-size:12px;color:#0369a1;border-left:3px solid #bae6fd;padding-left:8px;margin-top:4px;"><strong>Coaching Tip:</strong> ${escapeHtml(e.coaching_tip)}</div>` : ''}
+        ${!isDevAudience && e.coaching_tip ? `<div style="font-size:12px;color:#0369a1;border-left:3px solid #bae6fd;padding-left:8px;margin-top:4px;"><strong>Coaching Tip:</strong> ${escapeHtml(e.coaching_tip)}</div>` : ''}
       </div>`,
       )
       .join('');
@@ -3656,9 +3786,21 @@ app.get(
 
     return `
   <div class="card">
-    <div class="section-title">Status Family Interpretation${aiTag}</div>
+    <div class="section-title">${isDevAudience ? 'What Your Status Pattern Means' : 'Status Family Interpretation'}${aiTag}</div>
     ${rows}
   </div>`;
+  })()}
+
+  ${(() => {
+    if (!blockerKeywords.length || String(audience) !== 'dev') return '';
+    const tags = blockerKeywords
+      .map((k) => '<span class="blocker-tag">' + escapeHtml(k) + '</span>')
+      .join('');
+    return (
+      '<div class="blocker-callout"><div class="blocker-title">⚠ Recurring Themes in Your Updates This Period</div><div class="blocker-tags">' +
+      tags +
+      '</div><div style="font-size:12px;color:#78350f;">These keywords appear in multiple update notes. If they relate to the same underlying issue, a single escalation with your team lead — with a named owner and a time-boxed ask — may unblock several tickets at once.</div></div>'
+    );
   })()}
 
   <div class="grid">
@@ -3768,9 +3910,9 @@ app.get(
   </div>
 
     <div class="card kb">
-    <div class="section-title">Focus Areas</div>
+    <div class="section-title">${String(audience) === 'dev' ? 'Your Focus Areas for Next Month' : 'Focus Areas'}</div>
     <table>
-      <thead><tr><th>Focus</th><th>Why it Matters</th><th>Concrete Action (Next Month)</th></tr></thead>
+      <thead><tr><th>${String(audience) === 'dev' ? 'What to focus on' : 'Focus'}</th><th>${String(audience) === 'dev' ? 'Why it matters for you' : 'Why it Matters'}</th><th>${String(audience) === 'dev' ? 'Concrete next step' : 'Concrete Action (Next Month)'}</th></tr></thead>
       <tbody>
         ${
           I
@@ -3788,8 +3930,57 @@ app.get(
     
   </div>
 
+  ${(() => {
+    if (
+      !I ||
+      !Array.isArray(I.family_analysis) ||
+      !I.family_analysis.length ||
+      String(audience) !== 'dev'
+    )
+      return '';
+    const famLabel = {
+      '100_xx': 'Discovery (100_xx)',
+      '200_xx': 'In-Progress (200_xx)',
+      '300_xx': 'Testing (300_xx)',
+      '400_xx': 'Code Review (400_xx)',
+      '500_xx': 'Completion (500_xx)',
+      '600_xx': 'Challenges (600_xx)',
+      '700_xx': 'Investigation (700_xx)',
+      '800_xx': 'Delays (800_xx)',
+    };
+    const devOwned = I.family_analysis.filter(
+      (e) => e.attribution === 'developer',
+    );
+    const teamOwned = I.family_analysis.filter(
+      (e) => e.attribution === 'team' || e.attribution === 'process',
+    );
+    const li = (e) =>
+      '<li>' +
+      escapeHtml(famLabel[e.family] || e.family) +
+      ' — ' +
+      escapeHtml((e.observation || '').split('.')[0]) +
+      '.</li>';
+    return (
+      '<div style="margin:4px 0;"><div style="font-weight:700;font-size:13px;margin-bottom:8px;color:#374151;">What\u2019s In Your Control vs. What Needs Team Action</div>' +
+      '<div class="own-grid">' +
+      '<div class="card card-dev"><div class="own-title-dev">✅ In Your Control</div><ul class="own-list">' +
+      (devOwned.length
+        ? devOwned.map(li).join('')
+        : '<li class="muted">—</li>') +
+      '</ul></div>' +
+      '<div class="card card-team"><div class="own-title-team">🤝 Needs Team / Lead Action</div><ul class="own-list">' +
+      (teamOwned.length
+        ? teamOwned.map(li).join('')
+        : '<li class="muted">—</li>') +
+      '</ul></div>' +
+      '</div></div>'
+    );
+  })()}
 
-    <div class="card kb">
+
+  ${(() => {
+    if (String(audience) === 'dev') return '';
+    return `<div class="card kb">
     <div class="section-title">Support from Team Leads</div>
     <ul>
       ${
@@ -3800,7 +3991,8 @@ app.get(
           : '<li>WIP coaching, shared escalation path, daily 15-min review window.</li>'
       }
     </ul>
-  </div>
+  </div>`;
+  })()}
 
   <div class="card kb">
     <div class="section-title">Risk Signals</div>
@@ -3837,6 +4029,51 @@ app.get(
       '800_xx': 'Delays (800_xx)',
     };
 
+    // Cycle-time highlights (dev audience only)
+    const completedWithHours = ticketList.filter(
+      (t) => t.completed && Number(t.total_hours) > 0,
+    );
+    const fastestTicket = completedWithHours.length
+      ? completedWithHours.reduce((a, b) =>
+          Number(a.total_hours) < Number(b.total_hours) ? a : b,
+        )
+      : null;
+    const longestStalled = stalledList.length ? stalledList[0] : null; // already sorted desc
+    const h = (v) =>
+      Number(v) >= 24
+        ? (Number(v) / 24).toFixed(1) + 'd'
+        : Number(v).toFixed(1) + 'h';
+    const cycleHighlightsHtml =
+      (fastestTicket || longestStalled) && String(audience) === 'dev'
+        ? '<div class="cycle-highlights">' +
+          (fastestTicket
+            ? '<div class="cycle-best">🏆 <strong>Fastest delivery:</strong> Ticket #' +
+              escapeHtml(String(fastestTicket.id)) +
+              ' — completed in ' +
+              h(fastestTicket.total_hours) +
+              '</div>'
+            : '') +
+          (longestStalled
+            ? (() => {
+                const hrs = Number(longestStalled.stalled_hours) || 0;
+                const hd =
+                  hrs >= 24
+                    ? (hrs / 24).toFixed(1) + 'd (' + hrs + 'h)'
+                    : hrs + 'h';
+                return (
+                  '<div class="cycle-worst">⏱ <strong>Longest stalled:</strong> Ticket #' +
+                  escapeHtml(String(longestStalled.id)) +
+                  ' — ' +
+                  hd +
+                  ' in ' +
+                  escapeHtml(longestStalled.last_family || '') +
+                  '</div>'
+                );
+              })()
+            : '') +
+          '</div>'
+        : '';
+
     // Ticket volume breakdown
     const volRows = ticketList.length
       ? ticketList
@@ -3869,6 +4106,7 @@ app.get(
   <div class="grid">
     <div class="card">
       <div class="section-title">Ticket Volume Breakdown <span class="muted" style="font-size:11px;font-weight:400;">(${ticketList.length} ticket${ticketList.length !== 1 ? 's' : ''})</span></div>
+      ${cycleHighlightsHtml}
       <table>
         <thead><tr><th>Ticket ID</th><th>Last Status</th><th style="text-align:center;">Completed</th></tr></thead>
         <tbody>${volRows}</tbody>
@@ -3880,6 +4118,48 @@ app.get(
         <thead><tr><th>Ticket ID</th><th>Last Status</th><th class="num">Time Stalled</th></tr></thead>
         <tbody>${stallRows}</tbody>
       </table>
+      ${
+        stalledList.length && String(audience) === 'dev'
+          ? (() => {
+              const hints = {
+                '600_xx':
+                  'Log a 600_xx update naming the specific blocker owner. If unresolved, raise with your team lead with a time-boxed ask (e.g. "need X by EOD Thursday").',
+                '200_xx':
+                  'Post a quick status note — even a one-liner keeps this off the Missing Updates radar and lets the PM see where it stands.',
+                '800_xx':
+                  'Flag to your team lead with a named blocker owner and a deadline — delays clear faster with a named escalation path.',
+              };
+              const rows = stalledList
+                .map((t) => {
+                  const hint =
+                    hints[t.last_family] ||
+                    'Log an update to surface the current status before the next stand-up.';
+                  const hrs = Number(t.stalled_hours) || 0;
+                  const hrsDisplay =
+                    hrs >= 24
+                      ? (hrs / 24).toFixed(1) + 'd (' + hrs + 'h)'
+                      : hrs + 'h';
+                  return (
+                    '<div style="margin-bottom:10px;"><div style="font-size:12px;font-weight:600;">#' +
+                    escapeHtml(String(t.id || '')) +
+                    ' — ' +
+                    escapeHtml(t.last_family || '') +
+                    ', ' +
+                    hrsDisplay +
+                    ' stalled</div><span class="stall-hint">' +
+                    hint +
+                    '</span></div>'
+                  );
+                })
+                .join('');
+              return (
+                '<div style="margin-top:12px;"><div style="font-size:11px;font-weight:700;color:#374151;margin-bottom:8px;">Suggested next steps:</div>' +
+                rows +
+                '</div>'
+              );
+            })()
+          : ''
+      }
       ${stalledList.length ? '<div class="muted" style="margin-top:6px;font-size:0.75rem;">Red = stalled ≥ 48h. Time measured from last update to report end.</div>' : ''}
     </div>
   </div>`;
@@ -3920,6 +4200,8 @@ app.get(
           stalledList: Array.isArray(detail.stalled_list)
             ? detail.stalled_list
             : [],
+          delta: deltaByEmail.get(devKey)?.delta || null,
+          blockerKeywords: deltaByEmail.get(devKey)?.blockerKeywords || [],
         });
       });
 
@@ -5632,6 +5914,7 @@ async function aiSnapshotInsightsForDev({
   let evidence = null;
   let priorInsights = null;
   let deltaSummary = null;
+  let prevMetrics = null;
   if (fromISO && toISO && (emailKey || localKey)) {
     evidence = await buildSnapshotEvidence({
       fromISO,
@@ -5646,7 +5929,7 @@ async function aiSnapshotInsightsForDev({
       priorInsights = trimSnapshotInsights(parseJsonMaybe(priorAny.ai_output));
     }
     if (priorPeriod?.metrics_summary) {
-      const prevMetrics = parseJsonMaybe(priorPeriod.metrics_summary);
+      prevMetrics = parseJsonMaybe(priorPeriod.metrics_summary);
       deltaSummary = buildSnapshotDelta(
         metricsSummary,
         prevMetrics,
@@ -5798,7 +6081,12 @@ ${JSON.stringify({
       console.warn('[snapshots][ai] failed to store snapshot run:', e.message);
     }
   }
-  return js;
+  return {
+    insights: js,
+    delta: deltaSummary,
+    priorMetrics: prevMetrics,
+    blockerKeywords: evidence?.blocker_keywords || [],
+  };
 }
 // Normalize & clamp free-form strings to keep prompts tidy
 function clampText(s, max = 600) {
