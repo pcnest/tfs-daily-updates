@@ -3737,7 +3737,7 @@
                 '</div>' +
                 '<div class="bonus-metric-item">' +
                 '<div class="bonus-metric-label">Update Coverage</div>' +
-                '<div class="bonus-metric-value">' + (js.metrics.update_coverage != null ? (js.metrics.update_coverage * 100).toFixed(0) + '%' : 'N/A') + '</div>' +
+                '<div class="bonus-metric-value">' + (js.metrics.update_coverage != null ? Number(js.metrics.update_coverage).toFixed(1) + '/day' : 'N/A') + '</div>' +
                 '</div>' +
                 '</div>';
             }
