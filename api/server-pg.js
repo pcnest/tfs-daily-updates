@@ -3603,13 +3603,10 @@ app.get(
     name || email || '—'
   }</strong> &nbsp;|&nbsp; Report Period: <strong>${period}</strong></div>
 
-  <div class="card exec-summary exec-summary--${execSummary.color}">
-    ${
-      audience === 'dev'
-        ? `<div class="exec-badge" style="${_badgeStyle}">Period Summary</div>`
-        : `<div class="exec-badge" style="${_badgeStyle}">${execSummary.badge} &nbsp; Executive Summary</div>`
-    }
-    <p class="exec-body">${execSummary.body}</p>
+  <div style="${_cardS}">
+    <div style="${_titleS}">${audience === 'dev' ? 'Period Summary' : 'Executive Summary'}</div>
+    <div style="margin-bottom:8px;"><span style="${_badgeStyle}display:inline-block;font-weight:700;font-size:12px;padding:3px 10px;border-radius:999px;">${execSummary.badge}</span></div>
+    <p style="margin:0;font-size:13px;line-height:1.6;color:#374151;">${execSummary.body}</p>
   </div>
 
   ${(() => {
