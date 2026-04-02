@@ -3595,7 +3595,7 @@ app.get(
   <div class="card exec-summary exec-summary--${execSummary.color}">
     ${
       audience === 'dev'
-        ? '<div class="exec-badge" style="background:none;padding-left:0;color:#374151">Period Summary</div>'
+        ? '<div class="exec-badge">Period Summary</div>'
         : `<div class="exec-badge">${execSummary.badge} &nbsp; Executive Summary</div>`
     }
     <p class="exec-body">${execSummary.body}</p>
@@ -3640,12 +3640,12 @@ app.get(
       'display:block;font-size:22px;font-weight:700;color:#111;line-height:1.1;margin-bottom:3px;';
     const priorLabelStr = hasDelta ? delta.prior_period_label || '' : '';
     const cardTitle = hasDelta
-      ? '📈 This Period vs Last Period' +
+      ? 'This Period vs Last Period' +
         (priorLabelStr ? ' (' + escapeHtml(priorLabelStr) + ')' : '')
-      : '📊 This Period at a Glance';
+      : 'This Period at a Glance';
     return (
-      '<div class="delta-card">' +
-      '<div class="delta-title">' +
+      '<div class="card delta-card">' +
+      '<div class="section-title">' +
       cardTitle +
       '</div>' +
       '<div>' +
@@ -3839,7 +3839,6 @@ app.get(
     );
   })()}
 
-  <div class="grid">
   <div class="card kb">
   <div class="section-title">Key Takeaways</div>
   <ul>
@@ -3921,7 +3920,7 @@ app.get(
 
 
 
-      <div class="card kb">
+  <div class="card kb">
     <div class="section-title">What's Working Well</div>
     <ul>
       ${
@@ -3941,8 +3940,6 @@ app.get(
       `
       }
     </ul>
-  </div>
-
   </div>
 
     <div class="card kb">
@@ -3997,7 +3994,7 @@ app.get(
       escapeHtml((e.observation || '').split('.')[0]) +
       '.</li>';
     return (
-      '<div style="margin:4px 0;"><div style="font-weight:700;font-size:13px;margin-bottom:8px;color:#374151;">What\u2019s In Your Control vs. What Needs Team Action</div>' +
+      '<div class="card"><div class="section-title">What\'s In Your Control vs. What Needs Team Action</div>' +
       '<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">' +
       '<tr>' +
       '<td width="50%" style="vertical-align:top;padding-right:6px;">' +
