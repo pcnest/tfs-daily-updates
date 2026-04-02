@@ -3615,23 +3615,29 @@ app.get(
     const priorStallN = hasDelta
       ? stalled - (delta.stalled_tickets_delta || 0)
       : null;
-    function wasSpan(currentN, priorN, formatFn, invertedMetric) {
+    function wasDiv(currentN, priorN, formatFn, invertedMetric) {
       if (priorN === null) return '';
       const improved = invertedMetric ? currentN <= priorN : currentN >= priorN;
       const arrow = improved ? '↑' : '↓';
-      const cls = improved ? 'delta-arrow-up' : 'delta-arrow-down';
+      const color = improved ? '#15803d' : '#b91c1c';
       const suffix = improved && invertedMetric ? ' — improved' : '';
       return (
-        '<span class="delta-was ' +
-        cls +
-        '">' +
+        '<div style="display:block;font-size:11px;font-weight:500;color:' +
+        color +
+        ';">' +
         arrow +
         ' was ' +
         escapeHtml(formatFn(priorN)) +
         suffix +
-        '</span>'
+        '</div>'
       );
     }
+    const tileS =
+      'display:inline-block;vertical-align:top;margin-right:20px;margin-bottom:8px;min-width:105px;';
+    const lblS =
+      'display:block;font-size:11px;color:#6b7280;margin-bottom:3px;text-transform:uppercase;letter-spacing:.03em;';
+    const valS =
+      'display:block;font-size:22px;font-weight:700;color:#111;line-height:1.1;margin-bottom:3px;';
     const priorLabelStr = hasDelta ? delta.prior_period_label || '' : '';
     const cardTitle = hasDelta
       ? '📈 This Period vs Last Period' +
@@ -3642,32 +3648,62 @@ app.get(
       '<div class="delta-title">' +
       cardTitle +
       '</div>' +
-      '<div class="delta-flex">' +
-      '<div class="delta-item"><span class="delta-label">Completion Rate</span><span class="delta-val">' +
+      '<div>' +
+      '<div style="' +
+      tileS +
+      '"><div style="' +
+      lblS +
+      '">Completion Rate</div><div style="' +
+      valS +
+      '">' +
       pct(completionPct) +
-      '</span>' +
-      wasSpan(Number(completionPct), priorCpctN, pct, false) +
       '</div>' +
-      '<div class="delta-item"><span class="delta-label">Ticket Volume</span><span class="delta-val">' +
+      wasDiv(Number(completionPct), priorCpctN, pct, false) +
+      '</div>' +
+      '<div style="' +
+      tileS +
+      '"><div style="' +
+      lblS +
+      '">Ticket Volume</div><div style="' +
+      valS +
+      '">' +
       ticketVolume +
-      '</span>' +
-      wasSpan(ticketVolume, priorVolN, String, false) +
       '</div>' +
-      '<div class="delta-item"><span class="delta-label">Avg Cycle-Time</span><span class="delta-val">' +
+      wasDiv(ticketVolume, priorVolN, String, false) +
+      '</div>' +
+      '<div style="' +
+      tileS +
+      '"><div style="' +
+      lblS +
+      '">Avg Cycle-Time</div><div style="' +
+      valS +
+      '">' +
       h(weightedAvg) +
-      'h</span>' +
-      wasSpan(weightedAvg, priorCycleN, (n) => h(n) + 'h', true) +
+      'h</div>' +
+      wasDiv(weightedAvg, priorCycleN, (n) => h(n) + 'h', true) +
       '</div>' +
-      '<div class="delta-item"><span class="delta-label">Stalled Tickets</span><span class="delta-val">' +
+      '<div style="' +
+      tileS +
+      '"><div style="' +
+      lblS +
+      '">Stalled Tickets</div><div style="' +
+      valS +
+      '">' +
       stalled +
-      '</span>' +
-      wasSpan(stalled, priorStallN, String, true) +
       '</div>' +
-      '<div class="delta-item"><span class="delta-label">Total Transitions</span><span class="delta-val">' +
+      wasDiv(stalled, priorStallN, String, true) +
+      '</div>' +
+      '<div style="' +
+      tileS +
+      '"><div style="' +
+      lblS +
+      '">Total Transitions</div><div style="' +
+      valS +
+      '">' +
       totalTransitions +
-      '</span>' +
+      '</div>' +
       (hasDelta
-        ? '<span class="delta-was" style="color:#9ca3af;">this period</span>'
+        ? '<div style="display:block;font-size:11px;color:#9ca3af;">this period</div>'
         : '') +
       '</div>' +
       '</div>' +
@@ -3696,7 +3732,7 @@ app.get(
       </tbody>
     </table>
     <div class="muted" style="margin-top:6px; font-size: 0.8rem;">Average cycle-time = Aggregate Hours ÷ Transitions per family; durations clipped to the report window.</div>
-    <div class="bench-bar"><strong style="color:#374151;">Healthy targets:</strong><span><span class="bench-dot dot-green"></span>100_xx &lt;24h</span><span><span class="bench-dot dot-green"></span>200_xx &lt;48h</span><span><span class="bench-dot dot-yellow"></span>400_xx &lt;72h (team-side)</span><span><span class="bench-dot dot-red"></span>600/800_xx — minimise</span><span><span class="bench-dot dot-green"></span>500_xx — high = good</span></div>
+    <div style="margin-top:10px;font-size:11px;color:#6b7280;"><strong style="color:#374151;">Healthy targets:</strong>&nbsp; <span style="color:#16a34a;">&#9679;</span>&nbsp;100_xx &lt;24h &nbsp;|&nbsp; <span style="color:#16a34a;">&#9679;</span>&nbsp;200_xx &lt;48h &nbsp;|&nbsp; <span style="color:#ca8a04;">&#9679;</span>&nbsp;400_xx &lt;72h (team-side) &nbsp;|&nbsp; <span style="color:#dc2626;">&#9679;</span>&nbsp;600/800_xx &mdash; minimise &nbsp;|&nbsp; <span style="color:#16a34a;">&#9679;</span>&nbsp;500_xx &mdash; high = good</div>
   </div>
 
   ${(() => {
@@ -3962,18 +3998,24 @@ app.get(
       '.</li>';
     return (
       '<div style="margin:4px 0;"><div style="font-weight:700;font-size:13px;margin-bottom:8px;color:#374151;">What\u2019s In Your Control vs. What Needs Team Action</div>' +
-      '<div class="own-grid">' +
+      '<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">' +
+      '<tr>' +
+      '<td width="50%" style="vertical-align:top;padding-right:6px;">' +
       '<div class="card card-dev"><div class="own-title-dev">✅ In Your Control</div><ul class="own-list">' +
       (devOwned.length
         ? devOwned.map(li).join('')
         : '<li class="muted">—</li>') +
       '</ul></div>' +
+      '</td>' +
+      '<td width="50%" style="vertical-align:top;padding-left:6px;">' +
       '<div class="card card-team"><div class="own-title-team">🤝 Needs Team / Lead Action</div><ul class="own-list">' +
       (teamOwned.length
         ? teamOwned.map(li).join('')
         : '<li class="muted">—</li>') +
       '</ul></div>' +
-      '</div></div>'
+      '</td>' +
+      '</tr>' +
+      '</table></div>'
     );
   })()}
 
@@ -4045,14 +4087,15 @@ app.get(
         : Number(v).toFixed(1) + 'h';
     const cycleHighlightsHtml =
       (fastestTicket || longestStalled) && String(audience) === 'dev'
-        ? '<div class="cycle-highlights">' +
+        ? '<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin-top:10px;margin-bottom:6px;">' +
+          '<tr>' +
           (fastestTicket
-            ? '<div class="cycle-best">🏆 <strong>Fastest delivery:</strong> Ticket #' +
+            ? '<td width="50%" style="vertical-align:top;padding-right:5px;"><div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:8px 12px;font-size:12px;">🏆 <strong>Fastest delivery:</strong> Ticket #' +
               escapeHtml(String(fastestTicket.id)) +
               ' — completed in ' +
               h(fastestTicket.total_hours) +
-              '</div>'
-            : '') +
+              '</div></td>'
+            : '<td width="50%"></td>') +
           (longestStalled
             ? (() => {
                 const hrs = Number(longestStalled.stalled_hours) || 0;
@@ -4061,17 +4104,18 @@ app.get(
                     ? (hrs / 24).toFixed(1) + 'd (' + hrs + 'h)'
                     : hrs + 'h';
                 return (
-                  '<div class="cycle-worst">⏱ <strong>Longest stalled:</strong> Ticket #' +
+                  '<td width="50%" style="vertical-align:top;padding-left:5px;"><div style="background:#fff7ed;border:1px solid #fdba74;border-radius:8px;padding:8px 12px;font-size:12px;">⏱ <strong>Longest stalled:</strong> Ticket #' +
                   escapeHtml(String(longestStalled.id)) +
                   ' — ' +
                   hd +
                   ' in ' +
                   escapeHtml(longestStalled.last_family || '') +
-                  '</div>'
+                  '</div></td>'
                 );
               })()
-            : '') +
-          '</div>'
+            : '<td width="50%"></td>') +
+          '</tr>' +
+          '</table>'
         : '';
 
     // Ticket volume breakdown
