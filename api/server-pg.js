@@ -3554,6 +3554,17 @@ app.get(
           insights,
           ticketVolume,
         });
+        const _badgeColorStyles = {
+          green: 'background:#dcfce7;color:#15803d;',
+          yellow: 'background:#fef9c3;color:#854d0e;',
+          red: 'background:#fee2e2;color:#b91c1c;',
+        };
+        const _badgeStyle =
+          _badgeColorStyles[execSummary.color] ||
+          'background:#f3f4f6;color:#374151;';
+        const _cardS =
+          'border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:12px 0;background:#fff;';
+        const _titleS = 'font-weight:700;font-size:13px;margin:0 0 8px 0;';
 
         return `<!doctype html>
 <html><head><meta charset="utf-8">
@@ -3595,8 +3606,8 @@ app.get(
   <div class="card exec-summary exec-summary--${execSummary.color}">
     ${
       audience === 'dev'
-        ? '<div class="exec-badge">Period Summary</div>'
-        : `<div class="exec-badge">${execSummary.badge} &nbsp; Executive Summary</div>`
+        ? `<div class="exec-badge" style="${_badgeStyle}">Period Summary</div>`
+        : `<div class="exec-badge" style="${_badgeStyle}">${execSummary.badge} &nbsp; Executive Summary</div>`
     }
     <p class="exec-body">${execSummary.body}</p>
   </div>
@@ -3644,8 +3655,12 @@ app.get(
         (priorLabelStr ? ' (' + escapeHtml(priorLabelStr) + ')' : '')
       : 'This Period at a Glance';
     return (
-      '<div class="card delta-card">' +
-      '<div class="section-title">' +
+      '<div style="' +
+      _cardS +
+      '">' +
+      '<div style="' +
+      _titleS +
+      '">' +
       cardTitle +
       '</div>' +
       '<div>' +
@@ -3839,8 +3854,8 @@ app.get(
     );
   })()}
 
-  <div class="card kb">
-  <div class="section-title">Key Takeaways</div>
+  <div class="kb" style="${_cardS}">
+  <div style="${_titleS}">Key Takeaways</div>
   <ul>
     ${(() => {
       // Reuse escapeHtml, v(), h(), I, families, and the computed starts/finishes/blockers/reviews/testing in scope.
@@ -3920,8 +3935,8 @@ app.get(
 
 
 
-  <div class="card kb">
-    <div class="section-title">What's Working Well</div>
+  <div class="kb" style="${_cardS}">
+    <div style="${_titleS}">What's Working Well</div>
     <ul>
       ${
         I
@@ -3942,8 +3957,8 @@ app.get(
     </ul>
   </div>
 
-    <div class="card kb">
-    <div class="section-title">${String(audience) === 'dev' ? 'Your Focus Areas for Next Month' : 'Focus Areas'}</div>
+    <div class="kb" style="${_cardS}">
+    <div style="${_titleS}">${String(audience) === 'dev' ? 'Your Focus Areas for Next Month' : 'Focus Areas'}</div>
     <table>
       <thead><tr><th>${String(audience) === 'dev' ? 'What to focus on' : 'Focus'}</th><th>${String(audience) === 'dev' ? 'Why it matters for you' : 'Why it Matters'}</th><th>${String(audience) === 'dev' ? 'Concrete next step' : 'Concrete Action (Next Month)'}</th></tr></thead>
       <tbody>
@@ -4033,8 +4048,8 @@ app.get(
   </div>`;
   })()}
 
-  <div class="card kb">
-    <div class="section-title">Risk Signals</div>
+  <div class="kb" style="${_cardS}">
+    <div style="${_titleS}">Risk Signals</div>
     ${
       I && I.risk
         ? `<ul>
