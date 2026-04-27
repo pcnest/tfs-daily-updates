@@ -502,6 +502,55 @@
       line-height: 1.5;
     }
 
+    .bonus-eligibility-summary {
+      margin-bottom: 12px;
+      color: #334155;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .bonus-eligibility-section-block {
+      margin-bottom: 12px;
+    }
+
+    .bonus-section-title {
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      color: #64748b;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+
+    .bonus-section-copy {
+      color: #334155;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .bonus-high-value-list {
+      margin: 0;
+      padding-left: 18px;
+      color: #334155;
+    }
+
+    .bonus-high-value-list li {
+      margin-bottom: 8px;
+      line-height: 1.5;
+    }
+
+    .bonus-high-value-title {
+      font-weight: 600;
+      color: #1e293b;
+    }
+
+    .bonus-ticket-ref {
+      margin-left: 6px;
+      color: #64748b;
+      font-size: 12px;
+      font-weight: 500;
+    }
+
     .bonus-period-label {
       font-size: 12px;
       color: #64748b;
@@ -3690,6 +3739,8 @@
 
             var status = js.status || 'Unknown';
             var reasoning = js.reasoning || 'No reasoning provided.';
+            var details = js.details && typeof js.details === 'object' ? js.details : null;
+            var highlightedTickets = Array.isArray(js.highlightedTickets) ? js.highlightedTickets : [];
             var badgeClass = status === 'Eligible' ? 'ok' : status === 'Not Eligible' ? 'err' : 'warning';
 
             // Evaluation timestamp (always shown)
@@ -3699,11 +3750,75 @@
               evalTime = ' <span class="bonus-eval-time">Evaluated: ' + (minsAgo < 1 ? 'just now' : minsAgo + ' min ago') + '</span>';
             }
 
-            // Reasoning as bullet list — split on sentence boundaries
-            var reasoningBullets = reasoning.split(/\.\s+(?=[A-Z])/).map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 10; });
-            var reasoningHtml = '<ul class="bonus-eligibility-reasoning">' +
-              reasoningBullets.map(function (s) { return '<li>' + esc(s.replace(/\.$/, '')) + '.</li>'; }).join('') +
-              '</ul>';
+            var reasoningHtml = '';
+            var detailsHtml = '';
+
+            if (details) {
+              var normalizeTitle = function (s) {
+                return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+              };
+              var matchTicketForTitle = function (title) {
+                var wanted = normalizeTitle(title);
+                if (!wanted) return null;
+                for (var i = 0; i < highlightedTickets.length; i++) {
+                  var candidate = highlightedTickets[i];
+                  var actual = normalizeTitle(candidate && candidate.title);
+                  if (!actual) continue;
+                  if (actual === wanted || actual.indexOf(wanted) >= 0 || wanted.indexOf(actual) >= 0) {
+                    return candidate;
+                  }
+                }
+                return null;
+              };
+              var renderSimpleSection = function (title, body) {
+                if (!body) return '';
+                return '<div class="bonus-eligibility-section-block">' +
+                  '<div class="bonus-section-title">' + esc(title) + '</div>' +
+                  '<div class="bonus-section-copy">' + esc(body) + '</div>' +
+                  '</div>';
+              };
+              var renderStringListSection = function (title, items) {
+                if (!Array.isArray(items) || !items.length) return '';
+                return '<div class="bonus-eligibility-section-block">' +
+                  '<div class="bonus-section-title">' + esc(title) + '</div>' +
+                  '<ul class="bonus-eligibility-reasoning">' +
+                  items.map(function (s) { return '<li>' + esc(String(s || '')) + '</li>'; }).join('') +
+                  '</ul>' +
+                  '</div>';
+              };
+              var highValueHtml = '';
+              if (Array.isArray(details.high_value_work) && details.high_value_work.length) {
+                highValueHtml =
+                  '<div class="bonus-eligibility-section-block">' +
+                  '<div class="bonus-section-title">High-Value Work</div>' +
+                  '<ul class="bonus-high-value-list">' +
+                  details.high_value_work.slice(0, 3).map(function (work) {
+                    var match = matchTicketForTitle(work && work.title);
+                    var ref = match && match.ticketId ? '<span class="bonus-ticket-ref">#' + esc(match.ticketId) + '</span>' : '';
+                    return '<li>' +
+                      '<div class="bonus-high-value-title">' + esc((work && work.title) || (match && match.title) || 'Highlighted work') + ref + '</div>' +
+                      '<div>' + esc((work && work.impact) || '') + '</div>' +
+                      '<div>' + esc((work && work.outcome) || '') + '</div>' +
+                      '</li>';
+                  }).join('') +
+                  '</ul>' +
+                  '</div>';
+              }
+
+              reasoningHtml = '<div class="bonus-eligibility-summary">' + esc(reasoning) + '</div>';
+              detailsHtml =
+                renderSimpleSection('Decision Basis', details.decision_basis) +
+                highValueHtml +
+                renderStringListSection('Delivery Strengths', details.delivery_strengths) +
+                renderStringListSection('Concerns', details.concerns) +
+                renderSimpleSection('Manager Note', details.manager_note);
+            } else {
+              // Legacy/manual fallback: split paragraph into bullets
+              var reasoningBullets = reasoning.split(/\.\s+(?=[A-Z])/).map(function (s) { return s.trim(); }).filter(function (s) { return s.length > 10; });
+              reasoningHtml = '<ul class="bonus-eligibility-reasoning">' +
+                reasoningBullets.map(function (s) { return '<li>' + esc(s.replace(/\.$/, '')) + '.</li>'; }).join('') +
+                '</ul>';
+            }
 
             // Period label
             var periodHtml = '';
@@ -3751,6 +3866,7 @@
               '</div>' +
               periodHtml +
               reasoningHtml +
+              detailsHtml +
               metricsHtml +
               '<div class="bonus-eligibility-footer">This evaluation is advisory and AI-generated. Final bonus decisions require manager review.</div>' +
               '</div>';

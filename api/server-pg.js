@@ -15,6 +15,7 @@ dotenv.config();
 // OpenAI setup (optional)
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+const BONUS_ELIGIBILITY_PROMPT_VERSION = 'bonus_v2_value_impact';
 let openai = null;
 if (OPENAI_API_KEY) {
   openai = new OpenAI({ apiKey: OPENAI_API_KEY });
@@ -742,6 +743,192 @@ function riskRank(level) {
 
 function maxRisk(a, b) {
   return riskRank(a) >= riskRank(b) ? a : b;
+}
+
+const BONUS_VALUE_TAG_FAMILIES = [
+  { label: 'production', patterns: ['production', 'prod'] },
+  { label: 'hotfix', patterns: ['hotfix'] },
+  { label: 'customer', patterns: ['customer'] },
+  { label: 'release', patterns: ['release'] },
+  { label: 'urgent', patterns: ['urgent'] },
+];
+
+function splitTicketTags(tags) {
+  return String(tags || '')
+    .split(/[;,]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function titleCaseWords(s) {
+  return String(s || '')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function getPriorityWeight(priority) {
+  const n = Number(priority);
+  return n === 1 ? 4 : n === 2 ? 3 : n === 3 ? 1 : 0;
+}
+
+function getSeverityWeight(severity) {
+  const sev = normalizeSeverity(severity);
+  return sev === 'critical'
+    ? 4
+    : sev === 'high'
+      ? 3
+      : sev === 'medium'
+        ? 1
+        : 0;
+}
+
+function getTypeWeight(type) {
+  const v = String(type || '').trim().toLowerCase();
+  return v === 'bug' || v === 'product backlog item' ? 1 : 0;
+}
+
+function getTagSignals(tags) {
+  const tokens = splitTicketTags(tags);
+  const matched = [];
+  for (const family of BONUS_VALUE_TAG_FAMILIES) {
+    const hit = tokens.some((tag) => {
+      const norm = tag.toLowerCase();
+      return family.patterns.some((pattern) => norm.includes(pattern));
+    });
+    if (hit) matched.push(family.label);
+  }
+  return matched;
+}
+
+function computeBonusValueProxy(ticket) {
+  let valueScore = 0;
+  const valueReasons = [];
+
+  const priorityWeight = getPriorityWeight(ticket.priority);
+  if (priorityWeight > 0) {
+    valueScore += priorityWeight;
+    valueReasons.push(`P${Number(ticket.priority)} priority`);
+  }
+
+  const severityNorm = normalizeSeverity(ticket.severity);
+  const severityWeight = getSeverityWeight(ticket.severity);
+  if (severityWeight > 0) {
+    valueScore += severityWeight;
+    valueReasons.push(`${titleCaseWords(severityNorm)} severity`);
+  }
+
+  const typeWeight = getTypeWeight(ticket.type);
+  const typeNorm = String(ticket.type || '').trim().toLowerCase();
+  if (typeWeight > 0) {
+    valueScore += typeWeight;
+    valueReasons.push(
+      typeNorm === 'bug' ? 'Bug work item' : 'Product backlog item',
+    );
+  }
+
+  const matchedTags = getTagSignals(ticket.tags);
+  if (matchedTags.length) {
+    const tagPoints = Math.min(matchedTags.length * 2, 4);
+    valueScore += tagPoints;
+    for (const tag of matchedTags.slice(0, 2)) {
+      valueReasons.push(`${titleCaseWords(tag)} tag`);
+    }
+  }
+
+  const relatedLinkCount = Number(ticket.relatedLinkCount || 0);
+  if (relatedLinkCount >= 6) {
+    valueScore += 2;
+    valueReasons.push('Broad dependency footprint');
+  } else if (relatedLinkCount >= 3) {
+    valueScore += 1;
+    valueReasons.push('Multiple linked dependencies');
+  }
+
+  if (ticket.wasCompletedInWindow) {
+    valueScore += 3;
+    valueReasons.push('Completed in this window');
+  }
+
+  if (ticket.hadBlockers && ticket.wasCompletedInWindow) {
+    valueScore += 1;
+    valueReasons.push('Resolved blockers before completion');
+  }
+
+  if (String(ticket.riskLevel || '').toLowerCase() === 'high') {
+    valueScore += 1;
+    valueReasons.push('High-risk work item');
+  }
+
+  if (Number(ticket.updateCount || 0) >= 3) {
+    valueScore += 1;
+    valueReasons.push('Multi-step execution trail');
+  }
+
+  return {
+    valueScore,
+    valueReasons: valueReasons.slice(0, 6),
+    matchedTags,
+  };
+}
+
+function computeImpactEvidenceLevel(highlightedTickets) {
+  const tickets = Array.isArray(highlightedTickets) ? highlightedTickets : [];
+  const completedHigh = tickets.filter(
+    (t) => t.wasCompletedInWindow && Number(t.valueScore || 0) >= 6,
+  );
+  if (
+    tickets.some(
+      (t) => t.wasCompletedInWindow && Number(t.valueScore || 0) >= 8,
+    ) ||
+    completedHigh.length >= 2
+  ) {
+    return 'strong';
+  }
+  if (
+    completedHigh.length >= 1 ||
+    tickets.filter((t) => Number(t.valueScore || 0) >= 6).length >= 2
+  ) {
+    return 'moderate';
+  }
+  return 'thin';
+}
+
+function parseStoredJsonObject(raw) {
+  if (!raw) return null;
+  if (typeof raw === 'object') return raw;
+  if (typeof raw !== 'string') return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function isStructuredBonusContextEnvelope(ctx) {
+  return !!(
+    ctx &&
+    typeof ctx === 'object' &&
+    !Array.isArray(ctx) &&
+    ctx.promptVersion === BONUS_ELIGIBILITY_PROMPT_VERSION &&
+    Array.isArray(ctx.highlightedTickets) &&
+    ctx.details &&
+    typeof ctx.details === 'object'
+  );
+}
+
+function buildStoredBonusContext({
+  impactEvidenceLevel,
+  highlightedTickets,
+  details,
+}) {
+  return {
+    promptVersion: BONUS_ELIGIBILITY_PROMPT_VERSION,
+    impactEvidenceLevel,
+    highlightedTickets,
+    details,
+  };
 }
 
 function blockerKeywordHit(code, note) {
@@ -5240,80 +5427,11 @@ app.get(
 
       if (includeBonus) {
         try {
-          // Check cache (1 hour TTL)
-          const cacheResult = await pool.query(
-            `select status, reasoning, ticket_context_used, created_at
-             from bonus_evaluations
-             where dev_email = $1::text
-               and period_start = $2::date
-               and period_end = $3::date
-               and mode = $4::text
-               and created_at > (now() - interval '1 hour')
-             order by created_at desc
-             limit 1`,
-            [
-              developer,
-              computed.windowUsed.from,
-              computed.windowUsed.to,
-              computed.windowUsed.mode,
-            ],
-          );
-
-          if (cacheResult.rows.length > 0) {
-            const cached = cacheResult.rows[0];
-            bonusEligibility = {
-              status: cached.status,
-              reasoning: cached.reasoning,
-              usedAI: true,
-              cached: true,
-              evaluatedAt: cached.created_at,
-            };
-          } else if (openai) {
-            // Generate new evaluation
-            const pbiContexts = await buildBonusContext({
-              devEmail: developer,
-              fromISO: computed.windowUsed.from,
-              toISO: computed.windowUsed.to,
-              maxPBIs: (item.metrics.ticket_volume || 0) > 10 ? 4 : 2,
-            });
-
-            const evaluation = await generateBonusEligibility({
-              devEmail: developer,
-              item,
-              windowUsed: computed.windowUsed,
-              pbiContexts,
-            });
-
-            // Store in database
-            await pool.query(
-              `insert into bonus_evaluations (dev_email, period_start, period_end, mode, status, reasoning, ticket_context_used)
-               values ($1, $2, $3, $4, $5, $6, $7)`,
-              [
-                developer,
-                computed.windowUsed.from,
-                computed.windowUsed.to,
-                computed.windowUsed.mode,
-                evaluation.status,
-                evaluation.reasoning,
-                JSON.stringify(pbiContexts),
-              ],
-            );
-
-            bonusEligibility = {
-              status: evaluation.status,
-              reasoning: evaluation.reasoning,
-              usedAI: true,
-              cached: false,
-              evaluatedAt: new Date().toISOString(),
-            };
-          } else {
-            bonusEligibility = {
-              status: 'Needs Review',
-              reasoning: 'AI evaluation unavailable—requires manual review.',
-              usedAI: false,
-              cached: false,
-            };
-          }
+          bonusEligibility = await resolveBonusEligibility({
+            developer,
+            item,
+            windowUsed: computed.windowUsed,
+          });
         } catch (e) {
           console.error(
             '[top-devs/insight] bonus eligibility error:',
@@ -5325,6 +5443,9 @@ app.get(
               'Evaluation unavailable due to system error—requires manual review.',
             usedAI: false,
             cached: false,
+            details: null,
+            highlightedTickets: [],
+            impactEvidenceLevel: 'thin',
           };
         }
       }
@@ -5486,107 +5607,22 @@ app.get(
           cached: false,
           windowUsed,
           metrics: null,
-          _debugVersion: 'v2-unified-metrics',
+          details: null,
+          highlightedTickets: [],
+          impactEvidenceLevel: 'thin',
+          _debugVersion: BONUS_ELIGIBILITY_PROMPT_VERSION,
         });
       }
 
-      const metrics = devItem.metrics;
-      const lowSample = devItem.lowSample;
-
-      // Check cache (1 hour TTL) - AFTER computing metrics
-      const cacheResult = await pool.query(
-        `select status, reasoning, ticket_context_used, created_at
-         from bonus_evaluations
-         where dev_email = $1::text
-           and period_start = $2::date
-           and period_end = $3::date
-           and mode = $4::text
-           and created_at > (now() - interval '1 hour')
-         order by created_at desc
-         limit 1`,
-        [developer, windowUsed.from, windowUsed.to, windowUsed.mode],
-      );
-
-      if (cacheResult.rows.length > 0) {
-        const cached = cacheResult.rows[0];
-        console.log(
-          '[bonus-eligibility] Returning cached evaluation (but fresh metrics)',
-        );
-        return res.json({
-          status: cached.status,
-          reasoning: cached.reasoning,
-          usedAI: true,
-          cached: true,
-          evaluatedAt: cached.created_at,
-          windowUsed,
-          metrics, // Include metrics even when cached
-          _debugVersion: 'v2-unified-metrics', // Debug marker to confirm new code is deployed
-        });
-      }
-
-      // Build a simplified item for bonus eval
-      const item = {
-        email: developer,
-        metrics,
-        lowSample,
-      };
-
-      // Generate bonus eligibility if OpenAI is available
-      if (!openai) {
-        console.log('[bonus-eligibility] OpenAI not configured');
-        return res.json({
-          status: 'Needs Review',
-          reasoning:
-            'AI evaluation unavailable—OpenAI API key not configured. Manual review required.',
-          usedAI: false,
-          cached: false,
-          windowUsed,
-          metrics,
-          _debugVersion: 'v2-unified-metrics',
-        });
-      }
-
-      // Build PBI context
-      const adaptiveMaxPBIs = (devItem.metrics.ticket_volume || 0) > 10 ? 4 : 2;
-      const pbiContexts = await buildBonusContext({
-        devEmail: developer,
-        fromISO: windowUsed.from,
-        toISO: windowUsed.to,
-        maxPBIs: adaptiveMaxPBIs,
-      });
-
-      // Generate evaluation
-      const evaluation = await generateBonusEligibility({
-        devEmail: developer,
+      const bonusEligibility = await resolveBonusEligibility({
+        developer,
         item: devItem,
         windowUsed,
-        pbiContexts,
       });
 
-      // Store in database
-      await pool.query(
-        `insert into bonus_evaluations (dev_email, period_start, period_end, mode, status, reasoning, ticket_context_used)
-         values ($1, $2, $3, $4, $5, $6, $7)`,
-        [
-          developer,
-          windowUsed.from,
-          windowUsed.to,
-          windowUsed.mode,
-          evaluation.status,
-          evaluation.reasoning,
-          JSON.stringify(pbiContexts),
-        ],
-      );
-
       res.json({
-        status: evaluation.status,
-        reasoning: evaluation.reasoning,
-        usedAI: true,
-        cached: false,
-        evaluatedAt: new Date().toISOString(),
-        windowUsed,
-        metrics,
-        _debugVersion: 'v2-unified-metrics',
+        ...bonusEligibility,
+        _debugVersion: BONUS_ELIGIBILITY_PROMPT_VERSION,
       });
     } catch (e) {
       console.error('[bonus-eligibility] error:', e);
@@ -6781,12 +6817,11 @@ async function buildSnapshotEvidence({
   };
 }
 
-// --- buildBonusContext: gather 1-2 PBI contexts for bonus eligibility evaluation ---
-async function buildBonusContext({ devEmail, fromISO, toISO, maxPBIs = 2 }) {
+// --- buildBonusContext: gather high-value ticket contexts for bonus evaluation ---
+async function buildBonusContext({ devEmail, fromISO, toISO, maxPBIs = 3 }) {
   const email = devEmail ? String(devEmail).toLowerCase() : null;
   if (!email) return [];
 
-  // Query progress_updates with tickets to get PBI context
   const sql = `
     select
       u.ticket_id as "ticketId",
@@ -6795,6 +6830,12 @@ async function buildBonusContext({ devEmail, fromISO, toISO, maxPBIs = 2 }) {
       u.risk_level as "riskLevel",
       u.at,
       t.title,
+      t.type,
+      t.state,
+      t.priority,
+      t.severity,
+      t.tags,
+      t.related_link_count as "relatedLinkCount",
       count(*) over (partition by u.ticket_id) as "updateCount"
     from progress_updates u
     left join tickets t on t.id = u.ticket_id
@@ -6807,7 +6848,6 @@ async function buildBonusContext({ devEmail, fromISO, toISO, maxPBIs = 2 }) {
   const res = await pool.query(sql, [fromISO, toISO, email]);
   const rows = res.rows || [];
 
-  // Group by ticket
   const ticketMap = new Map();
   for (const r of rows) {
     const tid = String(r.ticketId || '');
@@ -6815,9 +6855,15 @@ async function buildBonusContext({ devEmail, fromISO, toISO, maxPBIs = 2 }) {
       ticketMap.set(tid, {
         ticketId: tid,
         title: clampText(r.title || '', 120),
+        type: clampText(r.type || '', 40),
+        state: clampText(r.state || '', 40),
+        priority: Number.isFinite(Number(r.priority)) ? Number(r.priority) : null,
+        severity: clampText(r.severity || '', 24),
+        tags: clampText(r.tags || '', 200),
+        relatedLinkCount: Number(r.relatedLinkCount || 0),
         notes: [],
         updateCount: Number(r.updateCount || 0),
-        riskLevel: clampText(r.riskLevel || 'low', 16),
+        riskLevel: normalizeRiskLevel(r.riskLevel) || 'low',
         hadBlockers: false,
         lastCode: '',
       });
@@ -6825,37 +6871,56 @@ async function buildBonusContext({ devEmail, fromISO, toISO, maxPBIs = 2 }) {
     const tkt = ticketMap.get(tid);
     const code = String(r.code || '');
     if (isBlockerCode(code)) tkt.hadBlockers = true;
-    // Track the last status code seen (rows are ORDER BY at ASC)
     tkt.lastCode = code;
+    tkt.riskLevel = maxRisk(
+      tkt.riskLevel,
+      normalizeRiskLevel(r.riskLevel) || 'low',
+    );
     const note = clampText(scrub(r.note || ''), 200);
     if (note) tkt.notes.push(note);
   }
 
-  // Score tickets for relevance
   const tickets = Array.from(ticketMap.values()).map((t) => {
-    let score = 0;
-    if (t.hadBlockers) {
-      // De-weight blockers that were ultimately resolved (reached Done/500_xx family)
-      const wasResolved = String(t.lastCode || '').startsWith('500_');
-      score += wasResolved ? 1 : 3;
-    }
-    const risk = String(t.riskLevel || '').toLowerCase();
-    if (risk === 'high') score += 2;
-    if (risk === 'medium') score += 1;
-    if (t.updateCount >= 3) score += 1;
-    return { ...t, _score: score };
+    const wasCompletedInWindow = String(t.lastCode || '').startsWith('500_');
+    const proxy = computeBonusValueProxy({ ...t, wasCompletedInWindow });
+    return {
+      ...t,
+      wasCompletedInWindow,
+      valueScore: proxy.valueScore,
+      valueReasons: proxy.valueReasons,
+      matchedTags: proxy.matchedTags,
+      notesSummary: t.notes.join(' \u2192 ').slice(0, 350),
+    };
   });
 
-  // Sort by score descending, take top maxPBIs
-  tickets.sort((a, b) => b._score - a._score);
+  tickets.sort((a, b) => {
+    if (b.valueScore !== a.valueScore) return b.valueScore - a.valueScore;
+    if (a.wasCompletedInWindow !== b.wasCompletedInWindow)
+      return a.wasCompletedInWindow ? -1 : 1;
+    if (a.hadBlockers !== b.hadBlockers) return a.hadBlockers ? 1 : -1;
+    if (riskRank(b.riskLevel) !== riskRank(a.riskLevel))
+      return riskRank(b.riskLevel) - riskRank(a.riskLevel);
+    if (b.updateCount !== a.updateCount) return b.updateCount - a.updateCount;
+    return String(a.ticketId || '').localeCompare(String(b.ticketId || ''));
+  });
+
   const topPBIs = tickets.slice(0, maxPBIs);
 
-  // Return simplified context (no ticket IDs)
   return topPBIs.map((t) => ({
+    ticketId: t.ticketId,
     title: t.title,
-    notesSummary: t.notes.join(' → ').slice(0, 350),
+    type: t.type,
+    state: t.state,
+    priority: t.priority,
+    severity: t.severity,
+    tags: t.tags,
+    relatedLinkCount: t.relatedLinkCount,
     hadBlockers: t.hadBlockers,
+    wasCompletedInWindow: t.wasCompletedInWindow,
     riskLevel: t.riskLevel,
+    notesSummary: t.notesSummary,
+    valueScore: t.valueScore,
+    valueReasons: t.valueReasons,
   }));
 }
 
@@ -7036,17 +7101,18 @@ async function generateBonusEligibility({
   devEmail,
   item,
   windowUsed,
-  pbiContexts,
+  highlightedTickets,
+  impactEvidenceLevel,
 }) {
   if (!openai) {
     return {
       status: 'Needs Review',
       reasoning: 'AI evaluation unavailable—requires manual review.',
+      details: null,
     };
   }
 
   try {
-    // Build qualitative metric descriptions
     const metrics = item.metrics || {};
     const zScores = item.zScores || {};
 
@@ -7090,7 +7156,6 @@ async function generateBonusEligibility({
           ? 'adequate progress updates'
           : 'sparse update habits';
 
-    // APPROACH 2: Add raw metrics context for AI validation
     const rawMetricsContext = `Raw metrics for validation:
 - Throughput: ${metrics.throughput} finished items
 - Completion: ${metrics.completion_pct}%
@@ -7099,74 +7164,72 @@ async function generateBonusEligibility({
 - Consistency σ: ${metrics.consistency_stddev.toFixed(2)}
 - Update coverage: ${metrics.update_coverage.toFixed(2)} updates/weekday`;
 
-    // APPROACH 3: Build system prompt with consistency requirements
-    const systemPrompt = `You evaluate developer bonus eligibility for product owners and stakeholders. Write in clear business language.
-
-Output JSON schema:
-{ "status": "Eligible" | "Not Eligible" | "Needs Review", "reasoning": string }
-
-CRITICAL CONSISTENCY RULES:
-1. NEVER contradict the raw metrics. If blocker_rate is 0.000, do NOT mention "frequent blockers" or any blocking issues.
-2. If cycle_time_hours is N/A or null, do NOT comment on speed or cycle time.
-3. If completion is 90%+, do NOT say work "remains incomplete" or "stalls."
-4. If throughput is high (15+ items), acknowledge the volume; don't focus solely on negatives.
-5. When raw metrics show excellent performance, the reasoning should reflect that—don't manufacture problems.
-
-Reasoning guidelines:
-- Lead with impact/outcome, not patterns
-- Weave in 1-2 PBI contexts naturally (use title, reference work journey from notes)
-- NO ticket IDs, NO raw metric numbers (e.g., "score: 0.52"), NO PR numbers
-- MAY reference displayed signals qualitatively: "steady delivery cadence" (Consistency), "thorough progress updates" (Update coverage)
-- Use stakeholder language: "follow-through", "handoffs", "coordination overhead", "sprint planning reliability"
-- Frame constructively: "would help finish more consistently" not "you're bad at finishing"
-- If evidence is thin/mixed (low sample, sparse updates, conflicting signals), say so and choose "Needs Review"
-- If metrics are excellent (high throughput + high completion + no blockers), default to "Eligible" unless PBI context shows serious concerns
-
-Example phrasing for "Eligible":
-- "Consistently delivers finished work with minimal rework. Recent efforts on [authentication refactor] and [payment gateway integration] show strong follow-through—work gets unblocked quickly and stays on track. Daily progress is steady and predictable, making sprint planning reliable."
-- "High volume of completed items with clean handoffs. Tackled [complex data migration] without getting stuck; when blockers appeared, escalated promptly. Progress updates are thorough, which helps the team stay coordinated."
-- "Strong follow-through this period. [API redesign] and [database optimization] both shipped without prolonged delays. Work moves through the pipeline efficiently, and completion rates remain high."
-
-Example phrasing for "Not Eligible":
-- "Good effort, but completion slips when work stretches too long. [Multi-tenant refactoring] shows promise but stalls in mid-flight. Breaking features into smaller, testable increments would help finish more consistently."
-- "Volume is reasonable, but blockers linger without escalation. [Third-party integration] hit snags that could have been surfaced earlier. Proactive communication when stuck would accelerate resolutions."
-- "Progress updates are sparse, making it hard to spot issues early. Work on [payment processor] lacks visibility until late. More frequent check-ins would help catch blockers sooner."
-
-Example phrasing for "Needs Review":
-- "Mixed signals this period. Throughput is lower than usual, possibly due to [complex migration work] requiring deep investigation. Needs manager context before drawing conclusions."
-- "Low sample size—fewer than three finished items this window. Recent focus on [infrastructure overhaul] may not show impact yet. Hold evaluation until next period."`;
-
-    // Build user prompt
-    const pbiSummary =
-      pbiContexts && pbiContexts.length > 0
-        ? pbiContexts
-            .map(
-              (p, i) =>
-                `${i + 1}. [${p.title}] ${p.hadBlockers ? '(had blockers)' : ''} ${p.riskLevel === 'high' ? '(high risk)' : ''}: ${p.notesSummary}`,
-            )
-            .join('\n')
-        : 'No detailed PBI context available.';
-
-    const userPrompt = `Window: ${windowUsed.from} to ${windowUsed.to} (${windowUsed.mode})
-Developer: ${devEmail}
-
-${rawMetricsContext}
-
-Metrics (qualitative):
+    const qualitativeMetrics = `Qualitative delivery signals:
 - Throughput: ${throughputDesc}
 - Completion: ${completionDesc}
 - Cycle time: ${cycleDesc}
 - Blocker rate: ${blockerDesc}
 - Consistency: ${consistencyDesc}
 - Update coverage: ${updateCoverageDesc}
-- Low sample: ${item.lowSample ? 'yes' : 'no'}
+- Low sample: ${item.lowSample ? 'yes' : 'no'}`;
 
-PBI contexts:
-${pbiSummary}
+    const systemPrompt = `You evaluate monthly developer bonus eligibility for PM and stakeholder review.
 
-Provide bonus eligibility evaluation. Remember: do not contradict the raw metrics above.`;
+Write in direct business language. Ground every claim in the supplied metrics and ticket evidence. Never invent business impact or delivery outcomes.
 
-    // Call OpenAI
+Decision rules:
+1. Lead with the highest-value delivered work, not generic productivity patterns.
+2. Delivery metrics are supporting evidence, not the sole basis for the decision.
+3. Do not award "Eligible" on ticket volume alone.
+4. Prefer "Needs Review" when impact evidence is thin, low-sample, sparse-update, or mixed.
+5. "Eligible" requires strong value evidence plus solid follow-through.
+6. "Not Eligible" requires both weak value evidence and weak follow-through together.
+
+Consistency rules:
+1. Never contradict the raw metrics.
+2. If cycle_time_hours is N/A or null, do not comment on speed or cycle time.
+3. If blocker_rate is 0.000, do not claim blocker issues.
+4. If completion is 90%+, do not say work remained incomplete unless the ticket evidence explicitly shows major in-flight work.
+
+Output valid JSON matching the schema exactly.
+- reasoning: a short summary paragraph for audit/history
+- decision_basis: one sentence on why the decision was chosen
+- high_value_work: 1-3 objects naming the most valuable tickets or initiatives first
+- delivery_strengths: short bullet-style strings
+- concerns: short bullet-style strings
+- manager_note: one short caveat or follow-up note
+
+Do not include raw metric numbers, ticket IDs, or unsupported claims in narrative fields.`;
+
+    const ticketSummary =
+      highlightedTickets && highlightedTickets.length > 0
+        ? highlightedTickets
+            .map((ticket, i) => {
+              const tags = splitTicketTags(ticket.tags).slice(0, 4).join(', ') || 'none';
+              return [
+                `${i + 1}. Title: ${ticket.title}`,
+                `   Type: ${ticket.type || 'Unknown'} | State: ${ticket.state || 'Unknown'} | Priority: ${ticket.priority ?? 'n/a'} | Severity: ${ticket.severity || 'n/a'}`,
+                `   Value score: ${ticket.valueScore} | Evidence level driver: ${ticket.valueReasons.join('; ') || 'none'}`,
+                `   Completed in window: ${ticket.wasCompletedInWindow ? 'yes' : 'no'} | Had blockers: ${ticket.hadBlockers ? 'yes' : 'no'} | Risk: ${ticket.riskLevel || 'low'}`,
+                `   Related links: ${ticket.relatedLinkCount || 0} | Tags: ${tags}`,
+                `   Notes summary: ${ticket.notesSummary || 'none'}`,
+              ].join('\n');
+            })
+            .join('\n')
+        : 'No detailed high-value ticket context available.';
+
+    const userPrompt = `Window: ${windowUsed.from} to ${windowUsed.to} (${windowUsed.mode})
+Developer: ${devEmail}
+Impact evidence level: ${impactEvidenceLevel}
+
+${rawMetricsContext}
+${qualitativeMetrics}
+
+High-value ticket contexts:
+${ticketSummary}
+
+Provide the bonus eligibility evaluation. Base the decision on delivered value plus delivery quality.`;
+
     const resp = await openai.chat.completions.create({
       model: OPENAI_MODEL,
       messages: [
@@ -7186,13 +7249,44 @@ Provide bonus eligibility evaluation. Remember: do not contradict the raw metric
                 enum: ['Eligible', 'Not Eligible', 'Needs Review'],
               },
               reasoning: { type: 'string' },
+              decision_basis: { type: 'string' },
+              high_value_work: {
+                type: 'array',
+                items: {
+                  type: 'object',
+                  additionalProperties: false,
+                  required: ['title', 'impact', 'outcome'],
+                  properties: {
+                    title: { type: 'string' },
+                    impact: { type: 'string' },
+                    outcome: { type: 'string' },
+                  },
+                },
+              },
+              delivery_strengths: {
+                type: 'array',
+                items: { type: 'string' },
+              },
+              concerns: {
+                type: 'array',
+                items: { type: 'string' },
+              },
+              manager_note: { type: 'string' },
             },
-            required: ['status', 'reasoning'],
+            required: [
+              'status',
+              'reasoning',
+              'decision_basis',
+              'high_value_work',
+              'delivery_strengths',
+              'concerns',
+              'manager_note',
+            ],
             additionalProperties: false,
           },
         },
       },
-      max_tokens: 400,
+      max_tokens: 700,
     });
 
     const parsed = parseOpenAIJson(resp);
@@ -7200,12 +7294,14 @@ Provide bonus eligibility evaluation. Remember: do not contradict the raw metric
       return {
         status: parsed.status,
         reasoning: parsed.reasoning,
+        details: parsed,
       };
     }
 
     return {
       status: 'Needs Review',
       reasoning: 'Evaluation failed to parse—requires manual review.',
+      details: null,
     };
   } catch (e) {
     console.error('[generateBonusEligibility] error:', e.message);
@@ -7213,8 +7309,109 @@ Provide bonus eligibility evaluation. Remember: do not contradict the raw metric
       status: 'Needs Review',
       reasoning:
         'Evaluation unavailable due to system error—requires manual review.',
+      details: null,
     };
   }
+}
+
+async function resolveBonusEligibility({ developer, item, windowUsed }) {
+  const metrics = item.metrics || null;
+  const adaptiveMaxPBIs = (item.metrics?.ticket_volume || 0) > 10 ? 5 : 3;
+  const highlightedTickets = await buildBonusContext({
+    devEmail: developer,
+    fromISO: windowUsed.from,
+    toISO: windowUsed.to,
+    maxPBIs: adaptiveMaxPBIs,
+  });
+  const impactEvidenceLevel = computeImpactEvidenceLevel(highlightedTickets);
+
+  const cacheResult = await pool.query(
+    `select status, reasoning, ticket_context_used, created_at
+     from bonus_evaluations
+     where dev_email = $1::text
+       and period_start = $2::date
+       and period_end = $3::date
+       and mode = $4::text
+       and created_at > (now() - interval '1 hour')
+     order by created_at desc
+     limit 1`,
+    [developer, windowUsed.from, windowUsed.to, windowUsed.mode],
+  );
+
+  if (cacheResult.rows.length > 0) {
+    const cached = cacheResult.rows[0];
+    const ctx = parseStoredJsonObject(cached.ticket_context_used);
+    if (isStructuredBonusContextEnvelope(ctx)) {
+      return {
+        status: cached.status,
+        reasoning: cached.reasoning,
+        usedAI: true,
+        cached: true,
+        evaluatedAt: cached.created_at,
+        metrics,
+        windowUsed,
+        details: ctx.details,
+        highlightedTickets: ctx.highlightedTickets,
+        impactEvidenceLevel: ctx.impactEvidenceLevel || impactEvidenceLevel,
+      };
+    }
+  }
+
+  if (!openai) {
+    return {
+      status: 'Needs Review',
+      reasoning:
+        'AI evaluation unavailable—OpenAI API key not configured. Manual review required.',
+      usedAI: false,
+      cached: false,
+      windowUsed,
+      metrics,
+      details: null,
+      highlightedTickets,
+      impactEvidenceLevel,
+    };
+  }
+
+  const evaluation = await generateBonusEligibility({
+    devEmail: developer,
+    item,
+    windowUsed,
+    highlightedTickets,
+    impactEvidenceLevel,
+  });
+
+  const storedContext = buildStoredBonusContext({
+    impactEvidenceLevel,
+    highlightedTickets,
+    details: evaluation.details,
+  });
+
+  await pool.query(
+    `insert into bonus_evaluations (dev_email, period_start, period_end, mode, status, reasoning, ticket_context_used)
+     values ($1, $2, $3, $4, $5, $6, $7)`,
+    [
+      developer,
+      windowUsed.from,
+      windowUsed.to,
+      windowUsed.mode,
+      evaluation.status,
+      evaluation.reasoning,
+      JSON.stringify(storedContext),
+    ],
+  );
+
+  return {
+    status: evaluation.status,
+    reasoning: evaluation.reasoning,
+    usedAI: true,
+    cached: false,
+    evaluatedAt: new Date().toISOString(),
+    windowUsed,
+    metrics,
+    details: evaluation.details,
+    highlightedTickets,
+    impactEvidenceLevel,
+  };
 }
 
 // --- explicit "who" extractor (from notes/tags) -----------------------------
