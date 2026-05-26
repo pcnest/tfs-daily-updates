@@ -1,5 +1,5 @@
 {
-  "name": "tfs-daily-poc-api",
+  "name": "tfs-daily-api",
   "version": "0.2.0",
   "private": true,
   "type": "module",
