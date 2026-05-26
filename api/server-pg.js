@@ -7815,8 +7815,8 @@ app.post('/api/gen/sync', requireGenSyncKey, async (req, res) => {
         `INSERT INTO gen_task_items
            (id, parent_id, type, title, state, assigned_to, team,
             area_path, iteration_path, created_date, changed_date,
-            state_change_date, priority, effort, activity, last_seen_at, deleted)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,false)
+            state_change_date, priority, effort, activity, changed_by, last_seen_at, deleted)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,false)
          ON CONFLICT (id) DO UPDATE SET
            parent_id         = EXCLUDED.parent_id,
            type              = EXCLUDED.type,
@@ -7831,6 +7831,7 @@ app.post('/api/gen/sync', requireGenSyncKey, async (req, res) => {
            priority          = EXCLUDED.priority,
            effort            = EXCLUDED.effort,
            activity          = EXCLUDED.activity,
+           changed_by        = EXCLUDED.changed_by,
            last_seen_at      = EXCLUDED.last_seen_at,
            deleted           = false`,
         [
@@ -7849,6 +7850,7 @@ app.post('/api/gen/sync', requireGenSyncKey, async (req, res) => {
           Number.isFinite(+t.priority) ? +t.priority : null,
           Number.isFinite(+t.effort) ? +t.effort : null,
           t.activity || null,
+          t.changedBy || null,
           seenAt,
         ],
       );
@@ -8010,7 +8012,11 @@ app.get('/api/gen/report/daily', requireAuth, async (req, res) => {
     const team = (req.query.team || '').toLowerCase();
     const date = req.query.date || new Date().toISOString().slice(0, 10);
 
-    const conditions = ['t.deleted = false'];
+    const conditions = [
+      't.deleted = false',
+      't.changed_date::date = $1::date',
+      't.changed_by = t.assigned_to',
+    ];
     const params = [date];
 
     if (team) {
@@ -8250,8 +8256,9 @@ pool
     priority          int,
     effort            numeric,
     activity          text,
-    last_seen_at      timestamptz,
-    deleted           boolean default false
+      changed_by        text,
+      last_seen_at      timestamptz,
+      deleted           boolean default false
   )
 `,
   )
@@ -8262,7 +8269,11 @@ pool
     console.error('[boot] gen_task_items table ensure failed:', e);
   });
 
-// --- boot: ensure gen_daily_notes table (PM notes per task) ---
+// --- boot: migrate gen_task_items — add changed_by if missing ---
+pool
+  .query(`ALTER TABLE gen_task_items ADD COLUMN IF NOT EXISTS changed_by text`)
+  .catch((e) => {
+    console.error('[boot] gen_task_items migrate changed_by failed:', e);
 pool
   .query(
     `
