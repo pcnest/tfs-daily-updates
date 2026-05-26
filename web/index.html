@@ -319,6 +319,29 @@
       gap: 16px;
     }
 
+    .manager-tabs-card {
+      margin-bottom: 0;
+      padding: 10px 14px;
+    }
+
+    #managerTabs {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    #managerTabs button {
+      white-space: nowrap;
+    }
+
+    .manager-tab-panel {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+      min-width: 0;
+    }
+
 
 
     .card.thin {
@@ -722,6 +745,7 @@
       color: #ef4444;
     }
 
+    #managerTabs button.active,
     #genTabBar button.active {
       background: #1d4ed8;
       color: #fff;
@@ -1039,7 +1063,24 @@
       </section>
     </section>
 
-    <section class="card hidden" id="devTicketsCard">
+    <section id="managerTabsCard" class="card hidden manager-tabs-card" aria-label="Manager navigation">
+      <nav id="managerTabs" role="tablist" aria-label="Manager sections">
+        <button type="button" class="secondary" data-manager-tab="daily" role="tab"
+          onclick="switchManagerTab('daily')">Daily</button>
+        <button type="button" class="secondary" data-manager-tab="tickets" role="tab"
+          onclick="switchManagerTab('tickets')">Tickets</button>
+        <button type="button" class="secondary" data-manager-tab="risks" role="tab"
+          onclick="switchManagerTab('risks')">Risks</button>
+        <button type="button" class="secondary" data-manager-tab="reports" role="tab"
+          onclick="switchManagerTab('reports')">Reports</button>
+        <button type="button" class="secondary" data-manager-tab="performance" role="tab"
+          onclick="switchManagerTab('performance')">Performance</button>
+        <button type="button" class="secondary" data-manager-tab="qa" role="tab"
+          onclick="switchManagerTab('qa')">QA/TS</button>
+      </nav>
+    </section>
+
+    <section class="card hidden" id="devTicketsCard" data-manager-panel="tickets" data-manager-roles="pm,admin,lead">
       <h3>Development Tickets <small id="devIterLabel" class="badge muted" title="Active iteration">—</small></h3>
       <div class="row"><label for="devAssigned">Assigned to</label>
         <select id="devAssigned" aria-label="Assigned to" style="min-width:220px">
@@ -1080,6 +1121,7 @@
 
     <section id="pm" class="card hidden" data-role="pm-only" aria-labelledby="pmHeader">
       <div class="section-grid">
+        <div class="manager-tab-panel" data-manager-panel="daily" data-manager-roles="pm,admin">
         <!-- (1) Pre-Meeting Updates -->
         <section id="preMeetingSection" class="card thin" aria-labelledby="preHeader">
           <div class="row">
@@ -1100,8 +1142,10 @@
             <button onclick="loadMissing()">Refresh</button>
           </div>
         </section>
+        </div>
         <!-- (2b) Stale In-Progress Items -->
-        <section class="card thin" id="staleCard" aria-labelledby="staleHeader">
+        <section class="card thin" id="staleCard" data-manager-panel="risks" data-manager-roles="pm,admin,lead"
+          aria-labelledby="staleHeader">
           <div class="row">
             <h3 id="staleHeader" style="margin:0">Stale In-Progress <small class="badge muted"
                 title="Tickets in 'In Development' or 'Committed' with no progress update for 2+ days">?</small></h3>
@@ -1113,6 +1157,7 @@
           <div id="stale"></div>
         </section>
         <!-- (3) Top performers (Admin-only) -->
+        <div class="manager-tab-panel" data-manager-panel="performance" data-manager-roles="admin">
         <section class="card thin" id="topDevsCard" aria-labelledby="topDevsHeader">
           <div class="row">
             <h3 id="topDevsHeader" style="margin:0;">Top performers (last 4 weeks or custom range)</h3>
@@ -1164,7 +1209,7 @@
         </section>
 
         <!-- Bonus Eligibility Audit Log (Admin-only) -->
-        <section class="card thin" id="bonusAuditCard" aria-labelledby="bonusAuditHeader" style="display:none;">
+        <section class="card thin" id="bonusAuditCard" aria-labelledby="bonusAuditHeader">
           <div class="row">
             <h3 id="bonusAuditHeader" style="margin:0;">Bonus Eligibility Audit Log</h3>
             <div class="toolbar right">
@@ -1195,9 +1240,11 @@
             </table>
           </div>
         </section>
+        </div>
 
         <!-- Report -->
-        <section class="card thin" aria-labelledby="reportsHeader">
+        <section class="card thin" data-manager-panel="reports" data-manager-roles="pm,admin,lead"
+          aria-labelledby="reportsHeader">
           <div class="row">
             <h3 id="reportsHeader" style="margin:0; max-width: fit-content;">Reports</h3>
             <div class="toolbar right">
@@ -1260,7 +1307,8 @@
         </section>
 
         <!-- (5) Blockers radar -->
-        <section id="blockersSection" class="card thin" aria-labelledby="blockersHeader">
+        <section id="blockersSection" class="card thin" data-manager-panel="risks" data-manager-roles="pm,admin"
+          aria-labelledby="blockersHeader">
           <div class="row">
             <h3 id="blockersHeader" style="margin:0">Blockers Radar</h3>
             <div class="toolbar right">
@@ -1298,7 +1346,8 @@
     </section>
 
     <!-- QA/TS Gen Tracker (Admin-only) -->
-    <section id="genTeamCard" class="card hidden" aria-labelledby="genTeamHeader">
+    <section id="genTeamCard" class="card hidden" data-manager-panel="qa" data-manager-roles="admin"
+      aria-labelledby="genTeamHeader">
       <div class="row">
         <h3 id="genTeamHeader" style="margin:0">QA / TS Task Tracker</h3>
         <div class="toolbar right">
@@ -1430,6 +1479,7 @@
       // PM-only AI risk rationale
       window.__aiRiskEnabled = false;
       window.__aiRiskMap = null;
+      var MANAGER_TAB_STORAGE_KEY = 'pocManagerTab';
 
       function checkLockStatus() {
         var tkn = localStorage.getItem('pocToken') || '';
@@ -1508,6 +1558,85 @@
         var map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
         s = (s == null) ? "" : String(s);
         return s.replace(/[&<>"']/g, function (c) { return map[c]; });
+      }
+
+      function isManagerRole(role) {
+        return role === 'pm' || role === 'admin' || role === 'lead';
+      }
+
+      function managerTabAllowed(tab, role) {
+        if (role === 'admin') {
+          return tab === 'daily' || tab === 'tickets' || tab === 'risks' ||
+            tab === 'reports' || tab === 'performance' || tab === 'qa';
+        }
+        if (role === 'pm') {
+          return tab === 'daily' || tab === 'tickets' || tab === 'risks' || tab === 'reports';
+        }
+        if (role === 'lead') {
+          return tab === 'tickets' || tab === 'risks' || tab === 'reports';
+        }
+        return false;
+      }
+
+      function defaultManagerTab(role) {
+        return role === 'lead' ? 'tickets' : 'daily';
+      }
+
+      function managerTabUsesPmShell(tab) {
+        return tab === 'daily' || tab === 'risks' || tab === 'reports' || tab === 'performance';
+      }
+
+      function managerPanelAllowed(panel, role) {
+        var roles = panel.getAttribute('data-manager-roles') || '';
+        if (!roles) return true;
+        return (',' + roles + ',').indexOf(',' + role + ',') !== -1;
+      }
+
+      function switchManagerTab(tab, skipSave) {
+        var role = window.__role || 'dev';
+        var isManager = isManagerRole(role);
+        var tabsCard = byId('managerTabsCard');
+        var pmBox = byId('pm');
+        var buttons = document.querySelectorAll('#managerTabs [data-manager-tab]');
+        var panels = document.querySelectorAll('[data-manager-panel]');
+
+        if (!isManager) {
+          if (tabsCard) tabsCard.classList.add('hidden');
+          if (pmBox) pmBox.classList.add('hidden');
+          for (var h = 0; h < panels.length; h++) panels[h].classList.add('hidden');
+          return;
+        }
+
+        if (!managerTabAllowed(tab, role)) tab = defaultManagerTab(role);
+        if (!managerTabAllowed(tab, role)) return;
+
+        if (tabsCard) tabsCard.classList.remove('hidden');
+        if (!skipSave) {
+          try { localStorage.setItem(MANAGER_TAB_STORAGE_KEY, tab); } catch (_) { }
+        }
+
+        for (var i = 0; i < buttons.length; i++) {
+          var key = buttons[i].getAttribute('data-manager-tab');
+          var allowed = managerTabAllowed(key, role);
+          buttons[i].classList.toggle('hidden', !allowed);
+          buttons[i].classList.toggle('active', key === tab);
+          buttons[i].setAttribute('aria-selected', key === tab ? 'true' : 'false');
+        }
+
+        if (pmBox) {
+          pmBox.classList.toggle('hidden', !managerTabUsesPmShell(tab));
+        }
+
+        for (var p = 0; p < panels.length; p++) {
+          var panelKey = panels[p].getAttribute('data-manager-panel');
+          panels[p].classList.toggle('hidden', panelKey !== tab || !managerPanelAllowed(panels[p], role));
+        }
+      }
+
+      function syncManagerTabsForRole(role) {
+        var saved = '';
+        try { saved = localStorage.getItem(MANAGER_TAB_STORAGE_KEY) || ''; } catch (_) { }
+        switchManagerTab(managerTabAllowed(saved, role) ? saved : defaultManagerTab(role), true);
       }
 
       function riskBadgeHtml(level, reasons) {
@@ -1695,6 +1824,8 @@
           var dtc = byId('devTicketsCard'); if (dtc) dtc.classList.add('hidden');
           var sc = byId('submitCard'); if (sc) sc.classList.add('hidden');
           var pm = byId('pm'); if (pm) pm.classList.add('hidden');
+          var mtc = byId('managerTabsCard'); if (mtc) mtc.classList.add('hidden');
+          var gtc = byId('genTeamCard'); if (gtc) gtc.classList.add('hidden');
         }
       }
 
@@ -1746,6 +1877,7 @@
         if (blockersSection) blockersSection.classList.toggle('hidden', !isPM && !isAdmin);
         if (aiRiskToggle) aiRiskToggle.classList.toggle('hidden', !isPM && !isAdmin);
         if (snapHtmlBtn) snapHtmlBtn.classList.toggle('hidden', !isPM && !isAdmin);
+        syncManagerTabsForRole(role);
 
         if (pmBox) {
           var controls = pmBox.querySelectorAll('button, a');
@@ -1856,6 +1988,7 @@
           var dtc = byId('devTicketsCard'); if (dtc) dtc.classList.add('hidden');
           var sc = byId('submitCard'); if (sc) sc.classList.add('hidden');
           var pm = byId('pm'); if (pm) pm.classList.add('hidden');
+          var mtc = byId('managerTabsCard'); if (mtc) mtc.classList.add('hidden');
           var gtc = byId('genTeamCard'); if (gtc) gtc.classList.add('hidden');
         };
         if (t) {
@@ -4873,6 +5006,7 @@
       window.closeSnapshotModal = closeSnapshotModal;
       window.emailSnapshots = emailSnapshots;
       window.toggleAiRisk = toggleAiRisk;
+      window.switchManagerTab = switchManagerTab;
 
       // ---- Gen (QA/TS) tracker ----
       window.__genActiveTeam = null;
