@@ -7742,6 +7742,26 @@ Return JSON: { "next_steps": ["...", "...", "..."] }`;
 // GEN (QA/TS general task tracking) endpoints
 // ============================================================================
 
+// Temporary debug endpoint — remove after diagnosing empty users
+app.get('/api/gen/debug-users', requireGenSyncKey, async (req, res) => {
+  try {
+    const [r1, r2, r3] = await Promise.all([
+      pool.query(
+        `SELECT email, role, team FROM users WHERE lower(team) IN ('qa','ts') LIMIT 50`,
+      ),
+      pool.query(
+        `SELECT email, alias, display_name, active FROM tfs_users LIMIT 50`,
+      ),
+      pool.query(`SELECT lower(u.team) as team, lower(u.role) as role, lower(u.email) as uemail, lower(tu.email) as tuemail
+                  FROM users u JOIN tfs_users tu ON lower(tu.email)=lower(u.email)
+                  WHERE lower(u.team) IN ('qa','ts') LIMIT 50`),
+    ]);
+    res.json({ usersQaTs: r1.rows, tfsUsersAll: r2.rows, joined: r3.rows });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Returns tracked QA/TS users (for agent to build WIQL assignee list)
 app.get('/api/gen/qa-ts-users', requireGenSyncKey, async (req, res) => {
   try {
