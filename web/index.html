@@ -1850,6 +1850,7 @@
           var dtc = byId('devTicketsCard'); if (dtc) dtc.classList.add('hidden');
           var sc = byId('submitCard'); if (sc) sc.classList.add('hidden');
           var pm = byId('pm'); if (pm) pm.classList.add('hidden');
+          var gtc = byId('genTeamCard'); if (gtc) gtc.classList.add('hidden');
         };
         if (t) {
           req('POST', (API || location.origin) + (all ? "/api/auth/logout_all" : "/api/auth/logout"), null, { "Authorization": "Bearer " + t }).then(function () { done(); }).catch(function () { done(); });
