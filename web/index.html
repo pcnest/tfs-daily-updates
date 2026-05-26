@@ -1317,12 +1317,12 @@
         <table id="genTicketsTbl" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
           <thead>
             <tr>
-              <th style="text-align:left;padding:4px 8px;">Parent / Task</th>
-              <th style="width:80px;padding:4px 8px;">Type</th>
+              <th style="width:60px;padding:4px 8px;">ID</th>
+              <th style="width:110px;padding:4px 8px;">Type</th>
+              <th style="text-align:left;padding:4px 8px;">Title</th>
               <th style="width:90px;padding:4px 8px;">State</th>
               <th style="width:140px;padding:4px 8px;">Assigned To</th>
               <th style="width:70px;padding:4px 8px;">Effort</th>
-              <th style="width:80px;padding:4px 8px;">Activity</th>
             </tr>
           </thead>
           <tbody id="genTicketsTbody">
@@ -4935,22 +4935,20 @@
             var rows = '';
             items.forEach(function (parent) {
               rows += '<tr style="background:#f4f6fa;">' +
-                '<td style="padding:4px 8px;font-weight:600" colspan="2">' +
-                esc('[' + parent.id + '] ' + (parent.parent_title || parent.title || '')) +
-                '</td>' +
-                '<td style="padding:4px 8px">' + esc(parent.parent_state || parent.state || '') + '</td>' +
-                '<td colspan="3" style="padding:4px 8px;color:#666;font-size:0.8rem">' +
-                esc(parent.parent_type || parent.type || '') + ' · ' + esc(parent.iteration_path || '') +
-                '</td>' +
+                '<td style="padding:4px 8px;color:#666;font-size:0.8rem">' + esc(String(parent.id || '')) + '</td>' +
+                '<td style="padding:4px 8px;color:#666;font-size:0.8rem">' + esc(parent.type || '') + '</td>' +
+                '<td style="padding:4px 8px;font-weight:600">' + esc(parent.title || '') + '</td>' +
+                '<td style="padding:4px 8px">' + esc(parent.state || '') + '</td>' +
+                '<td colspan="2" style="padding:4px 8px;color:#666;font-size:0.8rem">' + esc(parent.iteration_path || '') + '</td>' +
                 '</tr>';
               (parent.tasks || []).forEach(function (t) {
                 rows += '<tr>' +
-                  '<td style="padding:3px 8px 3px 24px">' + esc(t.title || '') + '</td>' +
+                  '<td style="padding:3px 8px;color:#999;font-size:0.8rem">' + esc(String(t.id || '')) + '</td>' +
                   '<td style="padding:3px 8px">' + esc(t.type || '') + '</td>' +
+                  '<td style="padding:3px 8px 3px 24px">' + esc(t.title || '') + '</td>' +
                   '<td style="padding:3px 8px">' + esc(t.state || '') + '</td>' +
                   '<td style="padding:3px 8px">' + esc(t.assigned_to || '') + '</td>' +
                   '<td style="padding:3px 8px;text-align:right">' + (t.effort != null ? t.effort : '') + '</td>' +
-                  '<td style="padding:3px 8px">' + esc(t.activity || '') + '</td>' +
                   '</tr>';
               });
             });
