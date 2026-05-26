@@ -13,7 +13,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GH_PAT }}
 
       - uses: actions/setup-node@v4
         with:
@@ -25,11 +25,11 @@ jobs:
 
       - name: Commit & tag
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_PAT: ${{ secrets.GH_PAT }}
         run: |
           git config user.email "ci@github-actions"
           git config user.name "GitHub Actions"
-          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}
+          git remote set-url origin https://x-access-token:${GH_PAT}@github.com/${{ github.repository }}
           VERSION=$(node -p "require('./api/package.json').version")
           git add api/package.json
           git commit -m "chore: bump version to v$VERSION [skip actions]"
