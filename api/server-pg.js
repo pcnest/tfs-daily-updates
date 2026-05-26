@@ -775,17 +775,13 @@ function getPriorityWeight(priority) {
 
 function getSeverityWeight(severity) {
   const sev = normalizeSeverity(severity);
-  return sev === 'critical'
-    ? 4
-    : sev === 'high'
-      ? 3
-      : sev === 'medium'
-        ? 1
-        : 0;
+  return sev === 'critical' ? 4 : sev === 'high' ? 3 : sev === 'medium' ? 1 : 0;
 }
 
 function getTypeWeight(type) {
-  const v = String(type || '').trim().toLowerCase();
+  const v = String(type || '')
+    .trim()
+    .toLowerCase();
   return v === 'bug' || v === 'product backlog item' ? 1 : 0;
 }
 
@@ -820,7 +816,9 @@ function computeBonusValueProxy(ticket) {
   }
 
   const typeWeight = getTypeWeight(ticket.type);
-  const typeNorm = String(ticket.type || '').trim().toLowerCase();
+  const typeNorm = String(ticket.type || '')
+    .trim()
+    .toLowerCase();
   if (typeWeight > 0) {
     valueScore += typeWeight;
     valueReasons.push(
@@ -1033,6 +1031,15 @@ function normAliasFromEmailOrInput(email) {
 function requireSyncKey(req, res, next) {
   const provided = req.header('x-api-key') || '';
   const expected = process.env.TFS_USERS_SYNC_KEY || process.env.API_KEY || '';
+  if (!expected || provided !== expected) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  next();
+}
+
+function requireGenSyncKey(req, res, next) {
+  const provided = req.header('x-api-key') || '';
+  const expected = process.env.GEN_SYNC_KEY || '';
   if (!expected || provided !== expected) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
@@ -6857,7 +6864,9 @@ async function buildBonusContext({ devEmail, fromISO, toISO, maxPBIs = 3 }) {
         title: clampText(r.title || '', 120),
         type: clampText(r.type || '', 40),
         state: clampText(r.state || '', 40),
-        priority: Number.isFinite(Number(r.priority)) ? Number(r.priority) : null,
+        priority: Number.isFinite(Number(r.priority))
+          ? Number(r.priority)
+          : null,
         severity: clampText(r.severity || '', 24),
         tags: clampText(r.tags || '', 200),
         relatedLinkCount: Number(r.relatedLinkCount || 0),
@@ -7205,7 +7214,8 @@ Do not include raw metric numbers, ticket IDs, or unsupported claims in narrativ
       highlightedTickets && highlightedTickets.length > 0
         ? highlightedTickets
             .map((ticket, i) => {
-              const tags = splitTicketTags(ticket.tags).slice(0, 4).join(', ') || 'none';
+              const tags =
+                splitTicketTags(ticket.tags).slice(0, 4).join(', ') || 'none';
               return [
                 `${i + 1}. Title: ${ticket.title}`,
                 `   Type: ${ticket.type || 'Unknown'} | State: ${ticket.state || 'Unknown'} | Priority: ${ticket.priority ?? 'n/a'} | Severity: ${ticket.severity || 'n/a'}`,
@@ -7728,6 +7738,374 @@ Return JSON: { "next_steps": ["...", "...", "..."] }`;
   },
 );
 
+// ============================================================================
+// GEN (QA/TS general task tracking) endpoints
+// ============================================================================
+
+// Returns tracked QA/TS users (for agent to build WIQL assignee list)
+app.get('/api/gen/qa-ts-users', requireGenSyncKey, async (req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT tu.alias,
+             lower(tu.email) AS email,
+             tu.display_name,
+             lower(u.team)   AS team
+      FROM   users    u
+      JOIN   tfs_users tu ON lower(tu.email) = lower(u.email)
+      WHERE  lower(u.team) IN ('qa', 'ts')
+        AND  u.role NOT IN ('pm', 'admin')
+        AND  tu.active = true
+      ORDER BY tu.display_name
+    `);
+    res.json({ users: rows });
+  } catch (e) {
+    console.error('[gen/qa-ts-users]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Agent sync: upsert parents + tasks and presence-sweep deleted tasks
+app.post('/api/gen/sync', requireGenSyncKey, async (req, res) => {
+  const {
+    parents = [],
+    tasks = [],
+    pushedAt,
+    presentIds = [],
+  } = req.body || {};
+  if (!Array.isArray(parents) || !Array.isArray(tasks)) {
+    return res.status(400).json({ error: 'parents and tasks must be arrays' });
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const seenAt = pushedAt || new Date().toISOString();
+
+    for (const p of parents) {
+      await client.query(
+        `INSERT INTO gen_tickets
+           (id, type, title, state, area_path, iteration_path, priority,
+            created_date, changed_date, last_seen_at, deleted)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false)
+         ON CONFLICT (id) DO UPDATE SET
+           type           = EXCLUDED.type,
+           title          = EXCLUDED.title,
+           state          = EXCLUDED.state,
+           area_path      = EXCLUDED.area_path,
+           iteration_path = EXCLUDED.iteration_path,
+           priority       = EXCLUDED.priority,
+           changed_date   = EXCLUDED.changed_date,
+           last_seen_at   = EXCLUDED.last_seen_at,
+           deleted        = false`,
+        [
+          String(p.id),
+          p.type || '',
+          p.title || '',
+          p.state || '',
+          p.areaPath || '',
+          p.iterationPath || '',
+          Number.isFinite(+p.priority) ? +p.priority : null,
+          p.createdDate || null,
+          p.changedDate || null,
+          seenAt,
+        ],
+      );
+    }
+
+    for (const t of tasks) {
+      await client.query(
+        `INSERT INTO gen_task_items
+           (id, parent_id, type, title, state, assigned_to, team,
+            area_path, iteration_path, created_date, changed_date,
+            state_change_date, priority, effort, activity, last_seen_at, deleted)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,false)
+         ON CONFLICT (id) DO UPDATE SET
+           parent_id         = EXCLUDED.parent_id,
+           type              = EXCLUDED.type,
+           title             = EXCLUDED.title,
+           state             = EXCLUDED.state,
+           assigned_to       = EXCLUDED.assigned_to,
+           team              = EXCLUDED.team,
+           area_path         = EXCLUDED.area_path,
+           iteration_path    = EXCLUDED.iteration_path,
+           changed_date      = EXCLUDED.changed_date,
+           state_change_date = EXCLUDED.state_change_date,
+           priority          = EXCLUDED.priority,
+           effort            = EXCLUDED.effort,
+           activity          = EXCLUDED.activity,
+           last_seen_at      = EXCLUDED.last_seen_at,
+           deleted           = false`,
+        [
+          String(t.id),
+          t.parentId ? String(t.parentId) : null,
+          t.type || '',
+          t.title || '',
+          t.state || '',
+          t.assignedTo || '',
+          t.team || '',
+          t.areaPath || '',
+          t.iterationPath || '',
+          t.createdDate || null,
+          t.changedDate || null,
+          t.stateChangeDate || null,
+          Number.isFinite(+t.priority) ? +t.priority : null,
+          Number.isFinite(+t.effort) ? +t.effort : null,
+          t.activity || null,
+          seenAt,
+        ],
+      );
+    }
+
+    // Presence sweep: mark tasks absent from this push as deleted
+    if (Array.isArray(presentIds) && presentIds.length > 0) {
+      const ids = presentIds.map(String);
+      await client.query(
+        `UPDATE gen_task_items SET deleted = true
+         WHERE id != ALL($1::text[]) AND deleted = false`,
+        [ids],
+      );
+    }
+
+    await client.query('COMMIT');
+    res.json({ status: 'ok', parents: parents.length, tasks: tasks.length });
+  } catch (e) {
+    await client.query('ROLLBACK');
+    console.error('[gen/sync] error:', e.message);
+    res.status(500).json({ error: 'sync_failed', detail: e.message });
+  } finally {
+    client.release();
+  }
+});
+
+// Config: which teams have the gen tracker enabled (reads meta table)
+app.get('/api/gen/config', requireAuth, async (req, res) => {
+  try {
+    const me = await pool.query('select role from users where email=$1', [
+      req.userEmail,
+    ]);
+    if (!me.rowCount || me.rows[0].role !== 'admin') {
+      return res.status(403).json({ error: 'admin_only' });
+    }
+    const r = await pool.query(
+      `select value from meta where key='gen_enabled_teams' limit 1`,
+    );
+    const raw = r.rows[0]?.value || '';
+    const enabledTeams = raw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    res.json({ enabledTeams });
+  } catch (e) {
+    console.error('[gen/config]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Tickets: parent items with nested tasks, optional ?team= filter
+app.get('/api/gen/tickets', requireAuth, async (req, res) => {
+  try {
+    const me = await pool.query('select role from users where email=$1', [
+      req.userEmail,
+    ]);
+    if (!me.rowCount || me.rows[0].role !== 'admin') {
+      return res.status(403).json({ error: 'admin_only' });
+    }
+
+    const team = (req.query.team || '').toLowerCase();
+    const assignedTo = (req.query.assigned_to || '').toLowerCase();
+    const state = (req.query.state || '').toLowerCase();
+    const q = req.query.q || '';
+
+    const conditions = ['p.deleted = false', 't.deleted = false'];
+    const params = [];
+
+    if (team) {
+      conditions.push(`lower(t.team) = $${params.length + 1}`);
+      params.push(team);
+    }
+    if (assignedTo) {
+      conditions.push(
+        `lower(t.assigned_to) LIKE '%' || $${params.length + 1} || '%'`,
+      );
+      params.push(assignedTo);
+    }
+    if (state) {
+      conditions.push(`lower(t.state) = $${params.length + 1}`);
+      params.push(state);
+    }
+    if (q) {
+      conditions.push(
+        `(t.title ILIKE '%' || $${params.length + 1} || '%' OR t.id = $${params.length + 1})`,
+      );
+      params.push(q);
+    }
+
+    const where = conditions.length ? 'WHERE ' + conditions.join(' AND ') : '';
+    const sql = `
+      SELECT p.id              AS parent_id,
+             p.type            AS parent_type,
+             p.title           AS parent_title,
+             p.state           AS parent_state,
+             p.area_path,
+             p.iteration_path,
+             p.priority        AS parent_priority,
+             p.changed_date    AS parent_changed_date,
+             t.id, t.type, t.title, t.state,
+             t.assigned_to, t.team, t.activity, t.effort,
+             t.created_date, t.changed_date, t.state_change_date, t.priority
+      FROM   gen_tickets   p
+      JOIN   gen_task_items t ON t.parent_id = p.id
+      ${where}
+      ORDER BY p.id, t.id
+    `;
+
+    const { rows } = await pool.query(sql, params);
+
+    const parentMap = new Map();
+    for (const row of rows) {
+      if (!parentMap.has(row.parent_id)) {
+        parentMap.set(row.parent_id, {
+          id: row.parent_id,
+          type: row.parent_type,
+          title: row.parent_title,
+          state: row.parent_state,
+          area_path: row.area_path,
+          iteration_path: row.iteration_path,
+          priority: row.parent_priority,
+          changed_date: row.parent_changed_date,
+          tasks: [],
+        });
+      }
+      parentMap.get(row.parent_id).tasks.push({
+        id: row.id,
+        type: row.type,
+        title: row.title,
+        state: row.state,
+        assigned_to: row.assigned_to,
+        team: row.team,
+        activity: row.activity,
+        effort: row.effort,
+        created_date: row.created_date,
+        changed_date: row.changed_date,
+        state_change_date: row.state_change_date,
+        priority: row.priority,
+      });
+    }
+
+    res.json({ items: [...parentMap.values()] });
+  } catch (e) {
+    console.error('[gen/tickets]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Daily report: today's tasks grouped by assignee, optional ?team= filter
+app.get('/api/gen/report/daily', requireAuth, async (req, res) => {
+  try {
+    const me = await pool.query('select role from users where email=$1', [
+      req.userEmail,
+    ]);
+    if (!me.rowCount || me.rows[0].role !== 'admin') {
+      return res.status(403).json({ error: 'admin_only' });
+    }
+
+    const team = (req.query.team || '').toLowerCase();
+    const date = req.query.date || new Date().toISOString().slice(0, 10);
+
+    const conditions = ['t.deleted = false'];
+    const params = [date];
+
+    if (team) {
+      conditions.push(`lower(t.team) = $${params.length + 1}`);
+      params.push(team);
+    }
+
+    const where = 'WHERE ' + conditions.join(' AND ');
+
+    const sql = `
+      SELECT t.assigned_to,
+             t.team,
+             t.id          AS task_id,
+             t.title       AS task_title,
+             t.state,
+             t.activity,
+             t.effort,
+             p.id          AS parent_id,
+             p.title       AS parent_title,
+             p.type        AS parent_type,
+             n.note,
+             n.status      AS note_status,
+             n.noted_by,
+             n.at          AS noted_at
+      FROM   gen_task_items  t
+      JOIN   gen_tickets     p ON p.id = t.parent_id
+      LEFT   JOIN gen_daily_notes n
+               ON n.task_id = t.id
+              AND n.date    = $1::date
+      ${where}
+      ORDER BY t.assigned_to, p.id, t.id
+    `;
+
+    const { rows } = await pool.query(sql, params);
+
+    const byAssignee = new Map();
+    for (const row of rows) {
+      const key = row.assigned_to || 'unassigned';
+      if (!byAssignee.has(key)) {
+        byAssignee.set(key, { assigned_to: key, team: row.team, tasks: [] });
+      }
+      byAssignee.get(key).tasks.push({
+        task_id: row.task_id,
+        task_title: row.task_title,
+        state: row.state,
+        activity: row.activity,
+        effort: row.effort,
+        parent_id: row.parent_id,
+        parent_title: row.parent_title,
+        parent_type: row.parent_type,
+        note: row.note,
+        note_status: row.note_status,
+        noted_by: row.noted_by,
+        noted_at: row.noted_at,
+      });
+    }
+
+    res.json({ date, team: team || null, assignees: [...byAssignee.values()] });
+  } catch (e) {
+    console.error('[gen/report/daily]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// Notes: upsert a PM note for a task on a given date
+app.post('/api/gen/notes', requireAuth, async (req, res) => {
+  try {
+    const me = await pool.query('select role from users where email=$1', [
+      req.userEmail,
+    ]);
+    if (!me.rowCount || me.rows[0].role !== 'admin') {
+      return res.status(403).json({ error: 'admin_only' });
+    }
+
+    const { task_id, note, status, date } = req.body || {};
+    if (!task_id) return res.status(400).json({ error: 'task_id required' });
+
+    const noteDate = date || new Date().toISOString().slice(0, 10);
+
+    await pool.query(
+      `INSERT INTO gen_daily_notes (task_id, noted_by, note, status, date, at)
+       VALUES ($1, $2, $3, $4, $5::date, now())
+       ON CONFLICT ON CONSTRAINT gen_daily_notes_task_id_noted_by_date_key
+       DO UPDATE SET note = EXCLUDED.note, status = EXCLUDED.status, at = now()`,
+      [task_id, req.userEmail, note || null, status || null, noteDate],
+    );
+
+    res.json({ status: 'ok' });
+  } catch (e) {
+    console.error('[gen/notes]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // static web
 app.use('/', express.static(path.join(process.cwd(), '..', 'web')));
 
@@ -7825,4 +8203,98 @@ pool
   })
   .catch((e) => {
     console.error('[boot] ticket_flags table ensure failed:', e);
+  });
+
+// --- boot: ensure gen_tickets table (QA/TS parent items) ---
+pool
+  .query(
+    `
+  create table if not exists gen_tickets (
+    id             text primary key,
+    type           text,
+    title          text,
+    state          text,
+    area_path      text,
+    iteration_path text,
+    priority       int,
+    created_date   timestamptz,
+    changed_date   timestamptz,
+    last_seen_at   timestamptz,
+    deleted        boolean default false
+  )
+`,
+  )
+  .then(() => {
+    console.log('[boot] gen_tickets table is ready');
+  })
+  .catch((e) => {
+    console.error('[boot] gen_tickets table ensure failed:', e);
+  });
+
+// --- boot: ensure gen_task_items table (QA/TS task items) ---
+pool
+  .query(
+    `
+  create table if not exists gen_task_items (
+    id                text primary key,
+    parent_id         text,
+    type              text,
+    title             text,
+    state             text,
+    assigned_to       text,
+    team              text,
+    area_path         text,
+    iteration_path    text,
+    created_date      timestamptz,
+    changed_date      timestamptz,
+    state_change_date timestamptz,
+    priority          int,
+    effort            numeric,
+    activity          text,
+    last_seen_at      timestamptz,
+    deleted           boolean default false
+  )
+`,
+  )
+  .then(() => {
+    console.log('[boot] gen_task_items table is ready');
+  })
+  .catch((e) => {
+    console.error('[boot] gen_task_items table ensure failed:', e);
+  });
+
+// --- boot: ensure gen_daily_notes table (PM notes per task) ---
+pool
+  .query(
+    `
+  create table if not exists gen_daily_notes (
+    id        bigserial   primary key,
+    task_id   text        not null,
+    noted_by  text        not null,
+    note      text,
+    status    text,
+    date      date        not null default current_date,
+    at        timestamptz default now(),
+    unique (task_id, noted_by, date)
+  )
+`,
+  )
+  .then(() => {
+    console.log('[boot] gen_daily_notes table is ready');
+  })
+  .catch((e) => {
+    console.error('[boot] gen_daily_notes table ensure failed:', e);
+  });
+
+// --- boot: seed gen_enabled_teams meta key (TS only by default) ---
+pool
+  .query(
+    `insert into meta (key, value) values ('gen_enabled_teams', 'ts')
+     on conflict (key) do nothing`,
+  )
+  .then(() => {
+    console.log('[boot] gen_enabled_teams meta key is ready');
+  })
+  .catch((e) => {
+    console.error('[boot] gen_enabled_teams meta seed failed:', e);
   });

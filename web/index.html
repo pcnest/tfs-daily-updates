@@ -1291,6 +1291,54 @@
       </div>
     </section>
 
+    <!-- QA/TS Gen Tracker (Admin-only) -->
+    <section id="genTeamCard" class="card hidden" aria-labelledby="genTeamHeader">
+      <div class="row">
+        <h3 id="genTeamHeader" style="margin:0">QA / TS Task Tracker</h3>
+        <div class="toolbar right">
+          <span id="genStatus" class="status" role="status" aria-live="polite"></span>
+          <button id="genReportBtn" class="secondary" onclick="loadGenReport(window.__genActiveTeam)">Generate Daily
+            Report</button>
+          <button onclick="loadGenTickets(window.__genActiveTeam)">Refresh</button>
+        </div>
+      </div>
+
+      <!-- Team tab bar (populated dynamically) -->
+      <div id="genTabBar" class="toolbar" style="margin-top:8px;gap:4px;flex-wrap:wrap;"></div>
+
+      <!-- Ticket table -->
+      <div id="genTicketsWrap" class="table-wrap" style="margin-top:8px;overflow:auto;">
+        <table id="genTicketsTbl" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+          <thead>
+            <tr>
+              <th style="text-align:left;padding:4px 8px;">Parent / Task</th>
+              <th style="width:80px;padding:4px 8px;">Type</th>
+              <th style="width:90px;padding:4px 8px;">State</th>
+              <th style="width:140px;padding:4px 8px;">Assigned To</th>
+              <th style="width:70px;padding:4px 8px;">Effort</th>
+              <th style="width:80px;padding:4px 8px;">Activity</th>
+            </tr>
+          </thead>
+          <tbody id="genTicketsTbody">
+            <tr>
+              <td colspan="6" style="text-align:center;padding:1rem;color:#888">Loading…</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Daily report panel (shown after Generate) -->
+      <div id="genReportPanel" class="hidden" style="margin-top:12px;">
+        <div class="row">
+          <h4 style="margin:0">Daily Report — <span id="genReportDate"></span></h4>
+          <div class="toolbar right">
+            <button class="secondary" onclick="byId('genReportPanel').classList.add('hidden')">Close</button>
+          </div>
+        </div>
+        <div id="genReportBody" style="margin-top:8px;"></div>
+      </div>
+    </section>
+
     <!-- Submit Progress Modal -->
     <div id="spBackdrop" class="modal-backdrop" onclick="closeSPModal()"></div>
     <div id="spModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="spTitle">
@@ -1659,6 +1707,7 @@
         var weeklyCard = byId('weeklySummaryCard');
         var topDevsCard = byId('topDevsCard');
         var bonusAuditCard = byId('bonusAuditCard');
+        var genTeamCard = byId('genTeamCard');
         var snapPdfBtn = byId('snapPdfBtn');
         var snapEmailBtn = byId('snapEmailBtn');
         var missingSection = byId('missingSection');
@@ -1682,6 +1731,7 @@
         if (pmBox) pmBox.classList.toggle('hidden', !isManager);
         if (topDevsCard) topDevsCard.classList.toggle('hidden', !isAdmin); // admin-only card
         if (bonusAuditCard) bonusAuditCard.classList.toggle('hidden', !isAdmin); // admin-only card
+        if (genTeamCard) genTeamCard.classList.toggle('hidden', !isAdmin); // admin-only card
         if (snapPdfBtn) snapPdfBtn.classList.toggle('hidden', !isAdmin); // admin-only button
         if (snapEmailBtn) snapEmailBtn.classList.toggle('hidden', !isAdmin); // admin-only button
         // Lead-excluded sections and buttons (pm/admin only)
@@ -1725,6 +1775,7 @@
           if (!isLead) { loadBlockers(); loadMissing(); } // lead excluded from these
           if (isLead) loadTickets(); // lead also loads own assigned tickets
           if (isManager) loadTopDevs(); // pm/admin/lead
+          if (isAdmin) loadGenConfig();  // gen tracker tab setup (admin-only)
 
           presetReportThisWeek(false);
           if (!window.__exportTimer) {
@@ -4815,6 +4866,143 @@
       window.closeSnapshotModal = closeSnapshotModal;
       window.emailSnapshots = emailSnapshots;
       window.toggleAiRisk = toggleAiRisk;
+
+      // ---- Gen (QA/TS) tracker ----
+      window.__genActiveTeam = null;
+
+      function loadGenConfig() {
+        var tok = window.__token || '';
+        fetch((API || location.origin) + '/api/gen/config', {
+          headers: { Authorization: 'Bearer ' + tok }
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            var teams = (data.enabledTeams || []);
+            var bar = byId('genTabBar');
+            if (!bar) return;
+            bar.innerHTML = '';
+            teams.forEach(function (team) {
+              var btn = document.createElement('button');
+              btn.className = 'secondary';
+              btn.textContent = team.toUpperCase();
+              btn.setAttribute('data-gen-team', team);
+              btn.onclick = function () { switchGenTab(team); };
+              bar.appendChild(btn);
+            });
+            if (teams.length > 0) switchGenTab(teams[0]);
+          })
+          .catch(function (e) {
+            var st = byId('genStatus');
+            if (st) { st.textContent = 'Config error: ' + e.message; st.className = 'status err'; }
+          });
+      }
+
+      function switchGenTab(team) {
+        window.__genActiveTeam = team;
+        var btns = (byId('genTabBar') || {}).querySelectorAll ? byId('genTabBar').querySelectorAll('button') : [];
+        for (var i = 0; i < btns.length; i++) {
+          btns[i].classList.toggle('active', btns[i].getAttribute('data-gen-team') === team);
+        }
+        loadGenTickets(team);
+      }
+
+      function loadGenTickets(team) {
+        var st = byId('genStatus');
+        var tbody = byId('genTicketsTbody');
+        if (st) { st.textContent = 'Loading...'; st.className = 'status'; }
+        if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:1rem">Loading…</td></tr>';
+        var tok = window.__token || '';
+        var url = (API || location.origin) + '/api/gen/tickets' + (team ? '?team=' + encodeURIComponent(team) : '');
+        fetch(url, { headers: { Authorization: 'Bearer ' + tok } })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.error) throw new Error(data.error);
+            var items = data.items || [];
+            if (!tbody) return;
+            if (items.length === 0) {
+              tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:1rem;color:#888">No tasks found for this team in the current iteration.</td></tr>';
+              if (st) { st.textContent = ''; }
+              return;
+            }
+            var rows = '';
+            items.forEach(function (parent) {
+              rows += '<tr style="background:#f4f6fa;">' +
+                '<td style="padding:4px 8px;font-weight:600" colspan="2">' +
+                esc('[' + parent.id + '] ' + (parent.parent_title || parent.title || '')) +
+                '</td>' +
+                '<td style="padding:4px 8px">' + esc(parent.parent_state || parent.state || '') + '</td>' +
+                '<td colspan="3" style="padding:4px 8px;color:#666;font-size:0.8rem">' +
+                esc(parent.parent_type || parent.type || '') + ' · ' + esc(parent.iteration_path || '') +
+                '</td>' +
+                '</tr>';
+              (parent.tasks || []).forEach(function (t) {
+                rows += '<tr>' +
+                  '<td style="padding:3px 8px 3px 24px">' + esc(t.title || '') + '</td>' +
+                  '<td style="padding:3px 8px">' + esc(t.type || '') + '</td>' +
+                  '<td style="padding:3px 8px">' + esc(t.state || '') + '</td>' +
+                  '<td style="padding:3px 8px">' + esc(t.assigned_to || '') + '</td>' +
+                  '<td style="padding:3px 8px;text-align:right">' + (t.effort != null ? t.effort : '') + '</td>' +
+                  '<td style="padding:3px 8px">' + esc(t.activity || '') + '</td>' +
+                  '</tr>';
+              });
+            });
+            tbody.innerHTML = rows;
+            if (st) { st.textContent = items.length + ' parent(s)'; st.className = 'status ok'; }
+          })
+          .catch(function (e) {
+            if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:1rem;color:red">Error: ' + esc(e.message) + '</td></tr>';
+            if (st) { st.textContent = 'Error'; st.className = 'status err'; }
+          });
+      }
+
+      function loadGenReport(team) {
+        var tok = window.__token || '';
+        var today = new Date().toISOString().slice(0, 10);
+        var url = (API || location.origin) + '/api/gen/report/daily?date=' + today +
+          (team ? '&team=' + encodeURIComponent(team) : '');
+        var panel = byId('genReportPanel');
+        var body = byId('genReportBody');
+        var dateEl = byId('genReportDate');
+        if (dateEl) dateEl.textContent = today + (team ? ' — ' + team.toUpperCase() : '');
+        if (body) body.innerHTML = '<em>Loading…</em>';
+        if (panel) panel.classList.remove('hidden');
+        fetch(url, { headers: { Authorization: 'Bearer ' + tok } })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.error) throw new Error(data.error);
+            var assignees = data.assignees || [];
+            if (!body) return;
+            if (assignees.length === 0) {
+              body.innerHTML = '<p style="color:#888">No tasks tracked for this team today.</p>';
+              return;
+            }
+            var html = '';
+            assignees.forEach(function (a) {
+              html += '<div style="margin-bottom:12px">' +
+                '<strong>' + esc(a.assigned_to || 'Unassigned') + '</strong>' +
+                (a.team ? ' <span class="badge muted">' + esc(a.team.toUpperCase()) + '</span>' : '') +
+                '<ul style="margin:4px 0 0 1.2em;padding:0">';
+              (a.tasks || []).forEach(function (t) {
+                html += '<li style="margin-bottom:4px">' +
+                  '<span style="color:#555">[' + esc(t.parent_type || '') + '] ' + esc(t.parent_title || '') + '</span> → ' +
+                  esc(t.task_title || '') +
+                  ' <span class="badge">' + esc(t.state || '') + '</span>';
+                if (t.note) html += ' <em style="color:#666">— ' + esc(t.note) + '</em>';
+                html += '</li>';
+              });
+              html += '</ul></div>';
+            });
+            body.innerHTML = html;
+          })
+          .catch(function (e) {
+            if (body) body.innerHTML = '<p style="color:red">Error: ' + esc(e.message) + '</p>';
+          });
+      }
+
+      window.loadGenConfig = loadGenConfig;
+      window.switchGenTab = switchGenTab;
+      window.loadGenTickets = loadGenTickets;
+      window.loadGenReport = loadGenReport;
 
 
     })();
