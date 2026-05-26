@@ -24,9 +24,12 @@ jobs:
         run: npm version patch --no-git-tag-version
 
       - name: Commit & tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.email "ci@github-actions"
           git config user.name "GitHub Actions"
+          git remote set-url origin https://x-access-token:${GITHUB_TOKEN}@github.com/${{ github.repository }}
           VERSION=$(node -p "require('./api/package.json').version")
           git add api/package.json
           git commit -m "chore: bump version to v$VERSION [skip actions]"
