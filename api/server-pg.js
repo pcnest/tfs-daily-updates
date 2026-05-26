@@ -2324,6 +2324,12 @@ app.post('/api/progress', requireAuth, async (req, res) => {
   const { ticketId, code, note, riskLevel, impactArea } = req.body || {};
   if (!ticketId || !code)
     return res.status(400).json({ error: 'ticketId and code are required' });
+  if (String(ticketId) === '0' && !String(code).startsWith('900_'))
+    return res
+      .status(400)
+      .json({ error: 'ticketId 0 is reserved for 900_* status codes' });
+  if (String(code).startsWith('900_') && String(ticketId) !== '0')
+    return res.status(400).json({ error: '900_* codes require ticketId 0' });
 
   const date = await todayLocal(pool);
 
@@ -2950,6 +2956,7 @@ app.get(
    or lower(email) = $5::text      -- exact email match
    or split_part(lower(email),'@',1) = $6::text  -- local-part match
  )
+          and ticket_id <> '0'
 
 
       ),
@@ -8315,4 +8322,18 @@ pool
   })
   .catch((e) => {
     console.error('[boot] gen_enabled_teams meta seed failed:', e);
+  });
+
+// --- boot: seed 900_no_tickets progress code ---
+pool
+  .query(
+    `insert into progress_codes (code, description, require_note, active)
+     values ('900_no_tickets', 'No active tickets — working on non-ticket tasks', true, true)
+     on conflict (code) do nothing`,
+  )
+  .then(() => {
+    console.log('[boot] 900_no_tickets progress code is ready');
+  })
+  .catch((e) => {
+    console.error('[boot] 900_no_tickets seed failed:', e);
   });

@@ -1243,8 +1243,7 @@
         </div>
 
         <!-- Report -->
-        <section data-manager-panel="reports" data-manager-roles="pm,admin,lead"
-          aria-labelledby="reportsHeader">
+        <section data-manager-panel="reports" data-manager-roles="pm,admin,lead" aria-labelledby="reportsHeader">
           <div class="row">
             <h3 id="reportsHeader" style="margin:0; max-width: fit-content;">Reports</h3>
             <div class="toolbar right">
@@ -2552,6 +2551,28 @@
             tbody.innerHTML = "";
             var items = js.items || [];
             __topItems = items;
+            if (items.length === 0 && (window.__role === 'dev' || window.__role === 'lead')) {
+              var noTixRow = document.createElement('tr');
+              noTixRow.id = 'noTicketRow';
+              noTixRow.innerHTML = '<td colspan="10" style="text-align:center;padding:16px">'
+                + '<div class="help">No active tickets in this sprint.</div>'
+                + (window.__lockedToday
+                  ? '<div class="help" style="margin-top:6px">Status already recorded for today.</div>'
+                  : '<div id="noTicketAction" style="margin-top:8px">'
+                  + '<button class="secondary" onclick="showNoTicketForm()">No Active Tickets Today</button>'
+                  + '</div>'
+                  + '<div id="noTicketForm" style="display:none;margin-top:8px;max-width:480px;margin-left:auto;margin-right:auto">'
+                  + '<label for="noTicketNote" style="display:block;margin-bottom:4px;font-size:0.85em">What are you working on today? <span style="color:#ef4444">*</span></label>'
+                  + '<textarea id="noTicketNote" rows="3" style="width:100%;box-sizing:border-box" placeholder="Describe your non-ticket work for today..." aria-label="No ticket note"></textarea>'
+                  + '<div style="margin-top:6px;display:flex;gap:8px;justify-content:center">'
+                  + '<button onclick="submitNoTicketUpdate()">Submit</button>'
+                  + '<button class="secondary" onclick="hideNoTicketForm()">Cancel</button>'
+                  + '</div>'
+                  + '</div>'
+                )
+                + '</td>';
+              tbody.appendChild(noTixRow);
+            }
             for (var k = 0; k < items.length; k++) {
               var t = items[k];
               var tr2 = document.createElement("tr");
@@ -2617,6 +2638,60 @@
             status.classList.add('err');
             tbody.innerHTML = '<tr><td colspan="10">Unable to load tickets. Check network or try again.</td></tr>';
           })
+      }
+
+      function showNoTicketForm() {
+        var action = byId('noTicketAction');
+        var form = byId('noTicketForm');
+        if (action) action.style.display = 'none';
+        if (form) { form.style.display = 'block'; var ta = byId('noTicketNote'); if (ta) ta.focus(); }
+      }
+
+      function hideNoTicketForm() {
+        var action = byId('noTicketAction');
+        var form = byId('noTicketForm');
+        if (form) form.style.display = 'none';
+        if (action) action.style.display = '';
+      }
+
+      function submitNoTicketUpdate() {
+        var noteEl = byId('noTicketNote');
+        var note = noteEl ? noteEl.value.trim() : '';
+        if (!note) {
+          if (noteEl) noteEl.style.outline = '2px solid #ef4444';
+          setStatus('loadStatus', 'Please describe what you are working on today.', false);
+          return;
+        }
+        if (noteEl) noteEl.style.outline = '';
+        var tkn = token();
+        if (!tkn) { setStatus('loadStatus', 'Please log in first.', false); return; }
+        var row = byId('noTicketRow');
+        var btns = row ? row.querySelectorAll('button') : [];
+        for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
+        setStatus('loadStatus', 'Submitting...');
+        fetch((API || location.origin) + '/api/progress', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + tkn, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ticketId: '0', code: '900_no_tickets', note: note })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            if (js.error) {
+              setStatus('loadStatus', js.error, false);
+              for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+            } else {
+              setStatus('loadStatus', 'Status recorded for today.', true);
+              if (row) {
+                row.innerHTML = '<td colspan="10" style="text-align:center;padding:12px" class="help">No active tickets — status recorded for today.</td>';
+              }
+              if (typeof checkLockStatus === 'function') checkLockStatus();
+              if (typeof loadWeeklySummary === 'function') loadWeeklySummary();
+            }
+          })
+          .catch(function () {
+            setStatus('loadStatus', 'Network error. Please try again.', false);
+            for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+          });
       }
 
       function loadWeeklySummary() {
@@ -2685,7 +2760,7 @@
                 if (dayCounts.hasOwnProperty(d2)) dayCounts[d2] += 1;
                 else dayCounts[d2] = 1;
               }
-              if (it.ticketId != null) tickets[String(it.ticketId)] = true;
+              if (it.ticketId != null && String(it.ticketId) !== '0') tickets[String(it.ticketId)] = true;
               var code = it.code ? String(it.code) : '';
               if (code) {
                 var fam = code.slice(0, 3);
@@ -3223,9 +3298,10 @@
                     var riskBadge = riskBadgeHtml(it2.riskLevel, it2.riskReasons);
 
                     out.push('<tr>');
-                    out.push('<td>' + esc(it2.ticketId) + '</td>');
-                    out.push('<td>' + esc(typ2 || '-') + '</td>');
-                    out.push('<td><i>' + esc(it2.title || '') + '</i></td>');
+                    var isStatusRow = String(it2.ticketId) === '0';
+                    out.push('<td>' + (isStatusRow ? '<span class="badge">no tickets</span>' : esc(it2.ticketId)) + '</td>');
+                    out.push('<td>' + (isStatusRow ? '\u2014' : esc(typ2 || '-')) + '</td>');
+                    out.push('<td><i>' + (isStatusRow ? esc(it2.note || '\u2014') : esc(it2.title || '')) + '</i></td>');
                     out.push('<td>' + esc(it2.state || '-') + '</td>');
                     out.push('<td>' + esc(it2.severity || '-') + '</td>');
                     var priCell2 = it2.priority ? '<span class="badge priority-' + it2.priority + '">P' + it2.priority + '</span>' : '—';
