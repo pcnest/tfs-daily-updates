@@ -1259,6 +1259,12 @@ function buildBaseUrl(req) {
 // --- PORT & LISTEN ---
 app.get('/health', (_req, res) => res.sendStatus(200)); // keep this instant & dependency-free
 
+// App version (read once at startup)
+const { version: APP_VERSION } = JSON.parse(
+  fs.readFileSync(new URL('./package.json', import.meta.url)),
+);
+app.get('/version', (_req, res) => res.json({ version: APP_VERSION }));
+
 // Optional readiness endpoint that checks DB and other deps
 app.get('/ready', async (_req, res) => {
   try {

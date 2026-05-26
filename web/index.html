@@ -969,7 +969,7 @@
     <header class="card">
       <div class="toolbar" style="justify-content: space-between;">
         <div>
-          <h1>TFS Daily Updates — v.1</h1>
+          <h1>TFS Daily Updates — <span id="app-version">v.1</span></h1>
 
           <p><span class="badge">BETA</span> A lightweight ledger of daily ticket progress to spot blockers and track
             momentum.</p>
@@ -4418,6 +4418,12 @@
       document.addEventListener('DOMContentLoaded', function () {
         restoreReportInputs();
         updateEmailBtnDisabled();
+
+        // Display app version
+        fetch((API || location.origin) + '/version')
+          .then(function (r) { return r.json(); })
+          .then(function (d) { var el = document.getElementById('app-version'); if (el) el.textContent = 'v' + d.version; })
+          .catch(function () { });
 
         // if snapDev exists already, persist on change (covers devs who become PMs mid-session)
         var sd = byId('snapDev'); if (sd) sd.addEventListener('change', saveReportInputs);
