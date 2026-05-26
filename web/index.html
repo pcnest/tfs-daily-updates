@@ -1123,7 +1123,7 @@
       <div class="section-grid">
         <div class="manager-tab-panel" data-manager-panel="daily" data-manager-roles="pm,admin">
           <!-- (1) Pre-Meeting Updates -->
-          <section id="preMeetingSection" class="card thin" aria-labelledby="preHeader">
+          <section id="preMeetingSection" aria-labelledby="preHeader">
             <div class="row">
               <h3 id="preHeader" style="margin:0">Pre-Meeting Updates</h3>
               <div class="toolbar right">
@@ -1135,7 +1135,7 @@
           </section>
 
           <!-- (2) Who hasn't updated yet -->
-          <section id="missingSection" class="card thin" aria-labelledby="missingHeader">
+          <section id="missingSection" aria-labelledby="missingHeader">
             <h3 id="missingHeader">Who hasn't updated yet</h3>
             <div id="missing"></div>
             <div class="toolbar">
@@ -1144,7 +1144,7 @@
           </section>
         </div>
         <!-- (2b) Stale In-Progress Items -->
-        <section class="card thin" id="staleCard" data-manager-panel="risks" data-manager-roles="pm,admin,lead"
+        <section id="staleCard" data-manager-panel="risks" data-manager-roles="pm,admin,lead"
           aria-labelledby="staleHeader">
           <div class="row">
             <h3 id="staleHeader" style="margin:0">Stale In-Progress <small class="badge muted"
@@ -1158,7 +1158,7 @@
         </section>
         <!-- (3) Top performers (Admin-only) -->
         <div class="manager-tab-panel" data-manager-panel="performance" data-manager-roles="admin">
-          <section class="card thin" id="topDevsCard" aria-labelledby="topDevsHeader">
+          <section id="topDevsCard" aria-labelledby="topDevsHeader">
             <div class="row">
               <h3 id="topDevsHeader" style="margin:0;">Top performers (last 4 weeks or custom range)</h3>
               <div class="toolbar right">
@@ -1209,7 +1209,7 @@
           </section>
 
           <!-- Bonus Eligibility Audit Log (Admin-only) -->
-          <section class="card thin" id="bonusAuditCard" aria-labelledby="bonusAuditHeader">
+          <section id="bonusAuditCard" aria-labelledby="bonusAuditHeader">
             <div class="row">
               <h3 id="bonusAuditHeader" style="margin:0;">Bonus Eligibility Audit Log</h3>
               <div class="toolbar right">
@@ -1243,7 +1243,7 @@
         </div>
 
         <!-- Report -->
-        <section class="card thin" data-manager-panel="reports" data-manager-roles="pm,admin,lead"
+        <section data-manager-panel="reports" data-manager-roles="pm,admin,lead"
           aria-labelledby="reportsHeader">
           <div class="row">
             <h3 id="reportsHeader" style="margin:0; max-width: fit-content;">Reports</h3>
@@ -1307,7 +1307,7 @@
         </section>
 
         <!-- (5) Blockers radar -->
-        <section id="blockersSection" class="card thin" data-manager-panel="risks" data-manager-roles="pm,admin"
+        <section id="blockersSection" data-manager-panel="risks" data-manager-roles="pm,admin"
           aria-labelledby="blockersHeader">
           <div class="row">
             <h3 id="blockersHeader" style="margin:0">Blockers Radar</h3>
@@ -1335,7 +1335,7 @@
               </thead>
               <tbody></tbody>
             </table>
-            <div id="triagePanel" class="card thin hidden" aria-labelledby="triageHeader" style="margin-top:12px;">
+            <div id="triagePanel" class="hidden" aria-labelledby="triageHeader" style="margin-top:12px;">
               <h3 id="triageHeader" style="margin:0">AI Triage — prioritized next steps</h3>
               <ol id="triage-list" style="margin-top:10px;"></ol>
             </div>
