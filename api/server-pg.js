@@ -7754,7 +7754,7 @@ app.get('/api/gen/qa-ts-users', requireGenSyncKey, async (req, res) => {
       JOIN   tfs_users tu ON lower(tu.email) = lower(u.email)
       WHERE  lower(u.team) IN ('qa', 'ts')
         AND  u.role NOT IN ('pm', 'admin')
-        AND  tu.active = true
+        AND  tu.active IS NOT FALSE
       ORDER BY tu.display_name
     `);
     res.json({ users: rows });
