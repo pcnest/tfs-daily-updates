@@ -8256,9 +8256,9 @@ pool
     priority          int,
     effort            numeric,
     activity          text,
-      changed_by        text,
-      last_seen_at      timestamptz,
-      deleted           boolean default false
+    changed_by        text,
+    last_seen_at      timestamptz,
+    deleted           boolean default false
   )
 `,
   )
@@ -8274,6 +8274,8 @@ pool
   .query(`ALTER TABLE gen_task_items ADD COLUMN IF NOT EXISTS changed_by text`)
   .catch((e) => {
     console.error('[boot] gen_task_items migrate changed_by failed:', e);
+  });
+
 pool
   .query(
     `
