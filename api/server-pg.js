@@ -1345,12 +1345,21 @@ app.post('/api/auth/signup', async (req, res) => {
   const displayName = chk.rows[0]?.display_name || '';
   const lower = lowerEmail;
   try {
+    // Check if the email is already registered — reject rather than silently
+    // overwrite, which would allow account takeover by anyone with a valid TFS email.
+    const existing = await pool.query(
+      'select id from users where email=$1 limit 1',
+      [lower],
+    );
+    if (existing.rowCount > 0) {
+      return res
+        .status(409)
+        .json({ error: 'an account with this email already exists' });
+    }
+
     await pool.query(
       `insert into users (id, email, name, pw)
-   values (gen_random_uuid(), $1, $2, $3)
-   on conflict (email) do update
-     set name = excluded.name,
-         pw   = excluded.pw`,
+   values (gen_random_uuid(), $1, $2, $3)`,
       [lower, displayName, hashPassword(password)],
     );
 
