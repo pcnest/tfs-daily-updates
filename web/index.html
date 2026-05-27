@@ -1952,7 +1952,14 @@
         var pw = byId("loginPw").value;
         setStatus("loginStatus", "Signing up...");
         req('POST', (API || location.origin) + "/api/auth/signup", JSON.stringify({ email: email, password: pw }), { "Content-Type": "application/json" })
-          .then(function (js) { if (js.error) setStatus("loginStatus", js.error, false); else setStatus("loginStatus", "Account created. Please login."); })
+          .then(function (js) {
+            if (js.error) { setStatus("loginStatus", js.error, false); return; }
+            if (js.pendingVerification) {
+              setStatus("loginStatus", "Account created. Check your email for a verification link.");
+            } else {
+              setStatus("loginStatus", "Account created. Please login.");
+            }
+          })
           .catch(function () { setStatus("loginStatus", "Network error", false); });
       }
 
@@ -4494,6 +4501,15 @@
       document.addEventListener('DOMContentLoaded', function () {
         restoreReportInputs();
         updateEmailBtnDisabled();
+
+        // Show success message when redirected back after email verification
+        try {
+          var qs = new URLSearchParams(location.search);
+          if (qs.get('verified') === '1') {
+            setStatus('loginStatus', 'Email verified! You can now log in.');
+            history.replaceState(null, '', location.pathname);
+          }
+        } catch (_) { }
 
         // Display app version
         fetch((API || location.origin) + '/version')

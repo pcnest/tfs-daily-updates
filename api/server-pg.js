@@ -8,6 +8,7 @@ import fs from 'fs';
 import nodemailer from 'nodemailer';
 import { Pool } from 'pg';
 import OpenAI from 'openai';
+import { rateLimit } from 'express-rate-limit';
 
 // Load environment
 dotenv.config();
@@ -88,6 +89,29 @@ const PORT = process.env.PORT || 8080;
 app.use(cors());
 // Bump JSON body limit to handle larger sync batches without 502/413
 app.use(express.json({ limit: '10mb' }));
+
+// --- rate limiters for auth endpoints ---
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'too many attempts, please try again later' },
+});
+const signupLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'too many sign-up attempts, please try again later' },
+});
+const resendVerifyLimiter = rateLimit({
+  windowMs: 10 * 60 * 1000, // 10 minutes
+  max: 3,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'too many requests, please try again later' },
+});
 
 // Small helper: normalize a comma/space separated list
 function normalizeEmails(value) {
@@ -1308,10 +1332,17 @@ app.get('/diag/puppeteer', async (req, res) => {
 });
 
 // --- auth: signup/login/me
-app.post('/api/auth/signup', async (req, res) => {
+app.post('/api/auth/signup', signupLimiter, async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password)
     return res.status(400).json({ error: 'email and password required' });
+
+  // Enforce minimum password length (NIST SP 800-63B)
+  const trimmedPw = String(password).trim();
+  if (trimmedPw.length < 8)
+    return res
+      .status(400)
+      .json({ error: 'password must be at least 8 characters' });
 
   // 1) optional: quick domain allowlist (set ALLOWED_DOMAIN=company.com in Render)
   if (!emailDomainOk(email)) {
@@ -1360,34 +1391,75 @@ app.post('/api/auth/signup', async (req, res) => {
     await pool.query(
       `insert into users (id, email, name, pw)
    values (gen_random_uuid(), $1, $2, $3)`,
-      [lower, displayName, hashPassword(password)],
+      [lower, displayName, hashPassword(trimmedPw)],
     );
 
-    res.json({ status: 'ok' });
+    // Issue email verification token
+    const verifyToken = crypto.randomBytes(24).toString('hex');
+    await pool.query(
+      `UPDATE users
+       SET email_verify_token=$1, email_verify_token_expires=now() + interval '24 hours'
+       WHERE email=$2`,
+      [verifyToken, lower],
+    );
+
+    const appBase =
+      process.env.APP_URL ||
+      (req.headers.origin
+        ? req.headers.origin
+        : `${req.protocol}://${req.get('host')}`);
+    const verifyLink = `${appBase}/api/auth/verify-email?token=${verifyToken}`;
+    try {
+      await sendEmail({
+        to: lower,
+        subject: 'Verify your TFS Daily Updates account',
+        html: `<p>Hi ${escapeHtml(displayName || lower)},</p>
+<p>Please verify your email address by clicking the link below. This link expires in 24 hours.</p>
+<p><a href="${verifyLink}">${verifyLink}</a></p>
+<p>If you did not sign up, you can ignore this email.</p>`,
+      });
+    } catch (mailErr) {
+      console.error('[signup] verification email failed:', mailErr.message);
+      // Non-fatal: account is created; user can request a resend
+    }
+
+    res.json({ status: 'ok', pendingVerification: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
   }
 });
 
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', loginLimiter, async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password)
     return res.status(400).json({ error: 'email and password required' });
   const lower = String(email).toLowerCase().trim();
   try {
     const u = await pool.query(
-      'select id, email, name, pw, role from users where email=$1',
+      'select id, email, name, pw, role, email_verified from users where email=$1',
       [lower],
     );
 
     if (u.rowCount === 0 || !verifyPassword(password, u.rows[0].pw)) {
       return res.status(401).json({ error: 'invalid credentials' });
     }
+    if (!u.rows[0].email_verified) {
+      return res
+        .status(403)
+        .json({ error: 'please verify your email before logging in' });
+    }
     const token = newToken();
     await pool.query(
       'insert into sessions(token, email, user_id) values ($1, $2, $3)',
       [token, lower, u.rows[0].id],
     );
+    // Lazy cleanup: remove expired sessions for this user (fire-and-forget)
+    pool
+      .query(
+        `DELETE FROM sessions WHERE email=$1 AND created_at < now() - interval '30 days'`,
+        [lower],
+      )
+      .catch(() => {});
 
     res.json({
       status: 'ok',
@@ -1407,11 +1479,12 @@ async function requireAuth(req, res, next) {
   if (!token) return res.status(401).json({ error: 'missing token' });
   try {
     const s = await pool.query(
-      'select email, user_id from sessions where token=$1',
+      `SELECT email, user_id FROM sessions
+       WHERE token=$1 AND created_at > now() - interval '30 days'`,
       [token],
     );
     if (s.rowCount === 0)
-      return res.status(401).json({ error: 'invalid token' });
+      return res.status(401).json({ error: 'session expired or invalid' });
 
     req.userEmail = s.rows[0].email;
     req.userId = s.rows[0].user_id || null;
@@ -1471,6 +1544,92 @@ app.post('/api/auth/logout_all', requireAuth, async (req, res) => {
   await pool.query('delete from sessions where email=$1', [req.userEmail]);
   res.json({ status: 'ok' });
 });
+
+// --- email verification ---
+app.get('/api/auth/verify-email', async (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(400).json({ error: 'missing token' });
+  try {
+    const r = await pool.query(
+      `SELECT email FROM users
+       WHERE email_verify_token=$1 AND email_verify_token_expires > now()
+       LIMIT 1`,
+      [String(token)],
+    );
+    if (r.rowCount === 0)
+      return res
+        .status(400)
+        .json({ error: 'verification link is invalid or has expired' });
+
+    const email = r.rows[0].email;
+    await pool.query(
+      `UPDATE users
+       SET email_verified=true, email_verify_token=NULL, email_verify_token_expires=NULL
+       WHERE email=$1`,
+      [email],
+    );
+
+    const appUrl = process.env.APP_URL || '/';
+    return res.redirect(302, `${appUrl}?verified=1`);
+  } catch (e) {
+    res.status(500).json({ error: 'internal_error' });
+  }
+});
+
+// --- resend verification email ---
+app.post(
+  '/api/auth/resend-verification',
+  resendVerifyLimiter,
+  async (req, res) => {
+    const { email } = req.body || {};
+    // Always return the same response to avoid leaking whether an email is registered
+    const ok = () =>
+      res.json({
+        status: 'ok',
+        message:
+          'If that email is registered and unverified, a new link has been sent.',
+      });
+
+    if (!email) return ok();
+    const lower = String(email).toLowerCase().trim();
+    try {
+      const u = await pool.query(
+        'SELECT name, email_verified FROM users WHERE email=$1 LIMIT 1',
+        [lower],
+      );
+      if (u.rowCount === 0 || u.rows[0].email_verified) return ok();
+
+      const verifyToken = crypto.randomBytes(24).toString('hex');
+      await pool.query(
+        `UPDATE users
+       SET email_verify_token=$1, email_verify_token_expires=now() + interval '24 hours'
+       WHERE email=$2`,
+        [verifyToken, lower],
+      );
+
+      const appBase =
+        process.env.APP_URL ||
+        (req.headers.origin
+          ? req.headers.origin
+          : `${req.protocol}://${req.get('host')}`);
+      const verifyLink = `${appBase}/api/auth/verify-email?token=${verifyToken}`;
+      try {
+        await sendEmail({
+          to: lower,
+          subject: 'Verify your TFS Daily Updates account',
+          html: `<p>Hi ${escapeHtml(u.rows[0].name || lower)},</p>
+<p>Here is your new verification link. It expires in 24 hours.</p>
+<p><a href="${verifyLink}">${verifyLink}</a></p>`,
+        });
+      } catch (mailErr) {
+        console.error('[resend-verify] email failed:', mailErr.message);
+      }
+      return ok();
+    } catch (e) {
+      res.status(500).json({ error: 'internal_error' });
+    }
+  },
+);
 
 // POST /api/sync/tickets     body: { source, tickets: [...], pushedAt, presentIds: [...] }
 app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
@@ -8346,3 +8505,50 @@ pool
   .catch((e) => {
     console.error('[boot] 900_no_tickets seed failed:', e);
   });
+
+// --- boot: ensure sessions.created_at exists (for 30-day expiry) ---
+pool
+  .query(
+    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()`,
+  )
+  .then(() => console.log('[boot] sessions.created_at column ready'))
+  .catch((e) =>
+    console.error('[boot] sessions.created_at migration failed:', e),
+  );
+
+// --- boot: ensure users email verification columns exist ---
+pool
+  .query(
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT false`,
+  )
+  .then(() =>
+    // Mark all existing users as verified so they are not locked out
+    pool.query(
+      `UPDATE users SET email_verified = true WHERE email_verified = false`,
+    ),
+  )
+  .then(() => console.log('[boot] users.email_verified column ready'))
+  .catch((e) =>
+    console.error('[boot] users.email_verified migration failed:', e),
+  );
+
+pool
+  .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verify_token text`)
+  .then(() => console.log('[boot] users.email_verify_token column ready'))
+  .catch((e) =>
+    console.error('[boot] users.email_verify_token migration failed:', e),
+  );
+
+pool
+  .query(
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verify_token_expires timestamptz`,
+  )
+  .then(() =>
+    console.log('[boot] users.email_verify_token_expires column ready'),
+  )
+  .catch((e) =>
+    console.error(
+      '[boot] users.email_verify_token_expires migration failed:',
+      e,
+    ),
+  );
