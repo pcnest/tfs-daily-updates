@@ -8519,8 +8519,8 @@ pool
 // --- boot: seed 900_no_tickets progress code ---
 pool
   .query(
-    `insert into progress_codes (code, description, require_note, active)
-     values ('900_no_tickets', 'No active tickets — working on non-ticket tasks', true, true)
+    `insert into progress_codes (code, label, family, require_note, active, sort_order)
+     values ('900_no_tickets', 'No active tickets — working on non-ticket tasks', '900', true, true, 900)
      on conflict (code) do nothing`,
   )
   .then(() => {
