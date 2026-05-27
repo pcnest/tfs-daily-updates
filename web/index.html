@@ -1339,8 +1339,8 @@
             </table>
           </div>
 
-          <!-- QA Tasks sub-section -->
-          <section aria-labelledby="qaRptHeader" style="margin-top:24px;">
+          <!-- QA Tasks sub-section (admin only) -->
+          <section aria-labelledby="qaRptHeader" data-admin-only style="margin-top:24px;">
             <h4 id="qaRptHeader" style="margin:0 0 8px 0;">QA Tasks</h4>
             <div class="toolbar" style="margin-bottom:8px;flex-wrap:nowrap;">
               <label for="qaRptFrom">From:</label>
@@ -1376,8 +1376,8 @@
             </div>
           </section>
 
-          <!-- TS Tasks sub-section -->
-          <section aria-labelledby="tsRptHeader" style="margin-top:24px;">
+          <!-- TS Tasks sub-section (admin only) -->
+          <section aria-labelledby="tsRptHeader" data-admin-only style="margin-top:24px;">
             <h4 id="tsRptHeader" style="margin:0 0 8px 0;">TS Tasks</h4>
             <div class="toolbar" style="margin-bottom:8px;flex-wrap:nowrap;">
               <label for="tsRptFrom">From:</label>
@@ -1785,11 +1785,18 @@
         if (tab === 'qa-report') loadQaReport();
         if (tab === 'ts-report') loadTsReport();
         if (tab === 'reports') {
-          if (byId('qaRptDev') && !byId('qaRptDev').getAttribute('data-loaded')) {
-            loadGenTeamAssignees('qa', 'qaRptDev');
+          var isAdminRole = (role === 'admin');
+          var adminSections = document.querySelectorAll('[data-manager-panel="reports"] [data-admin-only]');
+          for (var a = 0; a < adminSections.length; a++) {
+            adminSections[a].classList.toggle('hidden', !isAdminRole);
           }
-          if (byId('tsRptDev') && !byId('tsRptDev').getAttribute('data-loaded')) {
-            loadGenTeamAssignees('ts', 'tsRptDev');
+          if (isAdminRole) {
+            if (byId('qaRptDev') && !byId('qaRptDev').getAttribute('data-loaded')) {
+              loadGenTeamAssignees('qa', 'qaRptDev');
+            }
+            if (byId('tsRptDev') && !byId('tsRptDev').getAttribute('data-loaded')) {
+              loadGenTeamAssignees('ts', 'tsRptDev');
+            }
           }
         }
       }
