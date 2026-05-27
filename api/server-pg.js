@@ -2906,19 +2906,37 @@ from pu
   }
 });
 
-
 // Last sync timestamps for each agent feed (requires auth)
 app.get('/api/sync/last', requireAuth, async (req, res) => {
   try {
+    const fmtSync = (ts) => {
+      if (!ts) return null;
+      const d = new Date(ts);
+      if (isNaN(d.getTime())) return null;
+      const parts = new Intl.DateTimeFormat('en-CA', {
+        timeZone: APP_TZ,
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).formatToParts(d);
+      const p = Object.fromEntries(parts.map((x) => [x.type, x.value]));
+      return `${p.month}/${p.day} ${p.hour}:${p.minute}`;
+    };
     const [mainRow, qaRow, tsRow] = await Promise.all([
       pool.query(`SELECT MAX(last_seen_at) AS t FROM tickets`),
-      pool.query(`SELECT MAX(last_seen_at) AS t FROM gen_task_items WHERE lower(team)='qa'`),
-      pool.query(`SELECT MAX(last_seen_at) AS t FROM gen_task_items WHERE lower(team)='ts'`),
+      pool.query(
+        `SELECT MAX(last_seen_at) AS t FROM gen_task_items WHERE lower(team)='qa'`,
+      ),
+      pool.query(
+        `SELECT MAX(last_seen_at) AS t FROM gen_task_items WHERE lower(team)='ts'`,
+      ),
     ]);
     res.json({
-      main: mainRow.rows[0]?.t || null,
-      qa:   qaRow.rows[0]?.t   || null,
-      ts:   tsRow.rows[0]?.t   || null,
+      main_fmt: fmtSync(mainRow.rows[0]?.t),
+      qa_fmt: fmtSync(qaRow.rows[0]?.t),
+      ts_fmt: fmtSync(tsRow.rows[0]?.t),
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
