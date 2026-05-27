@@ -2906,6 +2906,25 @@ from pu
   }
 });
 
+
+// Last sync timestamps for each agent feed (requires auth)
+app.get('/api/sync/last', requireAuth, async (req, res) => {
+  try {
+    const [mainRow, qaRow, tsRow] = await Promise.all([
+      pool.query(`SELECT MAX(last_seen_at) AS t FROM tickets`),
+      pool.query(`SELECT MAX(last_seen_at) AS t FROM gen_task_items WHERE lower(team)='qa'`),
+      pool.query(`SELECT MAX(last_seen_at) AS t FROM gen_task_items WHERE lower(team)='ts'`),
+    ]);
+    res.json({
+      main: mainRow.rows[0]?.t || null,
+      qa:   qaRow.rows[0]?.t   || null,
+      ts:   tsRow.rows[0]?.t   || null,
+    });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // “No updates yet today” (PM signal)
 app.get('/api/updates/missing', requireAuth, async (req, res) => {
   // PMs only

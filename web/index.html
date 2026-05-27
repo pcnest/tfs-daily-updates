@@ -1158,9 +1158,11 @@
             aria-labelledby="preHeader missingHeader">
             <!-- (1) Pre-Meeting Updates -->
             <div id="preMeetingSection" aria-labelledby="preHeader">
-              <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+              <div
+                style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom: 1rem;">
                 <h3 id="preHeader" style="margin:0;display:flex;align-items:center;gap:10px;">Pre-Meeting Updates <span
-                    id="preMeetingDate" style="font-size:13px;font-weight:400;"></span></h3>
+                    id="preMeetingDate" style="font-size:13px;font-weight:400;"></span><span id="preLastSync"
+                    style="font-size:11px;font-weight:400;color:var(--muted);"></span></h3>
                 <div class="toolbar">
                   <button id="aiRiskToggle" class="secondary" onclick="toggleAiRisk()">AI Risk Rationale</button>
                   <span id="aiRiskStatus" class="status" role="status" aria-live="polite"></span>
@@ -1496,7 +1498,9 @@
     <section id="qaReportCard" class="card hidden" data-manager-panel="qa-report" data-manager-roles="admin"
       aria-labelledby="qaReportHeader">
       <div class="row">
-        <h3 id="qaReportHeader" style="margin:0">QA Daily Report — <span id="qaReportDate"></span></h3>
+        <h3 id="qaReportHeader" style="margin:0;display:flex;align-items:center;gap:10px;">QA Daily Report <span
+            id="qaReportDate" style="font-size:13px;font-weight:400;"></span><span id="qaLastSync"
+            style="font-size:11px;font-weight:400;color:var(--muted);"></span></h3>
         <div class="toolbar right">
           <span id="qaReportStatus" class="status" role="status" aria-live="polite"></span>
           <button onclick="loadQaReport()">Refresh</button>
@@ -1509,7 +1513,9 @@
     <section id="tsReportCard" class="card hidden" data-manager-panel="ts-report" data-manager-roles="admin"
       aria-labelledby="tsReportHeader">
       <div class="row">
-        <h3 id="tsReportHeader" style="margin:0">TS Daily Report — <span id="tsReportDate"></span></h3>
+        <h3 id="tsReportHeader" style="margin:0;display:flex;align-items:center;gap:10px;">TS Daily Report <span
+            id="tsReportDate" style="font-size:13px;font-weight:400;"></span><span id="tsLastSync"
+            style="font-size:11px;font-weight:400;color:var(--muted);"></span></h3>
         <div class="toolbar right">
           <span id="tsReportStatus" class="status" role="status" aria-live="polite"></span>
           <button onclick="loadTsReport()">Refresh</button>
@@ -3535,6 +3541,7 @@
             var dateEl = byId('preMeetingDate');
             if (dateEl) dateEl.innerHTML = '<span class="badge">' + esc(js.date || '') + '</span>';
             box.innerHTML = out.join('');
+            if (typeof loadSyncTimes === 'function') loadSyncTimes();
           });
       }
 
@@ -5577,7 +5584,7 @@
         var body = byId(bodyId);
         var dateEl = byId(dateId);
         var st = byId(statusId);
-        if (dateEl) dateEl.textContent = today;
+        if (dateEl) dateEl.innerHTML = '<span class="badge">' + esc(today) + '</span>';
         if (body) body.innerHTML = '<em>Loading…</em>';
         if (st) { st.textContent = 'Loading…'; st.className = 'status'; }
         fetch(url, { headers: { Authorization: 'Bearer ' + tok } })
@@ -5641,12 +5648,37 @@
           });
       }
 
+      function fmtSyncTime(ts) {
+        if (!ts) return '';
+        var dt = new Date(ts);
+        if (isNaN(dt.getTime())) return '';
+        var hh = dt.getHours().toString().padStart(2, '0');
+        var mm = dt.getMinutes().toString().padStart(2, '0');
+        var mo = (dt.getMonth() + 1).toString().padStart(2, '0');
+        var dd = dt.getDate().toString().padStart(2, '0');
+        return '\u00b7 Synced ' + mo + '/' + dd + ' ' + hh + ':' + mm;
+      }
+
+      function loadSyncTimes() {
+        var tok = localStorage.getItem('pocToken') || '';
+        fetch((API || location.origin) + '/api/sync/last', { headers: { Authorization: 'Bearer ' + tok } })
+          .then(function (r) { return r.json(); })
+          .then(function (d) {
+            var pre = byId('preLastSync'); if (pre) pre.textContent = fmtSyncTime(d.main);
+            var qa = byId('qaLastSync'); if (qa) qa.textContent = fmtSyncTime(d.qa);
+            var ts = byId('tsLastSync'); if (ts) ts.textContent = fmtSyncTime(d.ts);
+          })
+          .catch(function () { });
+      }
+
       function loadQaReport() {
         loadGenReportInto('qa', 'qaReportBody', 'qaReportDate', 'qaReportStatus');
+        loadSyncTimes();
       }
 
       function loadTsReport() {
         loadGenReportInto('ts', 'tsReportBody', 'tsReportDate', 'tsReportStatus');
+        loadSyncTimes();
       }
 
       window.loadGenConfig = loadGenConfig;
@@ -5655,6 +5687,7 @@
       window.loadGenReport = loadGenReport;
       window.loadQaReport = loadQaReport;
       window.loadTsReport = loadTsReport;
+      window.loadSyncTimes = loadSyncTimes;
       window.loadReportGenSection = loadReportGenSection;
       window.loadGenTeamAssignees = loadGenTeamAssignees;
 
