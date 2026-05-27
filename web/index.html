@@ -2701,7 +2701,7 @@
         fetch((API || location.origin) + '/api/progress', {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + tkn, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ticketId: '0', code: '900_no_tickets', note: note })
+          body: JSON.stringify({ ticketId: '0', code: '900_01', note: note })
         })
           .then(function (r) { return r.json(); })
           .then(function (js) {
@@ -3330,10 +3330,10 @@
 
                     out.push('<tr>');
                     var isStatusRow = String(it2.ticketId) === '0';
-                    out.push('<td>' + (isStatusRow ? '<span class="badge">no tickets</span>' : esc(it2.ticketId)) + '</td>');
+                    out.push('<td>' + (isStatusRow ? '' : esc(it2.ticketId)) + '</td>');
                     out.push('<td>' + (isStatusRow ? '\u2014' : esc(typ2 || '-')) + '</td>');
-                    out.push('<td><i>' + (isStatusRow ? esc(it2.note || '\u2014') : esc(it2.title || '')) + '</i></td>');
-                    out.push('<td>' + esc(it2.state || '-') + '</td>');
+                    out.push('<td><i>' + (isStatusRow ? 'No Active Tickets Today' : esc(it2.title || '')) + '</i></td>');
+                    out.push('<td>' + (isStatusRow ? '' : esc(it2.state || '-')) + '</td>');
                     out.push('<td>' + esc(it2.severity || '-') + '</td>');
                     var priCell2 = it2.priority ? '<span class="badge priority-' + it2.priority + '">P' + it2.priority + '</span>' : '—';
                     out.push('<td>' + priCell2 + '</td>');

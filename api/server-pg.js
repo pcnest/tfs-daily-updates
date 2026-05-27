@@ -8517,18 +8517,24 @@ pool
     console.error('[boot] gen_enabled_teams meta seed failed:', e);
   });
 
-// --- boot: seed 900_no_tickets progress code ---
+// --- boot: seed/migrate 900_01 progress code (rename from 900_no_tickets if present) ---
 pool
   .query(
-    `insert into progress_codes (code, label, family, require_note, active, sort_order)
-     values ('900_no_tickets', 'No active tickets — working on non-ticket tasks', '900', true, true, 900)
-     on conflict (code) do nothing`,
+    `UPDATE progress_codes SET code = '900_01' WHERE code = '900_no_tickets';
+     UPDATE progress_updates SET code = '900_01' WHERE code = '900_no_tickets';`,
+  )
+  .then(() =>
+    pool.query(
+      `insert into progress_codes (code, label, family, require_note, active, sort_order)
+       values ('900_01', 'No active tickets — working on non-ticket tasks', '900', true, true, 900)
+       on conflict (code) do nothing`,
+    ),
   )
   .then(() => {
-    console.log('[boot] 900_no_tickets progress code is ready');
+    console.log('[boot] 900_01 progress code is ready');
   })
   .catch((e) => {
-    console.error('[boot] 900_no_tickets seed failed:', e);
+    console.error('[boot] 900_01 seed failed:', e);
   });
 
 // --- boot: seed sentinel ticket id='0' (satisfies FK for 900_no_tickets submissions) ---
