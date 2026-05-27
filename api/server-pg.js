@@ -2919,6 +2919,7 @@ app.get('/api/updates/missing', requireAuth, async (req, res) => {
   const date = await todayLocal(pool);
   // All devs who have an account…
   // …minus those who posted at least one update today.
+  // Also compute per-dev ticket counts: sprint total, flagged, active (codes 100-400).
   const sql = `
     with devs as (
       select email, coalesce(nullif(name,''), email) as label
@@ -2926,10 +2927,63 @@ app.get('/api/updates/missing', requireAuth, async (req, res) => {
     ),
     posters as (
       select distinct email from progress_updates where date=$1
+    ),
+    cur_iter as (
+      select value as iteration_path from meta where key='current_iteration' limit 1
+    ),
+    sprint_base as (
+      select t.id, t.assigned_to
+      from tickets t
+      cross join cur_iter ci
+      where coalesce(t.deleted, false) = false
+        and t.iteration_path = ci.iteration_path
+    ),
+    latest_sprint_code as (
+      select distinct on (sb.id)
+        sb.id,
+        sb.assigned_to,
+        pu.code
+      from sprint_base sb
+      join progress_updates pu on pu.ticket_id = sb.id
+      order by sb.id, pu.at desc
+    ),
+    sprint_counts as (
+      select d.email,
+        count(sb.id) as sprint_count
+      from devs d
+      left join sprint_base sb
+        on lower(sb.assigned_to) like '%' || lower(split_part(d.email,'@',1)) || '%'
+      group by d.email
+    ),
+    flagged_counts as (
+      select d.email,
+        count(tf.ticket_id) as flagged_count
+      from devs d
+      left join tickets t
+        on lower(t.assigned_to) like '%' || lower(split_part(d.email,'@',1)) || '%'
+        and coalesce(t.deleted, false) = false
+      left join ticket_flags tf on tf.ticket_id = t.id
+      group by d.email
+    ),
+    active_counts as (
+      select d.email,
+        count(lc.id) as active_count
+      from devs d
+      left join latest_sprint_code lc
+        on lower(lc.assigned_to) like '%' || lower(split_part(d.email,'@',1)) || '%'
+        and (lc.code like '100%' or lc.code like '200%'
+             or lc.code like '300%' or lc.code like '400%')
+      group by d.email
     )
-    select d.email, d.label
+    select d.email, d.label,
+      coalesce(sc.sprint_count, 0)::int as "sprintCount",
+      coalesce(fc.flagged_count, 0)::int as "flaggedCount",
+      coalesce(ac.active_count, 0)::int as "activeCount"
     from devs d
     left join posters p on p.email = d.email
+    left join sprint_counts sc on sc.email = d.email
+    left join flagged_counts fc on fc.email = d.email
+    left join active_counts ac on ac.email = d.email
     where p.email is null
     order by d.email;
   `;

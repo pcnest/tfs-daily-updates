@@ -346,7 +346,7 @@
       min-width: 0;
     }
 
-    .dev-tab-section + .dev-tab-section {
+    .dev-tab-section+.dev-tab-section {
       border-top: 1px solid var(--border);
       padding-top: 16px;
     }
@@ -3805,7 +3805,16 @@
             if (js.error) { box.innerHTML = '<p class="status err">' + esc(js.error) + '</p>'; return; }
             if (!js.missing || js.missing.length === 0) { box.innerHTML = '<p><span class="badge">' + esc(js.date || "") + '</span> — everyone has updated 🎉</p>'; return; }
             var html = '<p><span class="badge">' + esc(js.date || "") + '</span> — ' + js.count + ' dev(s) with no update</p><ul>';
-            for (var i = 0; i < js.missing.length; i++) { var m = js.missing[i]; html += '<li>' + esc(m.label) + ' <small>(' + esc(m.email) + ')</small></li>'; }
+            for (var i = 0; i < js.missing.length; i++) {
+              var m = js.missing[i];
+              var sprintBadge = '<span class="badge muted" title="Tickets in current sprint">Sprint: ' + (m.sprintCount || 0) + '</span>';
+              var flagCls = m.flaggedCount > 0 ? 'warning' : 'muted';
+              var flagBadge = '<span class="badge ' + flagCls + '" title="Flagged tickets">\u2691 ' + (m.flaggedCount || 0) + '</span>';
+              var activeCls = m.activeCount > 0 ? 'state-progress' : 'muted';
+              var activeBadge = '<span class="badge ' + activeCls + '" title="Sprint tickets with last code 100\u2013400 (in-progress)">Active: ' + (m.activeCount || 0) + '</span>';
+              html += '<li style="margin-bottom:6px">' + esc(m.label) + ' <small>(' + esc(m.email) + ')</small>'
+                + '&nbsp;&nbsp;' + sprintBadge + ' ' + flagBadge + ' ' + activeBadge + '</li>';
+            }
             html += '</ul>';
             box.innerHTML = html;
           });
