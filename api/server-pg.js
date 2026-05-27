@@ -85,6 +85,7 @@ function buildMailTransport() {
 
 // Express app + basic middleware
 const app = express();
+app.set('trust proxy', 1); // Render sits behind a reverse proxy; trust one hop for X-Forwarded-For
 const PORT = process.env.PORT || 8080;
 app.use(cors());
 // Bump JSON body limit to handle larger sync batches without 502/413
