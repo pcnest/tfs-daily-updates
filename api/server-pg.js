@@ -2055,7 +2055,8 @@ function assignedIdentityParts(v) {
 
   const m = raw.match(/^(.*?)\s*<([^>]+)>$/);
   const identity = (m ? String(m[2] || '') : raw).trim();
-  const email = (identity.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [])[0] || '';
+  const email =
+    (identity.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [])[0] || '';
 
   return {
     raw,
@@ -8041,8 +8042,8 @@ app.post('/api/gen/sync', requireGenSyncKey, async (req, res) => {
         `INSERT INTO gen_task_items
            (id, parent_id, type, title, state, assigned_to, team,
             area_path, iteration_path, created_date, changed_date,
-            state_change_date, priority, effort, activity, changed_by, last_seen_at, deleted)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,false)
+            state_change_date, priority, effort, remaining_work, activity, changed_by, last_seen_at, deleted)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,false)
          ON CONFLICT (id) DO UPDATE SET
            parent_id         = EXCLUDED.parent_id,
            type              = EXCLUDED.type,
@@ -8056,6 +8057,7 @@ app.post('/api/gen/sync', requireGenSyncKey, async (req, res) => {
            state_change_date = EXCLUDED.state_change_date,
            priority          = EXCLUDED.priority,
            effort            = EXCLUDED.effort,
+           remaining_work    = EXCLUDED.remaining_work,
            activity          = EXCLUDED.activity,
            changed_by        = EXCLUDED.changed_by,
            last_seen_at      = EXCLUDED.last_seen_at,
@@ -8075,6 +8077,7 @@ app.post('/api/gen/sync', requireGenSyncKey, async (req, res) => {
           t.stateChangeDate || null,
           Number.isFinite(+t.priority) ? +t.priority : null,
           Number.isFinite(+t.effort) ? +t.effort : null,
+          Number.isFinite(+t.remainingWork) ? +t.remainingWork : null,
           t.activity || null,
           t.changedBy || null,
           seenAt,
@@ -8177,7 +8180,7 @@ app.get('/api/gen/tickets', requireAuth, async (req, res) => {
              p.priority        AS parent_priority,
              p.changed_date    AS parent_changed_date,
              t.id, t.type, t.title, t.state,
-             t.assigned_to, t.team, t.activity, t.effort,
+             t.assigned_to, t.team, t.activity, t.effort, t.remaining_work,
              t.created_date, t.changed_date, t.state_change_date, t.priority
       FROM   gen_tickets   p
       JOIN   gen_task_items t ON t.parent_id = p.id
@@ -8211,6 +8214,7 @@ app.get('/api/gen/tickets', requireAuth, async (req, res) => {
         team: row.team,
         activity: row.activity,
         effort: row.effort,
+        remaining_work: row.remaining_work,
         created_date: row.created_date,
         changed_date: row.changed_date,
         state_change_date: row.state_change_date,
@@ -8546,6 +8550,15 @@ pool
   .query(`ALTER TABLE gen_task_items ADD COLUMN IF NOT EXISTS changed_by text`)
   .catch((e) => {
     console.error('[boot] gen_task_items migrate changed_by failed:', e);
+  });
+
+// --- boot: migrate gen_task_items — add remaining_work if missing ---
+pool
+  .query(
+    `ALTER TABLE gen_task_items ADD COLUMN IF NOT EXISTS remaining_work numeric`,
+  )
+  .catch((e) => {
+    console.error('[boot] gen_task_items migrate remaining_work failed:', e);
   });
 
 pool
