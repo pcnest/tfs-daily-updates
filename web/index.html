@@ -1497,11 +1497,12 @@
     <!-- QA Daily Report Tab Panel (Admin-only) -->
     <section id="qaReportCard" class="card hidden" data-manager-panel="qa-report" data-manager-roles="admin"
       aria-labelledby="qaReportHeader">
-      <div class="row">
+      <div
+        style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
         <h3 id="qaReportHeader" style="margin:0;display:flex;align-items:center;gap:10px;">QA Daily Report <span
             id="qaReportDate" style="font-size:13px;font-weight:400;"></span><span id="qaLastSync"
             style="font-size:11px;font-weight:400;color:var(--muted);"></span></h3>
-        <div class="toolbar right">
+        <div class="toolbar">
           <span id="qaReportStatus" class="status" role="status" aria-live="polite"></span>
           <button onclick="loadQaReport()">Refresh</button>
         </div>
@@ -1512,11 +1513,12 @@
     <!-- TS Daily Report Tab Panel (Admin-only) -->
     <section id="tsReportCard" class="card hidden" data-manager-panel="ts-report" data-manager-roles="admin"
       aria-labelledby="tsReportHeader">
-      <div class="row">
+      <div
+        style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
         <h3 id="tsReportHeader" style="margin:0;display:flex;align-items:center;gap:10px;">TS Daily Report <span
             id="tsReportDate" style="font-size:13px;font-weight:400;"></span><span id="tsLastSync"
             style="font-size:11px;font-weight:400;color:var(--muted);"></span></h3>
-        <div class="toolbar right">
+        <div class="toolbar">
           <span id="tsReportStatus" class="status" role="status" aria-live="polite"></span>
           <button onclick="loadTsReport()">Refresh</button>
         </div>
