@@ -1385,13 +1385,12 @@
               <th style="text-align:left;padding:4px 8px;">Title</th>
               <th style="width:90px;padding:4px 8px;">State</th>
               <th style="width:140px;padding:4px 8px;">Assigned To</th>
-              <th style="width:70px;padding:4px 8px;">Effort</th>
               <th style="width:80px;padding:4px 8px;">Remaining</th>
             </tr>
           </thead>
           <tbody id="genTicketsTbody">
             <tr>
-              <td colspan="7" style="text-align:center;padding:1rem;color:#888"></td>
+              <td colspan="6" style="text-align:center;padding:1rem;color:#888"></td>
             </tr>
           </tbody>
         </table>
@@ -5217,7 +5216,7 @@
         var st = byId('genStatus');
         var tbody = byId('genTicketsTbody');
         if (st) { st.textContent = 'Loading...'; st.className = 'status'; }
-        if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:1rem">Loading…</td></tr>';
+        if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:1rem">Loading…</td></tr>';
         var tok = localStorage.getItem('pocToken') || '';
         var url = (API || location.origin) + '/api/gen/tickets' + (team ? '?team=' + encodeURIComponent(team) : '');
         fetch(url, { headers: { Authorization: 'Bearer ' + tok } })
@@ -5227,7 +5226,7 @@
             var items = data.items || [];
             if (!tbody) return;
             if (items.length === 0) {
-              tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:1rem;color:#888">No tasks found for this team in the current iteration.</td></tr>';
+              tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:1rem;color:#888">No tasks found for this team in the current iteration.</td></tr>';
               if (st) { st.textContent = ''; }
               return;
             }
@@ -5238,7 +5237,7 @@
                 '<td style="padding:4px 8px;color:#666;font-size:0.8rem">' + esc(parent.type || '') + '</td>' +
                 '<td style="padding:4px 8px;font-weight:600">' + esc(parent.title || '') + '</td>' +
                 '<td style="padding:4px 8px">' + esc(parent.state || '') + '</td>' +
-                '<td colspan="3" style="padding:4px 8px;color:#666;font-size:0.8rem">' + esc(parent.iteration_path || '') + '</td>' +
+                '<td colspan="2" style="padding:4px 8px;color:#666;font-size:0.8rem">' + esc(parent.iteration_path || '') + '</td>' +
                 '</tr>';
               (parent.tasks || []).forEach(function (t) {
                 rows += '<tr>' +
@@ -5247,7 +5246,6 @@
                   '<td style="padding:3px 8px 3px 24px">' + esc(t.title || '') + '</td>' +
                   '<td style="padding:3px 8px">' + esc(t.state || '') + '</td>' +
                   '<td style="padding:3px 8px">' + esc(t.assigned_to || '') + '</td>' +
-                  '<td style="padding:3px 8px;text-align:right">' + (t.effort != null ? t.effort : '') + '</td>' +
                   '<td style="padding:3px 8px;text-align:right">' + (t.remaining_work != null ? t.remaining_work : '') + '</td>' +
                   '</tr>';
               });
@@ -5256,7 +5254,7 @@
             if (st) { st.textContent = items.length + ' parent(s)'; st.className = 'status ok'; }
           })
           .catch(function (e) {
-            if (tbody) tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;padding:1rem;color:red">Error: ' + esc(e.message) + '</td></tr>';
+            if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:1rem;color:red">Error: ' + esc(e.message) + '</td></tr>';
             if (st) { st.textContent = 'Error'; st.className = 'status err'; }
           });
       }
@@ -5307,6 +5305,7 @@
                 '<th style="width:110px">Type</th>' +
                 '<th style="width:36%">Parent</th>' +
                 '<th>Task</th>' +
+                '<th style="width:80px">Remaining</th>' +
                 '<th style="width:100px">State</th>' +
                 '</tr></thead><tbody>';
               tasks.forEach(function (t) {
@@ -5316,6 +5315,7 @@
                   '<td>' + esc(t.task_title || '') +
                   (t.note ? ' <em style="color:#666">— ' + esc(t.note) + '</em>' : '') +
                   '</td>' +
+                  '<td style="text-align:right">' + (t.remaining_work != null ? t.remaining_work : '') + '</td>' +
                   '<td><span class="badge ' + genStateBadgeClass(t.state) + '">' + esc(t.state || '') + '</span></td>' +
                   '</tr>';
               });
