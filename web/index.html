@@ -3,7 +3,7 @@
 
 <head>
   <meta charset="utf-8" />
-  <title>TFS Daily Updates — v.1</title>
+  <title>TFS Daily Updates</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <style>
     :root {
@@ -969,7 +969,7 @@
     <header class="card">
       <div class="toolbar" style="justify-content: space-between;">
         <div>
-          <h1>TFS Daily Updates — <span id="app-version">v.1</span></h1>
+          <h1>TFS Daily Updates — <span id="app-version"></span></h1>
 
           <p><span class="badge">BETA</span> A lightweight ledger of daily ticket progress to spot blockers and track
             momentum.</p>
@@ -1065,10 +1065,8 @@
 
     <section id="managerTabsCard" class="card hidden manager-tabs-card" aria-label="Manager navigation">
       <nav id="managerTabs" role="tablist" aria-label="Manager sections">
-        <button type="button" class="secondary" data-manager-tab="daily" role="tab"
-          onclick="switchManagerTab('daily')">Daily</button>
-        <button type="button" class="secondary" data-manager-tab="tickets" role="tab"
-          onclick="switchManagerTab('tickets')">Tickets</button>
+        <button type="button" class="secondary" data-manager-tab="dev" role="tab"
+          onclick="switchManagerTab('dev')">Dev</button>
         <button type="button" class="secondary" data-manager-tab="risks" role="tab"
           onclick="switchManagerTab('risks')">Risks</button>
         <button type="button" class="secondary" data-manager-tab="reports" role="tab"
@@ -1080,48 +1078,50 @@
       </nav>
     </section>
 
-    <section class="card hidden" id="devTicketsCard" data-manager-panel="tickets" data-manager-roles="pm,admin,lead">
-      <h3>Development Tickets <small id="devIterLabel" class="badge muted" title="Active iteration">—</small></h3>
-      <div class="row"><label for="devAssigned">Assigned to</label>
-        <select id="devAssigned" aria-label="Assigned to" style="min-width:220px">
-          <option value="">— All / Anyone —</option>
-        </select>
-      </div>
-      <div class="row"><label for="devQ">Contains</label><input id="devQ" placeholder="search title/id (optional)" />
-      </div>
-      <div class="row">
-        <div></div>
-        <div class="toolbar">
-          <button id="devLoadBtn" onclick="loadDevTickets()">Load</button>
-          <span id="devLoadStatus" class="status" role="status" aria-live="polite"></span>
-        </div>
-      </div>
-      <table id="devTicketsTbl" aria-live="polite">
-        <thead>
-          <tr>
-            <th style="width:100px">ID</th>
-            <th style="width:110px">Type</th>
-            <th style="width:350px">Title</th>
-            <th style="width:120px">State</th>
-            <th style="width:120px">Severity</th>
-            <th style="width:60px">Priority</th>
-            <th style="width:75px">Code</th>
-            <th>Note</th>
-            <th style="width:45px">Flag</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td colspan="9" class="help" style="text-align:center;padding:1rem">Select a developer from the dropdown
-              above to load tickets.</td>
-          </tr>
-        </tbody>
-      </table>
-    </section>
-
     <section id="pm" class="card hidden" data-role="pm-only" aria-labelledby="pmHeader">
       <div class="section-grid">
-        <div class="manager-tab-panel" data-manager-panel="daily" data-manager-roles="pm,admin">
+        <div class="manager-tab-panel" data-manager-panel="dev" data-manager-roles="pm,admin,lead">
+          <section id="devTicketsCard">
+            <h3>Development Tickets <small id="devIterLabel" class="badge muted" title="Active iteration">—</small>
+            </h3>
+            <div class="row"><label for="devAssigned">Assigned to</label>
+              <select id="devAssigned" aria-label="Assigned to" style="min-width:220px">
+                <option value="">— All / Anyone —</option>
+              </select>
+            </div>
+            <div class="row"><label for="devQ">Contains</label><input id="devQ"
+                placeholder="search title/id (optional)" />
+            </div>
+            <div class="row">
+              <div></div>
+              <div class="toolbar">
+                <button id="devLoadBtn" onclick="loadDevTickets()">Load</button>
+                <span id="devLoadStatus" class="status" role="status" aria-live="polite"></span>
+              </div>
+            </div>
+            <table id="devTicketsTbl" aria-live="polite">
+              <thead>
+                <tr>
+                  <th style="width:100px">ID</th>
+                  <th style="width:110px">Type</th>
+                  <th style="width:350px">Title</th>
+                  <th style="width:120px">State</th>
+                  <th style="width:120px">Severity</th>
+                  <th style="width:60px">Priority</th>
+                  <th style="width:75px">Code</th>
+                  <th>Note</th>
+                  <th style="width:45px">Flag</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td colspan="9" class="help" style="text-align:center;padding:1rem">Select a developer from the
+                    dropdown above to load tickets.</td>
+                </tr>
+              </tbody>
+            </table>
+          </section>
+
           <!-- (1) Pre-Meeting Updates -->
           <section id="preMeetingSection" aria-labelledby="preHeader">
             <div class="row">
@@ -1565,24 +1565,24 @@
 
       function managerTabAllowed(tab, role) {
         if (role === 'admin') {
-          return tab === 'daily' || tab === 'tickets' || tab === 'risks' ||
+          return tab === 'dev' || tab === 'risks' ||
             tab === 'reports' || tab === 'performance' || tab === 'qa';
         }
         if (role === 'pm') {
-          return tab === 'daily' || tab === 'tickets' || tab === 'risks' || tab === 'reports';
+          return tab === 'dev' || tab === 'risks' || tab === 'reports';
         }
         if (role === 'lead') {
-          return tab === 'tickets' || tab === 'risks' || tab === 'reports';
+          return tab === 'dev' || tab === 'risks' || tab === 'reports';
         }
         return false;
       }
 
       function defaultManagerTab(role) {
-        return role === 'lead' ? 'tickets' : 'daily';
+        return 'dev';
       }
 
       function managerTabUsesPmShell(tab) {
-        return tab === 'daily' || tab === 'risks' || tab === 'reports' || tab === 'performance';
+        return tab === 'dev' || tab === 'risks' || tab === 'reports' || tab === 'performance';
       }
 
       function managerPanelAllowed(panel, role) {
