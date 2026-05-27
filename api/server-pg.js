@@ -8181,6 +8181,37 @@ app.get('/api/gen/config', requireAuth, async (req, res) => {
   }
 });
 
+// Distinct assignees for a given team (used to populate report filter dropdowns)
+app.get('/api/gen/members', requireAuth, async (req, res) => {
+  try {
+    const me = await pool.query('select role from users where email=$1', [
+      req.userEmail,
+    ]);
+    if (!me.rowCount || me.rows[0].role !== 'admin') {
+      return res.status(403).json({ error: 'admin_only' });
+    }
+    const team = (req.query.team || '').toLowerCase();
+    const conditions = [
+      't.deleted = false',
+      't.assigned_to IS NOT NULL',
+      "t.assigned_to <> ''",
+    ];
+    const params = [];
+    if (team) {
+      conditions.push(`lower(t.team) = $${params.length + 1}`);
+      params.push(team);
+    }
+    const { rows } = await pool.query(
+      `SELECT DISTINCT t.assigned_to FROM gen_task_items t WHERE ${conditions.join(' AND ')} ORDER BY t.assigned_to`,
+      params,
+    );
+    res.json({ members: rows.map((r) => r.assigned_to) });
+  } catch (e) {
+    console.error('[gen/members]', e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // Tickets: parent items with nested tasks, optional ?team= filter
 app.get('/api/gen/tickets', requireAuth, async (req, res) => {
   try {
