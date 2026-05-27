@@ -5650,15 +5650,23 @@
           });
       }
 
-      function fmtSyncTime(ts) {
+      function fmtSyncTime(ts, tz) {
         if (!ts) return '';
         var dt = new Date(ts);
         if (isNaN(dt.getTime())) return '';
-        var hh = dt.getHours().toString().padStart(2, '0');
-        var mm = dt.getMinutes().toString().padStart(2, '0');
-        var mo = (dt.getMonth() + 1).toString().padStart(2, '0');
-        var dd = dt.getDate().toString().padStart(2, '0');
-        return '\u00b7 Synced ' + mo + '/' + dd + ' ' + hh + ':' + mm;
+        try {
+          var fmt = new Intl.DateTimeFormat('en-CA', {
+            timeZone: tz || 'UTC',
+            month: '2-digit', day: '2-digit',
+            hour: '2-digit', minute: '2-digit', hour12: false
+          });
+          var parts = fmt.formatToParts(dt);
+          var p = {};
+          parts.forEach(function (x) { p[x.type] = x.value; });
+          return '\u00b7 Synced ' + p.month + '/' + p.day + ' ' + p.hour + ':' + p.minute;
+        } catch (e) {
+          return '';
+        }
       }
 
       function loadSyncTimes() {
@@ -5666,9 +5674,9 @@
         fetch((API || location.origin) + '/api/sync/last', { headers: { Authorization: 'Bearer ' + tok } })
           .then(function (r) { return r.json(); })
           .then(function (d) {
-            var pre = byId('preLastSync'); if (pre) pre.textContent = fmtSyncTime(d.main);
-            var qa = byId('qaLastSync'); if (qa) qa.textContent = fmtSyncTime(d.qa);
-            var ts = byId('tsLastSync'); if (ts) ts.textContent = fmtSyncTime(d.ts);
+            var pre = byId('preLastSync'); if (pre) pre.textContent = fmtSyncTime(d.main, d.tz);
+            var qa = byId('qaLastSync'); if (qa) qa.textContent = fmtSyncTime(d.qa, d.tz);
+            var ts = byId('tsLastSync'); if (ts) ts.textContent = fmtSyncTime(d.ts, d.tz);
           })
           .catch(function () { });
       }
