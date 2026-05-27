@@ -3803,19 +3803,29 @@
           .then(function (res) { return res.json(); })
           .then(function (js) {
             if (js.error) { box.innerHTML = '<p class="status err">' + esc(js.error) + '</p>'; return; }
-            if (!js.missing || js.missing.length === 0) { box.innerHTML = '<p><span class="badge">' + esc(js.date || "") + '</span> — everyone has updated 🎉</p>'; return; }
-            var html = '<p><span class="badge">' + esc(js.date || "") + '</span> — ' + js.count + ' dev(s) with no update</p><ul>';
+            if (!js.missing || js.missing.length === 0) { box.innerHTML = '<p><span class="badge">' + esc(js.date || "") + '</span> — everyone has updated \uD83C\uDF89</p>'; return; }
+            var html = '<p style="margin-bottom:12px"><span class="badge">' + esc(js.date || "") + '</span> \u2014 ' + js.count + ' dev(s) with no update</p>';
+            html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">';
             for (var i = 0; i < js.missing.length; i++) {
               var m = js.missing[i];
-              var sprintBadge = '<span class="badge muted" title="Tickets in current sprint">Sprint: ' + (m.sprintCount || 0) + '</span>';
-              var flagCls = m.flaggedCount > 0 ? 'warning' : 'muted';
-              var flagBadge = '<span class="badge ' + flagCls + '" title="Flagged tickets">\u2691 ' + (m.flaggedCount || 0) + '</span>';
-              var activeCls = m.activeCount > 0 ? 'state-progress' : 'muted';
-              var activeBadge = '<span class="badge ' + activeCls + '" title="Sprint tickets with last code 100\u2013400 (in-progress)">Active: ' + (m.activeCount || 0) + '</span>';
-              html += '<li style="margin-bottom:6px">' + esc(m.label) + ' <small>(' + esc(m.email) + ')</small>'
-                + '&nbsp;&nbsp;' + sprintBadge + ' ' + flagBadge + ' ' + activeBadge + '</li>';
+              var words = (m.label || '').split(/\s+/).filter(Boolean);
+              var initials = words.length >= 2
+                ? (words[0][0] + words[words.length - 1][0]).toUpperCase()
+                : (m.label || '?').slice(0, 2).toUpperCase();
+              var focusColor = m.flaggedCount > 0 ? 'color:var(--danger);' : '';
+              html += '<div style="display:flex;align-items:center;justify-content:space-between;border:1px solid var(--border);border-radius:10px;padding:12px 16px;background:var(--card);">';
+              html += '<div style="display:flex;align-items:center;gap:12px;">';
+              html += '<div style="width:40px;height:40px;border-radius:50%;background:var(--accent-weak);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;">' + esc(initials) + '</div>';
+              html += '<div><div style="font-weight:600;font-size:14px;">' + esc(m.label) + '</div><div style="font-size:12px;color:var(--muted);">' + esc(m.email) + '</div></div>';
+              html += '</div>';
+              html += '<div style="display:flex;gap:20px;text-align:center;flex-shrink:0;">';
+              html += '<div><div style="font-size:11px;color:var(--muted);margin-bottom:2px;">Sprint</div><div style="font-size:18px;font-weight:700;">' + (m.sprintCount || 0) + '</div></div>';
+              html += '<div><div style="font-size:11px;color:var(--muted);margin-bottom:2px;">Focus</div><div style="font-size:18px;font-weight:700;' + focusColor + '">' + (m.flaggedCount || 0) + '</div></div>';
+              html += '<div><div style="font-size:11px;color:var(--muted);margin-bottom:2px;">Active</div><div style="font-size:18px;font-weight:700;">' + (m.activeCount || 0) + '</div></div>';
+              html += '</div>';
+              html += '</div>';
             }
-            html += '</ul>';
+            html += '</div>';
             box.innerHTML = html;
           });
       }
