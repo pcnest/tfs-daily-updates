@@ -1460,6 +1460,31 @@
       </div>
     </div>
 
+    <!-- No Active Tickets Modal -->
+    <div id="noTicketBackdrop" class="modal-backdrop" onclick="closeNoTicketModal()"></div>
+    <div id="noTicketModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="noTicketTitle">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-head">
+          <h3 id="noTicketTitle">No Active Tickets Today</h3>
+          <button class="modal-close" onclick="closeNoTicketModal()" aria-label="Close">Close</button>
+        </div>
+        <div class="modal-body">
+          <div class="row">
+            <label for="noTicketNote">What are you working on today? <span style="color:#ef4444">*</span></label>
+            <textarea id="noTicketNote" rows="4" placeholder="Describe your non-ticket work for today..."
+              aria-label="No ticket note"></textarea>
+          </div>
+          <div class="row"><label>&nbsp;</label><small class="help">Briefly describe your non-ticket tasks for today. A
+              note is required.</small></div>
+        </div>
+        <div class="modal-foot">
+          <button class="secondary" onclick="closeNoTicketModal()">Cancel</button>
+          <button id="noTicketSubmitBtn" onclick="submitNoTicketUpdate()">Submit</button>
+          <span id="noTicketStatus" class="status" role="status" aria-live="polite"></span>
+        </div>
+      </div>
+    </div>
+
   </div>
 
   <script>
@@ -2565,16 +2590,8 @@
                 + '<div class="help">No active tickets in this sprint.</div>'
                 + (window.__lockedToday
                   ? '<div class="help" style="margin-top:6px">Status already recorded for today.</div>'
-                  : '<div id="noTicketAction" style="margin-top:8px">'
-                  + '<button class="secondary" onclick="showNoTicketForm()">No Active Tickets Today</button>'
-                  + '</div>'
-                  + '<div id="noTicketForm" style="display:none;margin-top:8px;max-width:480px;margin-left:auto;margin-right:auto">'
-                  + '<label for="noTicketNote" style="display:block;margin-bottom:4px;font-size:0.85em">What are you working on today? <span style="color:#ef4444">*</span></label>'
-                  + '<textarea id="noTicketNote" rows="3" style="width:100%;box-sizing:border-box" placeholder="Describe your non-ticket work for today..." aria-label="No ticket note"></textarea>'
-                  + '<div style="margin-top:6px;display:flex;gap:8px;justify-content:center">'
-                  + '<button onclick="submitNoTicketUpdate()">Submit</button>'
-                  + '<button class="secondary" onclick="hideNoTicketForm()">Cancel</button>'
-                  + '</div>'
+                  : '<div style="margin-top:8px">'
+                  + '<button class="secondary" onclick="openNoTicketModal()">No Active Tickets Today</button>'
                   + '</div>'
                 )
                 + '</td>';
@@ -2647,18 +2664,24 @@
           })
       }
 
-      function showNoTicketForm() {
-        var action = byId('noTicketAction');
-        var form = byId('noTicketForm');
-        if (action) action.style.display = 'none';
-        if (form) { form.style.display = 'block'; var ta = byId('noTicketNote'); if (ta) ta.focus(); }
+      function openNoTicketModal() {
+        var noteEl = byId('noTicketNote');
+        if (noteEl) { noteEl.value = ''; noteEl.style.outline = ''; }
+        setStatus('noTicketStatus', '');
+        var btn = byId('noTicketSubmitBtn');
+        if (btn) btn.disabled = false;
+        var backdrop = byId('noTicketBackdrop');
+        var modal = byId('noTicketModal');
+        if (backdrop) backdrop.classList.add('open');
+        if (modal) modal.classList.add('open');
+        if (noteEl) noteEl.focus();
       }
 
-      function hideNoTicketForm() {
-        var action = byId('noTicketAction');
-        var form = byId('noTicketForm');
-        if (form) form.style.display = 'none';
-        if (action) action.style.display = '';
+      function closeNoTicketModal() {
+        var backdrop = byId('noTicketBackdrop');
+        var modal = byId('noTicketModal');
+        if (backdrop) backdrop.classList.remove('open');
+        if (modal) modal.classList.remove('open');
       }
 
       function submitNoTicketUpdate() {
@@ -2666,16 +2689,15 @@
         var note = noteEl ? noteEl.value.trim() : '';
         if (!note) {
           if (noteEl) noteEl.style.outline = '2px solid #ef4444';
-          setStatus('loadStatus', 'Please describe what you are working on today.', false);
+          setStatus('noTicketStatus', 'A note is required.', false);
           return;
         }
         if (noteEl) noteEl.style.outline = '';
         var tkn = token();
-        if (!tkn) { setStatus('loadStatus', 'Please log in first.', false); return; }
-        var row = byId('noTicketRow');
-        var btns = row ? row.querySelectorAll('button') : [];
-        for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
-        setStatus('loadStatus', 'Submitting...');
+        if (!tkn) { setStatus('noTicketStatus', 'Please log in first.', false); return; }
+        var btn = byId('noTicketSubmitBtn');
+        if (btn) btn.disabled = true;
+        setStatus('noTicketStatus', 'Submitting...');
         fetch((API || location.origin) + '/api/progress', {
           method: 'POST',
           headers: { 'Authorization': 'Bearer ' + tkn, 'Content-Type': 'application/json' },
@@ -2684,20 +2706,22 @@
           .then(function (r) { return r.json(); })
           .then(function (js) {
             if (js.error) {
-              setStatus('loadStatus', js.error, false);
-              for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+              setStatus('noTicketStatus', js.error, false);
+              if (btn) btn.disabled = false;
             } else {
-              setStatus('loadStatus', 'Status recorded for today.', true);
+              closeNoTicketModal();
+              var row = byId('noTicketRow');
               if (row) {
                 row.innerHTML = '<td colspan="10" style="text-align:center;padding:12px" class="help">No active tickets — status recorded for today.</td>';
               }
+              setStatus('loadStatus', 'Status recorded for today.', true);
               if (typeof checkLockStatus === 'function') checkLockStatus();
               if (typeof loadWeeklySummary === 'function') loadWeeklySummary();
             }
           })
           .catch(function () {
-            setStatus('loadStatus', 'Network error. Please try again.', false);
-            for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
+            setStatus('noTicketStatus', 'Network error. Please try again.', false);
+            if (btn) btn.disabled = false;
           });
       }
 
@@ -5066,8 +5090,8 @@
       window.loadTickets = loadTickets;
       window.loadDevTickets = loadDevTickets;
       window.loadWeeklySummary = loadWeeklySummary;
-      window.showNoTicketForm = showNoTicketForm;
-      window.hideNoTicketForm = hideNoTicketForm;
+      window.openNoTicketModal = openNoTicketModal;
+      window.closeNoTicketModal = closeNoTicketModal;
       window.submitNoTicketUpdate = submitNoTicketUpdate;
       window.prefill = prefill;
       window.submitProgress = submitProgress;
