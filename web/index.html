@@ -1341,81 +1341,83 @@
             </table>
           </div>
 
-          <!-- QA Tasks sub-section (admin only) -->
-          <section aria-labelledby="qaRptHeader" data-admin-only style="margin-top:24px;">
-            <h4 id="qaRptHeader" style="margin:0 0 8px 0;">QA Tasks</h4>
-            <div class="toolbar" style="margin-bottom:8px;flex-wrap:nowrap;">
-              <label for="qaRptFrom">From:</label>
-              <input id="qaRptFrom" type="date" />
-              <label for="qaRptTo">To:</label>
-              <input id="qaRptTo" type="date" />
-              <label for="qaRptDev">Assigned To:</label>
-              <select id="qaRptDev">
-                <option value="">— All assignees —</option>
-              </select>
-              <button type="button" onclick="loadReportGenSection('qa')">Load</button>
-              <span id="qaRptStatus" class="status" role="status" aria-live="polite"></span>
-            </div>
-            <div class="table-wrap">
-              <table id="qaRptTbl" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
-                <thead>
-                  <tr>
-                    <th style="width:60px;padding:4px 8px;">ID</th>
-                    <th style="width:110px;padding:4px 8px;">Type</th>
-                    <th style="text-align:left;padding:4px 8px;">Title</th>
-                    <th style="width:90px;padding:4px 8px;">State</th>
-                    <th style="width:140px;padding:4px 8px;">Assigned To</th>
-                    <th style="width:80px;padding:4px 8px;">Remaining Work (hrs)</th>
-                  </tr>
-                </thead>
-                <tbody id="qaRptTbody">
-                  <tr>
-                    <td colspan="6" style="text-align:center;padding:1rem;color:#888">Use the filters above and click
-                      Load.</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <!-- TS Tasks sub-section (admin only) -->
-          <section aria-labelledby="tsRptHeader" data-admin-only style="margin-top:24px;">
-            <h4 id="tsRptHeader" style="margin:0 0 8px 0;">TS Tasks</h4>
-            <div class="toolbar" style="margin-bottom:8px;flex-wrap:nowrap;">
-              <label for="tsRptFrom">From:</label>
-              <input id="tsRptFrom" type="date" />
-              <label for="tsRptTo">To:</label>
-              <input id="tsRptTo" type="date" />
-              <label for="tsRptDev">Assigned To:</label>
-              <select id="tsRptDev">
-                <option value="">— All assignees —</option>
-              </select>
-              <button type="button" onclick="loadReportGenSection('ts')">Load</button>
-              <span id="tsRptStatus" class="status" role="status" aria-live="polite"></span>
-            </div>
-            <div class="table-wrap">
-              <table id="tsRptTbl" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
-                <thead>
-                  <tr>
-                    <th style="width:60px;padding:4px 8px;">ID</th>
-                    <th style="width:110px;padding:4px 8px;">Type</th>
-                    <th style="text-align:left;padding:4px 8px;">Title</th>
-                    <th style="width:90px;padding:4px 8px;">State</th>
-                    <th style="width:140px;padding:4px 8px;">Assigned To</th>
-                    <th style="width:80px;padding:4px 8px;">Remaining Work (hrs)</th>
-                  </tr>
-                </thead>
-                <tbody id="tsRptTbody">
-                  <tr>
-                    <td colspan="6" style="text-align:center;padding:1rem;color:#888">Use the filters above and click
-                      Load.</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </section>
 
 
+
+        </section>
+
+        <!-- QA Tasks sub-section (admin only) -->
+        <section aria-labelledby="qaRptHeader" data-admin-only style="margin-top:24px;">
+          <h4 id="qaRptHeader" style="margin:0 0 8px 0;">QA Tasks</h4>
+          <div class="toolbar" style="margin-bottom:8px;flex-wrap:nowrap;">
+            <label for="qaRptFrom">From:</label>
+            <input id="qaRptFrom" type="date" />
+            <label for="qaRptTo">To:</label>
+            <input id="qaRptTo" type="date" />
+            <label for="qaRptDev">Assigned To:</label>
+            <select id="qaRptDev">
+              <option value="">— All assignees —</option>
+            </select>
+            <button type="button" onclick="loadReportGenSection('qa')">Load</button>
+            <span id="qaRptStatus" class="status" role="status" aria-live="polite"></span>
+          </div>
+          <div class="table-wrap">
+            <table id="qaRptTbl" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+              <thead>
+                <tr>
+                  <th style="width:60px;padding:4px 8px;">ID</th>
+                  <th style="width:110px;padding:4px 8px;">Type</th>
+                  <th style="text-align:left;padding:4px 8px;">Title</th>
+                  <th style="width:90px;padding:4px 8px;">State</th>
+                  <th style="width:140px;padding:4px 8px;">Assigned To</th>
+                  <th style="width:80px;padding:4px 8px;">Remaining Work (hrs)</th>
+                </tr>
+              </thead>
+              <tbody id="qaRptTbody">
+                <tr>
+                  <td colspan="6" style="text-align:center;padding:1rem;color:#888">Use the filters above and click
+                    Load.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <!-- TS Tasks sub-section (admin only) -->
+        <section aria-labelledby="tsRptHeader" data-admin-only style="margin-top:24px;">
+          <h4 id="tsRptHeader" style="margin:0 0 8px 0;">TS Tasks</h4>
+          <div class="toolbar" style="margin-bottom:8px;flex-wrap:nowrap;">
+            <label for="tsRptFrom">From:</label>
+            <input id="tsRptFrom" type="date" />
+            <label for="tsRptTo">To:</label>
+            <input id="tsRptTo" type="date" />
+            <label for="tsRptDev">Assigned To:</label>
+            <select id="tsRptDev">
+              <option value="">— All assignees —</option>
+            </select>
+            <button type="button" onclick="loadReportGenSection('ts')">Load</button>
+            <span id="tsRptStatus" class="status" role="status" aria-live="polite"></span>
+          </div>
+          <div class="table-wrap">
+            <table id="tsRptTbl" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+              <thead>
+                <tr>
+                  <th style="width:60px;padding:4px 8px;">ID</th>
+                  <th style="width:110px;padding:4px 8px;">Type</th>
+                  <th style="text-align:left;padding:4px 8px;">Title</th>
+                  <th style="width:90px;padding:4px 8px;">State</th>
+                  <th style="width:140px;padding:4px 8px;">Assigned To</th>
+                  <th style="width:80px;padding:4px 8px;">Remaining Work (hrs)</th>
+                </tr>
+              </thead>
+              <tbody id="tsRptTbody">
+                <tr>
+                  <td colspan="6" style="text-align:center;padding:1rem;color:#888">Use the filters above and click
+                    Load.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </section>
 
         <!-- (5) Blockers radar -->
