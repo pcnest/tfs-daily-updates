@@ -1339,6 +1339,80 @@
             </table>
           </div>
 
+          <!-- QA Tasks sub-section -->
+          <div style="margin-top:24px;">
+            <h4 style="margin:0 0 8px 0;">QA Tasks</h4>
+            <div class="toolbar" style="margin-bottom:8px;">
+              <label for="qaRptFrom">From:</label>
+              <input id="qaRptFrom" type="date" />
+              <label for="qaRptTo">To:</label>
+              <input id="qaRptTo" type="date" />
+              <label for="qaRptDev">Assigned To:</label>
+              <select id="qaRptDev">
+                <option value="">— All assignees —</option>
+              </select>
+              <button type="button" onclick="loadReportGenSection('qa')">Load</button>
+              <span id="qaRptStatus" class="status" role="status" aria-live="polite"></span>
+            </div>
+            <div class="table-wrap">
+              <table id="qaRptTbl" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                <thead>
+                  <tr>
+                    <th style="width:60px;padding:4px 8px;">ID</th>
+                    <th style="width:110px;padding:4px 8px;">Type</th>
+                    <th style="text-align:left;padding:4px 8px;">Title</th>
+                    <th style="width:90px;padding:4px 8px;">State</th>
+                    <th style="width:140px;padding:4px 8px;">Assigned To</th>
+                    <th style="width:80px;padding:4px 8px;">Remaining Work (hrs)</th>
+                  </tr>
+                </thead>
+                <tbody id="qaRptTbody">
+                  <tr>
+                    <td colspan="6" style="text-align:center;padding:1rem;color:#888">Use the filters above and click
+                      Load.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <!-- TS Tasks sub-section -->
+          <div style="margin-top:24px;">
+            <h4 style="margin:0 0 8px 0;">TS Tasks</h4>
+            <div class="toolbar" style="margin-bottom:8px;">
+              <label for="tsRptFrom">From:</label>
+              <input id="tsRptFrom" type="date" />
+              <label for="tsRptTo">To:</label>
+              <input id="tsRptTo" type="date" />
+              <label for="tsRptDev">Assigned To:</label>
+              <select id="tsRptDev">
+                <option value="">— All assignees —</option>
+              </select>
+              <button type="button" onclick="loadReportGenSection('ts')">Load</button>
+              <span id="tsRptStatus" class="status" role="status" aria-live="polite"></span>
+            </div>
+            <div class="table-wrap">
+              <table id="tsRptTbl" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                <thead>
+                  <tr>
+                    <th style="width:60px;padding:4px 8px;">ID</th>
+                    <th style="width:110px;padding:4px 8px;">Type</th>
+                    <th style="text-align:left;padding:4px 8px;">Title</th>
+                    <th style="width:90px;padding:4px 8px;">State</th>
+                    <th style="width:140px;padding:4px 8px;">Assigned To</th>
+                    <th style="width:80px;padding:4px 8px;">Remaining Work (hrs)</th>
+                  </tr>
+                </thead>
+                <tbody id="tsRptTbody">
+                  <tr>
+                    <td colspan="6" style="text-align:center;padding:1rem;color:#888">Use the filters above and click
+                      Load.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+
 
         </section>
 
@@ -1710,6 +1784,14 @@
 
         if (tab === 'qa-report') loadQaReport();
         if (tab === 'ts-report') loadTsReport();
+        if (tab === 'reports') {
+          if (byId('qaRptDev') && !byId('qaRptDev').getAttribute('data-loaded')) {
+            populateTeamSelect(byId('qaRptDev'), { includeBlank: true, blankLabel: '— All assignees —' });
+          }
+          if (byId('tsRptDev') && !byId('tsRptDev').getAttribute('data-loaded')) {
+            populateTeamSelect(byId('tsRptDev'), { includeBlank: true, blankLabel: '— All assignees —' });
+          }
+        }
       }
 
       function syncManagerTabsForRole(role) {
@@ -5296,6 +5378,80 @@
               if (st) { st.textContent = ''; }
               return;
             }
+            var rows = '';
+            items.forEach(function (parent) {
+              rows += '<tr style="background:#f4f6fa;">' +
+                '<td style="padding:4px 8px;color:#666;font-size:0.8rem">' + esc(String(parent.id || '')) + '</td>' +
+                '<td style="padding:4px 8px;color:#666;font-size:0.8rem">' + esc(parent.type || '') + '</td>' +
+                '<td style="padding:4px 8px;font-weight:600">' + esc(parent.title || '') + '</td>' +
+                '<td style="padding:4px 8px">' + esc(parent.state || '') + '</td>' +
+                '<td colspan="2" style="padding:4px 8px;color:#666;font-size:0.8rem">' + esc(parent.iteration_path || '') + '</td>' +
+                '</tr>';
+              (parent.tasks || []).forEach(function (t) {
+                rows += '<tr>' +
+                  '<td style="padding:3px 8px;color:#999;font-size:0.8rem">' + esc(String(t.id || '')) + '</td>' +
+                  '<td style="padding:3px 8px">' + esc(t.type || '') + '</td>' +
+                  '<td style="padding:3px 8px 3px 24px">' + esc(t.title || '') + '</td>' +
+                  '<td style="padding:3px 8px">' + esc(t.state || '') + '</td>' +
+                  '<td style="padding:3px 8px">' + esc(t.assigned_to || '') + '</td>' +
+                  '<td style="padding:3px 8px;text-align:right">' + (t.remaining_work != null ? t.remaining_work : '') + '</td>' +
+                  '</tr>';
+              });
+            });
+            tbody.innerHTML = rows;
+            if (st) { st.textContent = items.length + ' parent(s)'; st.className = 'status ok'; }
+          })
+          .catch(function (e) {
+            if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:1rem;color:red">Error: ' + esc(e.message) + '</td></tr>';
+            if (st) { st.textContent = 'Error'; st.className = 'status err'; }
+          });
+      }
+
+      function loadReportGenSection(team) {
+        var prefix = team === 'qa' ? 'qa' : 'ts';
+        var fromEl = byId(prefix + 'RptFrom');
+        var toEl = byId(prefix + 'RptTo');
+        var devEl = byId(prefix + 'RptDev');
+        var tbody = byId(prefix + 'RptTbody');
+        var st = byId(prefix + 'RptStatus');
+        var from = fromEl ? fromEl.value : '';
+        var to = toEl ? toEl.value : '';
+        var assignedTo = devEl ? devEl.value : '';
+
+        if (st) { st.textContent = 'Loading…'; st.className = 'status'; }
+        if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:1rem">Loading…</td></tr>';
+
+        var tok = localStorage.getItem('pocToken') || '';
+        var url = (API || location.origin) + '/api/gen/tickets?team=' + encodeURIComponent(team);
+        if (assignedTo) url += '&assigned_to=' + encodeURIComponent(assignedTo);
+
+        fetch(url, { headers: { Authorization: 'Bearer ' + tok } })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.error) throw new Error(data.error);
+            var items = data.items || [];
+
+            // Client-side date range filter on task changed_date
+            if (from || to) {
+              items = items.map(function (parent) {
+                var filteredTasks = (parent.tasks || []).filter(function (t) {
+                  var d = (t.changed_date || '').slice(0, 10);
+                  if (!d) return true;
+                  if (from && d < from) return false;
+                  if (to && d > to) return false;
+                  return true;
+                });
+                return Object.assign({}, parent, { tasks: filteredTasks });
+              }).filter(function (parent) { return parent.tasks.length > 0; });
+            }
+
+            if (!tbody) return;
+            if (items.length === 0) {
+              tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:1rem;color:#888">No tasks found for the selected filters.</td></tr>';
+              if (st) { st.textContent = ''; }
+              return;
+            }
+
             var rows = '';
             items.forEach(function (parent) {
               rows += '<tr style="background:#f4f6fa;">' +
