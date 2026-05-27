@@ -1082,6 +1082,10 @@
       <nav id="managerTabs" role="tablist" aria-label="Manager sections">
         <button type="button" class="secondary" data-manager-tab="dev" role="tab"
           onclick="switchManagerTab('dev')">Dev</button>
+        <button type="button" class="secondary" data-manager-tab="qa-report" role="tab"
+          onclick="switchManagerTab('qa-report')">QA</button>
+        <button type="button" class="secondary" data-manager-tab="ts-report" role="tab"
+          onclick="switchManagerTab('ts-report')">TS</button>
         <button type="button" class="secondary" data-manager-tab="risks" role="tab"
           onclick="switchManagerTab('risks')">Risks</button>
         <button type="button" class="secondary" data-manager-tab="reports" role="tab"
@@ -1366,8 +1370,6 @@
         <h3 id="genTeamHeader" style="margin:0">QA / TS Task Tracker</h3>
         <div class="toolbar right">
           <span id="genStatus" class="status" role="status" aria-live="polite"></span>
-          <button id="genReportBtn" class="secondary" onclick="loadGenReport(window.__genActiveTeam)">Generate Daily
-            Report</button>
           <button onclick="loadGenTickets(window.__genActiveTeam)">Refresh</button>
         </div>
       </div>
@@ -1385,7 +1387,7 @@
               <th style="text-align:left;padding:4px 8px;">Title</th>
               <th style="width:90px;padding:4px 8px;">State</th>
               <th style="width:140px;padding:4px 8px;">Assigned To</th>
-              <th style="width:80px;padding:4px 8px;">Remaining</th>
+              <th style="width:80px;padding:4px 8px;">Remaining Work (hrs)</th>
             </tr>
           </thead>
           <tbody id="genTicketsTbody">
@@ -1396,16 +1398,32 @@
         </table>
       </div>
 
-      <!-- Daily report panel (shown after Generate) -->
-      <div id="genReportPanel" class="hidden" style="margin-top:12px;">
-        <div class="row">
-          <h4 style="margin:0">Daily Report — <span id="genReportDate"></span></h4>
-          <div class="toolbar right">
-            <button class="secondary" onclick="byId('genReportPanel').classList.add('hidden')">Close</button>
-          </div>
+    </section>
+
+    <!-- QA Daily Report Tab Panel (Admin-only) -->
+    <section id="qaReportCard" class="card hidden" data-manager-panel="qa-report" data-manager-roles="admin"
+      aria-labelledby="qaReportHeader">
+      <div class="row">
+        <h3 id="qaReportHeader" style="margin:0">QA Daily Report — <span id="qaReportDate"></span></h3>
+        <div class="toolbar right">
+          <span id="qaReportStatus" class="status" role="status" aria-live="polite"></span>
+          <button onclick="loadQaReport()">Refresh</button>
         </div>
-        <div id="genReportBody" style="margin-top:8px;"></div>
       </div>
+      <div id="qaReportBody" style="margin-top:8px;"></div>
+    </section>
+
+    <!-- TS Daily Report Tab Panel (Admin-only) -->
+    <section id="tsReportCard" class="card hidden" data-manager-panel="ts-report" data-manager-roles="admin"
+      aria-labelledby="tsReportHeader">
+      <div class="row">
+        <h3 id="tsReportHeader" style="margin:0">TS Daily Report — <span id="tsReportDate"></span></h3>
+        <div class="toolbar right">
+          <span id="tsReportStatus" class="status" role="status" aria-live="polite"></span>
+          <button onclick="loadTsReport()">Refresh</button>
+        </div>
+      </div>
+      <div id="tsReportBody" style="margin-top:8px;"></div>
     </section>
 
     <!-- Submit Progress Modal -->
@@ -1606,7 +1624,8 @@
       function managerTabAllowed(tab, role) {
         if (role === 'admin') {
           return tab === 'dev' || tab === 'risks' ||
-            tab === 'reports' || tab === 'performance' || tab === 'qa';
+            tab === 'reports' || tab === 'performance' || tab === 'qa' ||
+            tab === 'qa-report' || tab === 'ts-report';
         }
         if (role === 'pm') {
           return tab === 'dev' || tab === 'risks' || tab === 'reports';
@@ -1670,6 +1689,9 @@
           var panelKey = panels[p].getAttribute('data-manager-panel');
           panels[p].classList.toggle('hidden', panelKey !== tab || !managerPanelAllowed(panels[p], role));
         }
+
+        if (tab === 'qa-report') loadQaReport();
+        if (tab === 'ts-report') loadTsReport();
       }
 
       function syncManagerTabsForRole(role) {
@@ -5305,7 +5327,7 @@
                 '<th style="width:110px">Type</th>' +
                 '<th style="width:36%">Parent</th>' +
                 '<th>Task</th>' +
-                '<th style="width:80px">Remaining</th>' +
+                '<th style="width:80px">Remaining Work (hrs)</th>' +
                 '<th style="width:100px">State</th>' +
                 '</tr></thead><tbody>';
               tasks.forEach(function (t) {
@@ -5329,10 +5351,92 @@
           });
       }
 
+      function loadGenReportInto(team, bodyId, dateId, statusId) {
+        var tok = localStorage.getItem('pocToken') || '';
+        var today = window.__serverToday || new Date().toISOString().slice(0, 10);
+        var url = (API || location.origin) + '/api/gen/report/daily?date=' + today +
+          (team ? '&team=' + encodeURIComponent(team) : '');
+        var body = byId(bodyId);
+        var dateEl = byId(dateId);
+        var st = byId(statusId);
+        if (dateEl) dateEl.textContent = today;
+        if (body) body.innerHTML = '<em>Loading…</em>';
+        if (st) { st.textContent = 'Loading…'; st.className = 'status'; }
+        fetch(url, { headers: { Authorization: 'Bearer ' + tok } })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.error) throw new Error(data.error);
+            var assignees = data.assignees || [];
+            if (!body) return;
+            if (assignees.length === 0) {
+              body.innerHTML = '<p style="color:#888">No tasks tracked for this team today.</p>';
+              if (st) { st.textContent = ''; }
+              return;
+            }
+            var html = '<div class="pre-list">';
+            assignees.forEach(function (a) {
+              var identity = parseIdentityLabel(a.assigned_to || 'Unassigned');
+              var display = a.display_name || identity.name || 'Unassigned';
+              var meta = a.email || identity.meta || '';
+              var tasks = a.tasks || [];
+              html += '<div class="pre-user">' +
+                '<div class="pre-head">' +
+                '<div class="pre-ident">' +
+                '<span class="avatar">' + initials(display) + '</span>' +
+                '<div>' +
+                '<div class="pre-title">' + esc(display) + '</div>' +
+                (meta ? '<div class="pre-meta">' + esc(meta) + '</div>' : '') +
+                '</div>' +
+                '</div>' +
+                '<span class="pill">' +
+                '<span class="pre-meta">' + tasks.length + ' item(s)</span>' +
+                '</span>' +
+                '</div>' +
+                '<table class="today-grid">' +
+                '<thead><tr>' +
+                '<th style="width:110px">Type</th>' +
+                '<th style="width:36%">Parent</th>' +
+                '<th>Task</th>' +
+                '<th style="width:80px">Remaining Work (hrs)</th>' +
+                '<th style="width:100px">State</th>' +
+                '</tr></thead><tbody>';
+              tasks.forEach(function (t) {
+                html += '<tr>' +
+                  '<td>' + esc(t.parent_type || '') + '</td>' +
+                  '<td>' + esc(t.parent_title || '') + '</td>' +
+                  '<td>' + esc(t.task_title || '') +
+                  (t.note ? ' <em style="color:#666">— ' + esc(t.note) + '</em>' : '') +
+                  '</td>' +
+                  '<td style="text-align:right">' + (t.remaining_work != null ? t.remaining_work : '') + '</td>' +
+                  '<td><span class="badge ' + genStateBadgeClass(t.state) + '">' + esc(t.state || '') + '</span></td>' +
+                  '</tr>';
+              });
+              html += '</tbody></table></div>';
+            });
+            html += '</div>';
+            body.innerHTML = html;
+            if (st) { st.textContent = assignees.length + ' assignee(s)'; st.className = 'status ok'; }
+          })
+          .catch(function (e) {
+            if (body) body.innerHTML = '<p style="color:red">Error: ' + esc(e.message) + '</p>';
+            if (st) { st.textContent = 'Error'; st.className = 'status err'; }
+          });
+      }
+
+      function loadQaReport() {
+        loadGenReportInto('qa', 'qaReportBody', 'qaReportDate', 'qaReportStatus');
+      }
+
+      function loadTsReport() {
+        loadGenReportInto('ts', 'tsReportBody', 'tsReportDate', 'tsReportStatus');
+      }
+
       window.loadGenConfig = loadGenConfig;
       window.switchGenTab = switchGenTab;
       window.loadGenTickets = loadGenTickets;
       window.loadGenReport = loadGenReport;
+      window.loadQaReport = loadQaReport;
+      window.loadTsReport = loadTsReport;
 
 
     })();
