@@ -5222,7 +5222,7 @@
 
       function loadGenReport(team) {
         var tok = localStorage.getItem('pocToken') || '';
-        var today = new Date().toISOString().slice(0, 10);
+        var today = window.__serverToday || new Date().toISOString().slice(0, 10);
         var url = (API || location.origin) + '/api/gen/report/daily?date=' + today +
           (team ? '&team=' + encodeURIComponent(team) : '');
         var panel = byId('genReportPanel');
