@@ -2928,15 +2928,12 @@ app.get('/api/updates/missing', requireAuth, async (req, res) => {
     posters as (
       select distinct email from progress_updates where date=$1
     ),
-    cur_iter as (
-      select value as iteration_path from meta where key='current_iteration' limit 1
-    ),
     sprint_base as (
       select t.id, t.assigned_to
       from tickets t
-      cross join cur_iter ci
       where coalesce(t.deleted, false) = false
-        and lower(t.iteration_path) like '%' || lower(ci.iteration_path)
+        and lower(t.type) in ('bug', 'product backlog item')
+        and lower(t.state) <> 'done'
     ),
     latest_sprint_code as (
       select distinct on (sb.id)
