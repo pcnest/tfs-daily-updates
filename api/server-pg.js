@@ -2936,7 +2936,7 @@ app.get('/api/updates/missing', requireAuth, async (req, res) => {
       from tickets t
       cross join cur_iter ci
       where coalesce(t.deleted, false) = false
-        and t.iteration_path = ci.iteration_path
+        and lower(t.iteration_path) like '%' || lower(ci.iteration_path)
     ),
     latest_sprint_code as (
       select distinct on (sb.id)
