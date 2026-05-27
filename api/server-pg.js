@@ -1881,6 +1881,30 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
         console.log('[sweep] skipped (no presentIds)');
       }
     }
+
+    // ---- Age-based sweep: tombstone tickets not seen in 7 days ----
+    // Catches deleted/removed items from old sprints that the iteration-scoped
+    // sweep above never touches (it only covers the current sprint path).
+    // Safe because every legitimate ticket (current-sprint direct or WIQL B
+    // cross-sprint parent) has last_seen_at bumped on every agent run.
+    const ageResult = await client.query(
+      `UPDATE tickets
+          SET deleted = true
+        WHERE coalesce(deleted, false) = false
+          AND last_seen_at < now() - interval '7 days'
+        RETURNING id`,
+    );
+    if (ageResult.rowCount > 0) {
+      console.log('[age-sweep]', {
+        tombstoned: ageResult.rowCount,
+        sampleIds: ageResult.rows
+          .slice(0, 10)
+          .map((r) => r.id)
+          .join(', '),
+      });
+    } else {
+      console.log('[age-sweep]', { tombstoned: 0 });
+    }
     // ---- end presence sweep ----
 
     await client.query('COMMIT');
