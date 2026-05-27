@@ -3192,6 +3192,22 @@
         return (a + b).toUpperCase();
       }
 
+      function parseIdentityLabel(raw) {
+        raw = String(raw || '').trim();
+        if (!raw) return { name: 'Unassigned', meta: '' };
+        var m = raw.match(/^(.*?)\s*<([^>]+)>$/);
+        if (m) {
+          return {
+            name: (m[1] || '').trim() || (m[2] || '').trim() || 'Unassigned',
+            meta: (m[2] || '').trim()
+          };
+        }
+        if (raw.indexOf('@') > -1) {
+          return { name: raw.split('@')[0] || raw, meta: raw };
+        }
+        return { name: raw, meta: '' };
+      }
+
       function getAiRiskForTicket(id) {
         if (!window.__aiRiskEnabled || !window.__aiRiskMap) return null;
         return window.__aiRiskMap[String(id)] || null;
@@ -5241,31 +5257,47 @@
               body.innerHTML = '<p style="color:#888">No tasks tracked for this team today.</p>';
               return;
             }
-            var html = '';
+            var html = '<div class="pre-list">';
             assignees.forEach(function (a) {
-              html += '<div style="margin-bottom:16px">' +
-                '<div style="margin-bottom:4px"><strong>' + esc(a.assigned_to || 'Unassigned') + '</strong>' +
-                (a.team ? ' <span class="badge muted">' + esc(a.team.toUpperCase()) + '</span>' : '') +
+              var identity = parseIdentityLabel(a.assigned_to || 'Unassigned');
+              var display = a.display_name || identity.name || 'Unassigned';
+              var meta = a.email || identity.meta || '';
+              var tasks = a.tasks || [];
+
+              html += '<div class="pre-user">' +
+                '<div class="pre-head">' +
+                '<div class="pre-ident">' +
+                '<span class="avatar">' + initials(display) + '</span>' +
+                '<div>' +
+                '<div class="pre-title">' + esc(display) + '</div>' +
+                (meta ? '<div class="pre-meta">' + esc(meta) + '</div>' : '') +
                 '</div>' +
-                '<table style="width:100%;border-collapse:collapse;font-size:0.82rem;">' +
-                '<thead><tr style="background:#f4f6fa;">' +
-                '<th style="text-align:left;padding:3px 8px;width:110px;border-bottom:1px solid #e2e8f0">Type</th>' +
-                '<th style="text-align:left;padding:3px 8px;width:36%;border-bottom:1px solid #e2e8f0">Parent</th>' +
-                '<th style="text-align:left;padding:3px 8px;border-bottom:1px solid #e2e8f0">Task</th>' +
-                '<th style="text-align:left;padding:3px 8px;width:100px;border-bottom:1px solid #e2e8f0">State</th>' +
+                '</div>' +
+                '<span class="pill">' +
+                '<span class="pre-meta">' + tasks.length + ' item(s)</span>' +
+                (a.team ? '<span class="badge muted">' + esc(a.team.toUpperCase()) + '</span>' : '') +
+                '</span>' +
+                '</div>' +
+                '<table class="today-grid">' +
+                '<thead><tr>' +
+                '<th style="width:110px">Type</th>' +
+                '<th style="width:36%">Parent</th>' +
+                '<th>Task</th>' +
+                '<th style="width:100px">State</th>' +
                 '</tr></thead><tbody>';
-              (a.tasks || []).forEach(function (t) {
-                html += '<tr style="border-bottom:1px solid #f1f5f9;">' +
-                  '<td style="padding:3px 8px;color:#666">' + esc(t.parent_type || '') + '</td>' +
-                  '<td style="padding:3px 8px;color:#555">' + esc(t.parent_title || '') + '</td>' +
-                  '<td style="padding:3px 8px">' + esc(t.task_title || '') +
+              tasks.forEach(function (t) {
+                html += '<tr>' +
+                  '<td>' + esc(t.parent_type || '') + '</td>' +
+                  '<td>' + esc(t.parent_title || '') + '</td>' +
+                  '<td>' + esc(t.task_title || '') +
                   (t.note ? ' <em style="color:#666">— ' + esc(t.note) + '</em>' : '') +
                   '</td>' +
-                  '<td style="padding:3px 8px"><span class="badge">' + esc(t.state || '') + '</span></td>' +
+                  '<td><span class="badge">' + esc(t.state || '') + '</span></td>' +
                   '</tr>';
               });
               html += '</tbody></table></div>';
             });
+            html += '</div>';
             body.innerHTML = html;
           })
           .catch(function (e) {

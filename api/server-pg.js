@@ -2046,6 +2046,26 @@ function normId(v) {
   if (s.includes('@')) s = s.split('@')[0];
   return s;
 }
+
+function assignedIdentityParts(v) {
+  const raw = String(v || '').trim();
+  if (!raw) {
+    return { raw: '', displayName: '', identity: '', alias: '', email: '' };
+  }
+
+  const m = raw.match(/^(.*?)\s*<([^>]+)>$/);
+  const identity = (m ? String(m[2] || '') : raw).trim();
+  const email = (identity.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i) || [])[0] || '';
+
+  return {
+    raw,
+    displayName: m ? String(m[1] || '').trim() : '',
+    identity,
+    alias: normId(identity),
+    email: email.toLowerCase(),
+  };
+}
+
 app.get('/api/tickets', async (req, res) => {
   const {
     assignedTo,
@@ -8258,11 +8278,57 @@ app.get('/api/gen/report/daily', requireAuth, async (req, res) => {
 
     const { rows } = await pool.query(sql, params);
 
+    const aliases = [
+      ...new Set(
+        rows
+          .map((row) => assignedIdentityParts(row.assigned_to).alias)
+          .filter(Boolean),
+      ),
+    ];
+    const peopleByAlias = new Map();
+    if (aliases.length) {
+      const people = await pool.query(
+        `
+        select *
+        from (
+          select coalesce(
+                   nullif(lower(regexp_replace(tu.alias, '^.*\\\\', '')), ''),
+                   lower(split_part(tu.email, '@', 1))
+                 ) as alias,
+                 lower(tu.email) as email,
+                 coalesce(nullif(u.name, ''), nullif(tu.display_name, ''), '') as display_name
+          from tfs_users tu
+          left join users u on lower(u.email) = lower(tu.email)
+          where tu.active = true
+        ) people
+        where alias = any($1::text[])
+        `,
+        [aliases],
+      );
+      for (const person of people.rows) {
+        if (person.alias && !peopleByAlias.has(person.alias)) {
+          peopleByAlias.set(person.alias, person);
+        }
+      }
+    }
+
     const byAssignee = new Map();
     for (const row of rows) {
       const key = row.assigned_to || 'unassigned';
+      const identity = assignedIdentityParts(row.assigned_to);
+      const person = peopleByAlias.get(identity.alias) || {};
+      const fallbackDisplay =
+        identity.displayName ||
+        (identity.email ? identity.email.split('@')[0] : identity.raw) ||
+        'Unassigned';
       if (!byAssignee.has(key)) {
-        byAssignee.set(key, { assigned_to: key, team: row.team, tasks: [] });
+        byAssignee.set(key, {
+          assigned_to: key,
+          display_name: person.display_name || fallbackDisplay,
+          email: person.email || identity.email || '',
+          team: row.team,
+          tasks: [],
+        });
       }
       byAssignee.get(key).tasks.push({
         task_id: row.task_id,
