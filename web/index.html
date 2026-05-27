@@ -342,7 +342,19 @@
       min-width: 0;
     }
 
+    .dev-tab-section {
+      min-width: 0;
+    }
 
+    .dev-tab-section + .dev-tab-section {
+      border-top: 1px solid var(--border);
+      padding-top: 16px;
+    }
+
+    .dev-updates-group {
+      display: grid;
+      gap: 24px;
+    }
 
     .card.thin {
       margin: 0;
@@ -1100,8 +1112,9 @@
     <section id="pm" class="card hidden" data-role="pm-only" aria-labelledby="pmHeader">
       <div class="section-grid">
         <div class="manager-tab-panel" data-manager-panel="dev" data-manager-roles="pm,admin,lead">
-          <section id="devTicketsCard">
-            <h3>Development Tickets <small id="devIterLabel" class="badge muted" title="Active iteration">—</small>
+          <section id="devTicketsCard" class="dev-tab-section" aria-labelledby="devTicketsHeader">
+            <h3 id="devTicketsHeader">Development Tickets <small id="devIterLabel" class="badge muted"
+                title="Active iteration">—</small>
             </h3>
             <div class="row"><label for="devAssigned">Assigned to</label>
               <select id="devAssigned" aria-label="Assigned to" style="min-width:220px">
@@ -1141,24 +1154,27 @@
             </table>
           </section>
 
-          <!-- (1) Pre-Meeting Updates -->
-          <section id="preMeetingSection" aria-labelledby="preHeader">
-            <div class="row">
-              <h3 id="preHeader" style="margin:0">Pre-Meeting Updates</h3>
-              <div class="toolbar right">
-                <button id="aiRiskToggle" class="secondary" onclick="toggleAiRisk()">AI Risk Rationale</button>
-                <span id="aiRiskStatus" class="status" role="status" aria-live="polite"></span>
+          <section id="devUpdatesSection" class="dev-tab-section dev-updates-group"
+            aria-labelledby="preHeader missingHeader">
+            <!-- (1) Pre-Meeting Updates -->
+            <div id="preMeetingSection" aria-labelledby="preHeader">
+              <div class="row">
+                <h3 id="preHeader" style="margin:0">Pre-Meeting Updates</h3>
+                <div class="toolbar right">
+                  <button id="aiRiskToggle" class="secondary" onclick="toggleAiRisk()">AI Risk Rationale</button>
+                  <span id="aiRiskStatus" class="status" role="status" aria-live="polite"></span>
+                </div>
               </div>
+              <div id="today"></div>
             </div>
-            <div id="today"></div>
-          </section>
 
-          <!-- (2) Who hasn't updated yet -->
-          <section id="missingSection" aria-labelledby="missingHeader">
-            <h3 id="missingHeader">Who hasn't updated yet</h3>
-            <div id="missing"></div>
-            <div class="toolbar">
-              <button onclick="loadMissing()">Refresh</button>
+            <!-- (2) Who hasn't updated yet -->
+            <div id="missingSection" aria-labelledby="missingHeader">
+              <h3 id="missingHeader">Who hasn't updated yet</h3>
+              <div id="missing"></div>
+              <div class="toolbar">
+                <button onclick="loadMissing()">Refresh</button>
+              </div>
             </div>
           </section>
         </div>
@@ -1883,6 +1899,7 @@
           var lc = byId('loginCard'); if (lc) lc.classList.remove('hidden');
           var tc = byId('ticketsCard'); if (tc) tc.classList.add('hidden');
           var dtc = byId('devTicketsCard'); if (dtc) dtc.classList.add('hidden');
+          var duc = byId('devUpdatesSection'); if (duc) duc.classList.add('hidden');
           var sc = byId('submitCard'); if (sc) sc.classList.add('hidden');
           var pm = byId('pm'); if (pm) pm.classList.add('hidden');
           var mtc = byId('managerTabsCard'); if (mtc) mtc.classList.add('hidden');
@@ -1900,6 +1917,7 @@
         var loginCard = byId('loginCard');
         var ticketsCard = byId('ticketsCard');
         var devTicketsCard = byId('devTicketsCard');
+        var devUpdatesSection = byId('devUpdatesSection');
         var submitCard = byId('submitCard');
         var pmBox = byId('pm');
         var weeklyCard = byId('weeklySummaryCard');
@@ -1917,6 +1935,7 @@
         if (loginCard) loginCard.classList.add('hidden');
         if (ticketsCard) ticketsCard.classList.toggle('hidden', !isDev && !isLead); // dev + lead only
         if (devTicketsCard) devTicketsCard.classList.toggle('hidden', !isManager); // pm, admin, lead
+        if (devUpdatesSection) devUpdatesSection.classList.toggle('hidden', !isPM && !isAdmin); // pm/admin only
         // Lead keeps submitCard (has own tickets) — only hide for pure PM/Admin
         if (submitCard) submitCard.classList.toggle('hidden', isPM || isAdmin);
         if (weeklyCard) weeklyCard.classList.toggle('hidden', isPM || isAdmin);
@@ -2054,6 +2073,7 @@
           var lc = byId('loginCard'); if (lc) lc.classList.remove('hidden');
           var tc = byId('ticketsCard'); if (tc) tc.classList.add('hidden');
           var dtc = byId('devTicketsCard'); if (dtc) dtc.classList.add('hidden');
+          var duc = byId('devUpdatesSection'); if (duc) duc.classList.add('hidden');
           var sc = byId('submitCard'); if (sc) sc.classList.add('hidden');
           var pm = byId('pm'); if (pm) pm.classList.add('hidden');
           var mtc = byId('managerTabsCard'); if (mtc) mtc.classList.add('hidden');
