@@ -8235,10 +8235,23 @@ app.get('/api/gen/tickets', requireAuth, async (req, res) => {
       params.push(team);
     }
     if (assignedTo) {
+      // strpos avoids LIKE escape-character issues with backslashes in TFS names
       conditions.push(
-        `lower(t.assigned_to) LIKE '%' || $${params.length + 1} || '%'`,
+        `strpos(lower(t.assigned_to), $${params.length + 1}) > 0`,
       );
       params.push(assignedTo);
+    }
+    const from = req.query.from || '';
+    const to = req.query.to || '';
+    if (from) {
+      conditions.push(`t.changed_date >= $${params.length + 1}::date`);
+      params.push(from);
+    }
+    if (to) {
+      conditions.push(
+        `t.changed_date < ($${params.length + 1}::date + interval '1 day')`,
+      );
+      params.push(to);
     }
     if (state) {
       conditions.push(`lower(t.state) = $${params.length + 1}`);

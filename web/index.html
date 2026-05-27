@@ -5447,26 +5447,14 @@
         var tok = localStorage.getItem('pocToken') || '';
         var url = (API || location.origin) + '/api/gen/tickets?team=' + encodeURIComponent(team);
         if (assignedTo) url += '&assigned_to=' + encodeURIComponent(assignedTo);
+        if (from) url += '&from=' + encodeURIComponent(from);
+        if (to) url += '&to=' + encodeURIComponent(to);
 
         fetch(url, { headers: { Authorization: 'Bearer ' + tok } })
           .then(function (r) { return r.json(); })
           .then(function (data) {
             if (data.error) throw new Error(data.error);
             var items = data.items || [];
-
-            // Client-side date range filter on task changed_date
-            if (from || to) {
-              items = items.map(function (parent) {
-                var filteredTasks = (parent.tasks || []).filter(function (t) {
-                  var d = (t.changed_date || '').slice(0, 10);
-                  if (!d) return true;
-                  if (from && d < from) return false;
-                  if (to && d > to) return false;
-                  return true;
-                });
-                return Object.assign({}, parent, { tasks: filteredTasks });
-              }).filter(function (parent) { return parent.tasks.length > 0; });
-            }
 
             if (!tbody) return;
             if (items.length === 0) {
