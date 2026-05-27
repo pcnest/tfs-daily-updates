@@ -8531,6 +8531,20 @@ pool
     console.error('[boot] 900_no_tickets seed failed:', e);
   });
 
+// --- boot: seed sentinel ticket id='0' (satisfies FK for 900_no_tickets submissions) ---
+pool
+  .query(
+    `insert into tickets (id, title, type, state, deleted)
+     values ('0', 'sentinel — no active tickets', 'sentinel', 'closed', true)
+     on conflict (id) do nothing`,
+  )
+  .then(() => {
+    console.log('[boot] sentinel ticket (id=0) is ready');
+  })
+  .catch((e) => {
+    console.error('[boot] sentinel ticket seed failed:', e);
+  });
+
 // --- boot: ensure sessions.created_at exists (for 30-day expiry) ---
 pool
   .query(
