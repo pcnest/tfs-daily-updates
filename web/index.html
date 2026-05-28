@@ -772,8 +772,7 @@
       color: #ef4444;
     }
 
-    #managerTabs button.active,
-    #genTabBar button.active {
+    #managerTabs button.active {
       background: #1d4ed8;
       color: #fff;
       border-color: #1d4ed8;
@@ -1104,8 +1103,6 @@
           onclick="switchManagerTab('reports')">Reports</button>
         <button type="button" class="secondary" data-manager-tab="performance" role="tab"
           onclick="switchManagerTab('performance')">Performance</button>
-        <button type="button" class="secondary" data-manager-tab="qa" role="tab"
-          onclick="switchManagerTab('qa')">QA/TS</button>
       </nav>
     </section>
 
@@ -1455,43 +1452,6 @@
       </div>
     </section>
 
-    <!-- QA/TS Gen Tracker (Admin-only) -->
-    <section id="genTeamCard" class="card hidden" data-manager-panel="qa" data-manager-roles="admin"
-      aria-labelledby="genTeamHeader">
-      <div class="row">
-        <h3 id="genTeamHeader" style="margin:0">QA / TS Task Tracker</h3>
-        <div class="toolbar right">
-          <span id="genStatus" class="status" role="status" aria-live="polite"></span>
-          <button onclick="loadGenTickets(window.__genActiveTeam)">Refresh</button>
-        </div>
-      </div>
-
-      <!-- Team tab bar (populated dynamically) -->
-      <div id="genTabBar" class="toolbar" style="margin-top:8px;gap:4px;flex-wrap:wrap;"></div>
-
-      <!-- Ticket table -->
-      <div id="genTicketsWrap" class="table-wrap" style="margin-top:8px;overflow:auto;">
-        <table id="genTicketsTbl" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
-          <thead>
-            <tr>
-              <th style="width:60px;padding:4px 8px;">ID</th>
-              <th style="width:110px;padding:4px 8px;">Type</th>
-              <th style="text-align:left;padding:4px 8px;">Title</th>
-              <th style="width:90px;padding:4px 8px;">State</th>
-              <th style="width:140px;padding:4px 8px;">Assigned To</th>
-              <th style="width:80px;padding:4px 8px;">Remaining Work (hrs)</th>
-            </tr>
-          </thead>
-          <tbody id="genTicketsTbody">
-            <tr>
-              <td colspan="6" style="text-align:center;padding:1rem;color:#888"></td>
-            </tr>
-          </tbody>
-        </table>
-      </div>
-
-    </section>
-
     <!-- QA Daily Report Tab Panel (Admin-only) -->
     <section id="qaReportCard" class="card hidden" data-manager-panel="qa-report" data-manager-roles="admin"
       aria-labelledby="qaReportHeader">
@@ -1722,7 +1682,7 @@
       function managerTabAllowed(tab, role) {
         if (role === 'admin') {
           return tab === 'dev' || tab === 'risks' ||
-            tab === 'reports' || tab === 'performance' || tab === 'qa' ||
+            tab === 'reports' || tab === 'performance' ||
             tab === 'qa-report' || tab === 'ts-report';
         }
         if (role === 'pm') {
@@ -2000,7 +1960,6 @@
           var sc = byId('submitCard'); if (sc) sc.classList.add('hidden');
           var pm = byId('pm'); if (pm) pm.classList.add('hidden');
           var mtc = byId('managerTabsCard'); if (mtc) mtc.classList.add('hidden');
-          var gtc = byId('genTeamCard'); if (gtc) gtc.classList.add('hidden');
         }
       }
 
@@ -2020,7 +1979,6 @@
         var weeklyCard = byId('weeklySummaryCard');
         var topDevsCard = byId('topDevsCard');
         var bonusAuditCard = byId('bonusAuditCard');
-        var genTeamCard = byId('genTeamCard');
         var snapPdfBtn = byId('snapPdfBtn');
         var snapEmailBtn = byId('snapEmailBtn');
         var missingSection = byId('missingSection');
@@ -2045,7 +2003,6 @@
         if (pmBox) pmBox.classList.toggle('hidden', !isManager);
         if (topDevsCard) topDevsCard.classList.toggle('hidden', !isAdmin); // admin-only card
         if (bonusAuditCard) bonusAuditCard.classList.toggle('hidden', !isAdmin); // admin-only card
-        if (genTeamCard) genTeamCard.classList.toggle('hidden', !isAdmin); // admin-only card
         if (snapPdfBtn) snapPdfBtn.classList.toggle('hidden', !isAdmin); // admin-only button
         if (snapEmailBtn) snapEmailBtn.classList.toggle('hidden', !isAdmin); // admin-only button
         // Lead-excluded sections and buttons (pm/admin only)
@@ -2090,8 +2047,6 @@
           if (!isLead) { loadBlockers(); loadMissing(); } // lead excluded from these
           if (isLead) loadTickets(); // lead also loads own assigned tickets
           if (isManager) loadTopDevs(); // pm/admin/lead
-          if (isAdmin) loadGenConfig();  // gen tracker tab setup (admin-only)
-
           presetReportThisWeek(false);
           if (!window.__exportTimer) {
             window.__exportTimer = setInterval(function () {
@@ -2174,7 +2129,6 @@
           var sc = byId('submitCard'); if (sc) sc.classList.add('hidden');
           var pm = byId('pm'); if (pm) pm.classList.add('hidden');
           var mtc = byId('managerTabsCard'); if (mtc) mtc.classList.add('hidden');
-          var gtc = byId('genTeamCard'); if (gtc) gtc.classList.add('hidden');
         };
         if (t) {
           req('POST', (API || location.origin) + (all ? "/api/auth/logout_all" : "/api/auth/logout"), null, { "Authorization": "Bearer " + t }).then(function () { done(); }).catch(function () { done(); });
@@ -5334,93 +5288,6 @@
       window.toggleAiRisk = toggleAiRisk;
       window.switchManagerTab = switchManagerTab;
 
-      // ---- Gen (QA/TS) tracker ----
-      window.__genActiveTeam = null;
-
-      function loadGenConfig() {
-        var tok = localStorage.getItem('pocToken') || '';
-        fetch((API || location.origin) + '/api/gen/config', {
-          headers: { Authorization: 'Bearer ' + tok }
-        })
-          .then(function (r) { return r.json(); })
-          .then(function (data) {
-            if (data.error) throw new Error(data.error);
-            var teams = (data.enabledTeams || []);
-            var bar = byId('genTabBar');
-            if (!bar) return;
-            bar.innerHTML = '';
-            teams.forEach(function (team) {
-              var btn = document.createElement('button');
-              btn.className = 'secondary';
-              btn.textContent = team.toUpperCase();
-              btn.setAttribute('data-gen-team', team);
-              btn.onclick = function () { switchGenTab(team); };
-              bar.appendChild(btn);
-            });
-            if (teams.length > 0) switchGenTab(teams[0]);
-          })
-          .catch(function (e) {
-            var st = byId('genStatus');
-            if (st) { st.textContent = 'Config error: ' + e.message; st.className = 'status err'; }
-          });
-      }
-
-      function switchGenTab(team) {
-        window.__genActiveTeam = team;
-        var btns = (byId('genTabBar') || {}).querySelectorAll ? byId('genTabBar').querySelectorAll('button') : [];
-        for (var i = 0; i < btns.length; i++) {
-          btns[i].classList.toggle('active', btns[i].getAttribute('data-gen-team') === team);
-        }
-        loadGenTickets(team);
-      }
-
-      function loadGenTickets(team) {
-        var st = byId('genStatus');
-        var tbody = byId('genTicketsTbody');
-        if (st) { st.textContent = 'Loading...'; st.className = 'status'; }
-        if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:1rem">Loading…</td></tr>';
-        var tok = localStorage.getItem('pocToken') || '';
-        var url = (API || location.origin) + '/api/gen/tickets' + (team ? '?team=' + encodeURIComponent(team) : '');
-        fetch(url, { headers: { Authorization: 'Bearer ' + tok } })
-          .then(function (r) { return r.json(); })
-          .then(function (data) {
-            if (data.error) throw new Error(data.error);
-            var items = data.items || [];
-            if (!tbody) return;
-            if (items.length === 0) {
-              tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:1rem;color:#888">No tasks found for this team in the current iteration.</td></tr>';
-              if (st) { st.textContent = ''; }
-              return;
-            }
-            var rows = '';
-            items.forEach(function (parent) {
-              rows += '<tr style="background:#f4f6fa;">' +
-                '<td style="padding:4px 8px;color:#666;font-size:0.8rem">' + esc(String(parent.id || '')) + '</td>' +
-                '<td style="padding:4px 8px;color:#666;font-size:0.8rem">' + esc(parent.type || '') + '</td>' +
-                '<td style="padding:4px 8px;font-weight:600">' + esc(parent.title || '') + '</td>' +
-                '<td style="padding:4px 8px">' + esc(parent.state || '') + '</td>' +
-                '<td colspan="2" style="padding:4px 8px;color:#666;font-size:0.8rem">' + esc(parent.iteration_path || '') + '</td>' +
-                '</tr>';
-              (parent.tasks || []).forEach(function (t) {
-                rows += '<tr>' +
-                  '<td style="padding:3px 8px;color:#999;font-size:0.8rem">' + esc(String(t.id || '')) + '</td>' +
-                  '<td style="padding:3px 8px">' + esc(t.type || '') + '</td>' +
-                  '<td style="padding:3px 8px 3px 24px">' + esc(t.title || '') + '</td>' +
-                  '<td style="padding:3px 8px">' + esc(t.state || '') + '</td>' +
-                  '<td style="padding:3px 8px">' + esc(t.assigned_to || '') + '</td>' +
-                  '<td style="padding:3px 8px;text-align:right">' + (t.remaining_work != null ? t.remaining_work : '') + '</td>' +
-                  '</tr>';
-              });
-            });
-            tbody.innerHTML = rows;
-            if (st) { st.textContent = items.length + ' parent(s)'; st.className = 'status ok'; }
-          })
-          .catch(function (e) {
-            if (tbody) tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;padding:1rem;color:red">Error: ' + esc(e.message) + '</td></tr>';
-            if (st) { st.textContent = 'Error'; st.className = 'status err'; }
-          });
-      }
-
       function loadGenTeamAssignees(team, selectId) {
         var sel = byId(selectId);
         if (!sel) return;
@@ -5674,9 +5541,6 @@
         loadSyncTimes();
       }
 
-      window.loadGenConfig = loadGenConfig;
-      window.switchGenTab = switchGenTab;
-      window.loadGenTickets = loadGenTickets;
       window.loadGenReport = loadGenReport;
       window.loadQaReport = loadQaReport;
       window.loadTsReport = loadTsReport;
