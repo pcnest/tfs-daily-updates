@@ -132,7 +132,6 @@
 #### Process:
 
 1. **Watermark Check**
-
    - Reads `agent/last_sync.json` for last successful sync timestamp
    - Subtracts 5 minutes for overlap window (prevents missed tickets)
 
@@ -150,13 +149,11 @@
    ```
 
 3. **Batch Details Fetch**
-
    - Chunks IDs into batches of 200
    - POST to TFS API: `/tfs/DefaultCollection/_apis/wit/workitems?ids=...&$expand=relations&api-version=5.0`
    - **KEY FIX**: Uses `$it.id` (work item object) instead of `$f."System.Id"` (field hash) because TFS sometimes returns empty System.Id field
 
 4. **Timestamp Filtering**
-
    - **Delta Sync** (default): Filter by `changedDate >= watermark`
    - **Full Push** (every 24 hours): Skip filter, send all tickets
    - Full push ensures stale fields (e.g., `iteration_path` from old cached data) get refreshed
@@ -313,7 +310,7 @@ WHERE NOT (id = ANY($presentIds))
 // If no iterationPath provided, default to current iteration from meta
 if (!effectiveIterationPath) {
   const currIter = await pool.query(
-    `select value from meta where key='current_iteration'`
+    `select value from meta where key='current_iteration'`,
   );
   effectiveIterationPath = currIter.rows[0]?.value || null;
 }
@@ -342,6 +339,7 @@ if (!effectiveIterationPath) {
 - **Progress updates**: Can view all users' updates
 - **Locking**: Can unlock other users' days
 - **UI access**: Full visibility to "Today" view (all team updates), blockers, triage
+- **Top Performers report**: `GET /api/reports/top-devs` (Admin-only) ranks developers over last 28 days or custom date range using existing data (`progress_updates` + `tickets`). Scored metrics: throughput, completion %, cycle time (200/300/400 families), blocker rate (600/800). Display-only: consistency (stddev of daily finishes) and update coverage (updates/weekday). Low-sample guard: requires ≥3 finished tickets to rank; returns window metadata and low-sample flag.
 
 #### 4.3 Data Flow for Dev User
 
@@ -356,7 +354,6 @@ if (!effectiveIterationPath) {
    ```
 
 2. **API Processing**:
-
    - Extracts `assignedTo` = "jdoe" (or alias from dropdown)
    - Applies filters:
      - `lower(assigned_to) LIKE '%jdoe%'`
@@ -680,7 +677,7 @@ await client.query(
    SET deleted = true
    WHERE lower(iteration_path) = lower($1)
    AND NOT (id = ANY($2::text[]))`,
-  [presentIterationPath, presentIds]
+  [presentIterationPath, presentIds],
 );
 
 // Stage 2: Recent-sync sweep for cross-iteration items (Lines 1148-1154)
@@ -689,7 +686,7 @@ await client.query(
    SET deleted = true
    WHERE NOT (id = ANY($1::text[]))
    AND last_seen_at >= now() - interval '3 hours'`,
-  [presentIds]
+  [presentIds],
 );
 ```
 

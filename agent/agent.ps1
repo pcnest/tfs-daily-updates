@@ -11,11 +11,10 @@ $TfsUrl = "https://remote.spdev.us/tfs"
 $Collection = "SupplyPro.Applications"
 $Project = "SupplyPro.Core"
 $Team = "Enterprise Software Team"
-$Pat = "x34cxkcnvd7zuxw6egqyg2yyf6frsbw3vjjnmh37xgar2aopxwqa"   # Read-only PAT is recommended
 $WiqlFile = $null  # will be resolved after $AgentDir is determined
 $PublicApiBase = "https://tfs-daily-api.onrender.com"
 # $PublicApiBase = "http://localhost:8080"
-$PublicApiKey = "3bded27a3b75ee54e2ae2da4293687c26172d3f551e3584e343c71d399e4054f"
+# $Pat and $PublicApiKey are loaded from secrets.ps1 (see Basics section below)
 # --------------------------------------------
 
 # ---------- Basics ----------
@@ -31,6 +30,15 @@ if (-not $AgentDir) {
 }
 # Resolve default WIQL file path now that $AgentDir is known
 if (-not $WiqlFile) { $WiqlFile = Join-Path $AgentDir 'sample.wiql' }
+
+# ---------- Credentials (from secrets.ps1) ----------
+$_secretsFile = Join-Path $AgentDir 'secrets.ps1'
+if (Test-Path $_secretsFile) { . $_secretsFile }
+else { throw "secrets.ps1 not found in '$AgentDir'. Copy agent\secrets.ps1.example to agent\secrets.ps1 and fill in credentials." }
+$Pat = $TFS_PAT
+$PublicApiKey = $TFS_API_KEY
+# ----------------------------------------------------
+
 $NowUtc = (Get-Date).ToUniversalTime()
 
 function Write-Log([string]$msg) {

@@ -1,11 +1,11 @@
-# Top Performers Table — How to Read It (PM / Leads / Stakeholders)
+# Top Performers Table — How to Read It (Admin Only)
 
 This table ranks developers using only the data we already collect (`progress_updates` and `tickets`). No new telemetry or AI scoring is introduced.
 
 ## What the score means
 
 - Composite z-score with fixed weights: throughput (0.35), completion % (0.25), cycle time — lower is better (0.20), blocker rate — lower is better (0.20).
-- Scores are relative to the team in the selected window (last 4 sprints **or** last 28 days). A 0.00 score is team average; positive means above team average.
+- Scores are relative to the team in the selected window (last 4 weeks or custom date range). A 0.00 score is team average; positive means above team average.
 - Developers with fewer than **3 finished tickets** in the window are marked **“low sample”** and excluded from ranking order (but still shown for transparency).
 
 ## Columns at a glance
@@ -32,22 +32,20 @@ This table ranks developers using only the data we already collect (`progress_up
 ## Scope and fairness
 
 - Scope selector controls the window:
-  - **Last 4 sprints**: derived from `meta.current_iteration` (N, N-1, N-2, N-3).
   - **Last 4 weeks**: rolling 28 days.
-- Window and iteration list are echoed to the right of the table header for transparency.
+  - **Custom date range**: any date range between 7 and 90 days.
+- Window dates are displayed beside the Refresh button for transparency.
 - All metrics are computed only from updates and tickets inside that window.
 
 ## Drill-down to see the underlying work
 
-You can view the existing developer snapshot (HTML/PDF) for the same window:
+You can view the existing developer snapshot for the same window:
 
-1. Note the window shown beside the “Refresh” button (dates and, if in sprint mode, the sprint names).
-2. Call the snapshots endpoint (PM auth required):
+1. Click the **"View snapshot"** button in any developer's row to open their snapshot in a modal viewer
+2. The snapshot will automatically use the same date range as the Top Performers window
+3. Alternatively, you can call the snapshots endpoint directly (PM auth required):
    - HTML: `/api/reports/snapshots?format=html&developer=<email>&from=<YYYY-MM-DD>&to=<YYYY-MM-DD>`
    - PDF: `/api/reports/snapshots?format=pdf&developer=<email>&from=<YYYY-MM-DD>&to=<YYYY-MM-DD>`
-3. Use the same `from`/`to` dates that appear in the Top Performers status badge to stay consistent.
-
-_(UI note: a direct “View snapshot” link is not yet wired into the table; use the URLs above for now.)_
 
 ## Bonus Eligibility Evaluation (AI-assisted)
 

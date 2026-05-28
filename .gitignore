@@ -143,3 +143,8 @@ vite.config.ts.timestamp-*
 payload-failed-*.json
 
 agent/last_sync.json
+
+# PowerShell secrets — credentials, never commit
+agent/secrets.ps1
+
+*.md

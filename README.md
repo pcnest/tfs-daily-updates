@@ -64,6 +64,7 @@ Open `web/index.html` in browser or deploy to static hosting.
 - **Pre-Lock Check**: Warns about assigned tickets missing updates before locking
 - **AI Integration**: OpenAI-powered triage, chase messages, next steps, and RAG-backed snapshot insights (stored in `ai_snapshot_runs`)
 - **PDF Reports**: Automated developer snapshot generation with email delivery
+- **Top Performers**: Admin-only ranking of developers over last 4 weeks or custom date range (7–90 days) using existing progress/ticket data (throughput, completion%, cycle time, blocker rate; consistency and update coverage shown; low-sample guard)
 
 ## AI Snapshot History
 
