@@ -1341,120 +1341,116 @@
             </table>
           </div>
 
+          <!-- QA Tasks sub-section (admin only) -->
+          <section aria-labelledby="qaRptHeader" data-admin-only class="hidden" style="margin-top:24px;">
+            <h4 id="qaRptHeader" style="margin:0 0 8px 0;">QA Tasks</h4>
+            <div class="toolbar" style="margin-bottom:8px;flex-wrap:nowrap;">
+              <label for="qaRptFrom">From:</label>
+              <input id="qaRptFrom" type="date" />
+              <label for="qaRptTo">To:</label>
+              <input id="qaRptTo" type="date" />
 
-
-
-        </section>
-
-        <!-- QA Tasks sub-section (admin only) -->
-        <section aria-labelledby="qaRptHeader" data-admin-only class="hidden" style="margin-top:24px;">
-          <h4 id="qaRptHeader" style="margin:0 0 8px 0;">QA Tasks</h4>
-          <div class="toolbar" style="margin-bottom:8px;flex-wrap:nowrap;">
-            <label for="qaRptFrom">From:</label>
-            <input id="qaRptFrom" type="date" />
-            <label for="qaRptTo">To:</label>
-            <input id="qaRptTo" type="date" />
-
-            <select id="qaRptDev">
-              <option value="">— Select QA Analyst —</option>
-            </select>
-            <button type="button" onclick="loadReportGenSection('qa')">Load</button>
-            <span id="qaRptStatus" class="status" role="status" aria-live="polite"></span>
-          </div>
-          <div class="table-wrap">
-            <table id="qaRptTbl" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
-              <thead>
-                <tr>
-                  <th style="width:60px;padding:4px 8px;">ID</th>
-                  <th style="width:110px;padding:4px 8px;">Type</th>
-                  <th style="text-align:left;padding:4px 8px;">Title</th>
-                  <th style="width:90px;padding:4px 8px;">State</th>
-                  <th style="width:140px;padding:4px 8px;">Assigned To</th>
-                  <th style="width:80px;padding:4px 8px;">Remaining Work (hrs)</th>
-                </tr>
-              </thead>
-              <tbody id="qaRptTbody">
-                <tr>
-                  <td colspan="6" style="text-align:center;padding:1rem;color:#888">Use the filters above and click
-                    Load.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <!-- TS Tasks sub-section (admin only) -->
-        <section aria-labelledby="tsRptHeader" data-admin-only class="hidden" style="margin-top:24px;">
-          <h4 id="tsRptHeader" style="margin:0 0 8px 0;">TS Tasks</h4>
-          <div class="toolbar" style="margin-bottom:8px;flex-wrap:nowrap;">
-            <label for="tsRptFrom">From:</label>
-            <input id="tsRptFrom" type="date" />
-            <label for="tsRptTo">To:</label>
-            <input id="tsRptTo" type="date" />
-
-            <select id="tsRptDev">
-              <option value="">— Select TechSupport —</option>
-            </select>
-            <button type="button" onclick="loadReportGenSection('ts')">Load</button>
-            <span id="tsRptStatus" class="status" role="status" aria-live="polite"></span>
-          </div>
-          <div class="table-wrap">
-            <table id="tsRptTbl" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
-              <thead>
-                <tr>
-                  <th style="width:60px;padding:4px 8px;">ID</th>
-                  <th style="width:110px;padding:4px 8px;">Type</th>
-                  <th style="text-align:left;padding:4px 8px;">Title</th>
-                  <th style="width:90px;padding:4px 8px;">State</th>
-                  <th style="width:140px;padding:4px 8px;">Assigned To</th>
-                  <th style="width:80px;padding:4px 8px;">Remaining Work (hrs)</th>
-                </tr>
-              </thead>
-              <tbody id="tsRptTbody">
-                <tr>
-                  <td colspan="6" style="text-align:center;padding:1rem;color:#888">Use the filters above and click
-                    Load.</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-
-        <!-- (5) Blockers radar -->
-        <section id="blockersSection" data-manager-panel="risks" data-manager-roles="pm,admin"
-          aria-labelledby="blockersHeader">
-          <div class="row">
-            <h3 id="blockersHeader" style="margin:0">Blockers Radar</h3>
-            <div class="toolbar right">
-              <button onclick="loadBlockers()">Refresh</button>
-              <span id="aiStatus" class="status" role="status" aria-live="polite"></span>
+              <select id="qaRptDev">
+                <option value="">— Select QA Analyst —</option>
+              </select>
+              <button type="button" onclick="loadReportGenSection('qa')">Load</button>
+              <span id="qaRptStatus" class="status" role="status" aria-live="polite"></span>
             </div>
-          </div>
-
-          <div class="table-wrap">
-            <table id="blockersTbl" aria-live="polite">
-              <thead>
-                <tr>
-                  <th style="width:100px">ID</th>
-                  <th style="width:110px">Type</th>
-                  <th style="width:350px">Title</th>
-                  <th style="width:120px">State</th>
-                  <th style="width:120px">Severity</th>
-                  <th style="width:100px">Code</th>
-                  <th style="width:90px">Risk</th>
-                  <th>Note</th>
-                  <th style="width:180px">Iteration</th>
-                  <th style="width:110px">AI</th>
-                </tr>
-              </thead>
-              <tbody></tbody>
-            </table>
-            <div id="triagePanel" class="hidden" aria-labelledby="triageHeader" style="margin-top:12px;">
-              <h3 id="triageHeader" style="margin:0">AI Triage — prioritized next steps</h3>
-              <ol id="triage-list" style="margin-top:10px;"></ol>
+            <div class="table-wrap">
+              <table id="qaRptTbl" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                <thead>
+                  <tr>
+                    <th style="width:60px;padding:4px 8px;">ID</th>
+                    <th style="width:110px;padding:4px 8px;">Type</th>
+                    <th style="text-align:left;padding:4px 8px;">Title</th>
+                    <th style="width:90px;padding:4px 8px;">State</th>
+                    <th style="width:140px;padding:4px 8px;">Assigned To</th>
+                    <th style="width:80px;padding:4px 8px;">Remaining Work (hrs)</th>
+                  </tr>
+                </thead>
+                <tbody id="qaRptTbody">
+                  <tr>
+                    <td colspan="6" style="text-align:center;padding:1rem;color:#888">Use the filters above and click
+                      Load.</td>
+                  </tr>
+                </tbody>
+              </table>
             </div>
-          </div>
-        </section>
+          </section>
+
+          <!-- TS Tasks sub-section (admin only) -->
+          <section aria-labelledby="tsRptHeader" data-admin-only class="hidden" style="margin-top:24px;">
+            <h4 id="tsRptHeader" style="margin:0 0 8px 0;">TS Tasks</h4>
+            <div class="toolbar" style="margin-bottom:8px;flex-wrap:nowrap;">
+              <label for="tsRptFrom">From:</label>
+              <input id="tsRptFrom" type="date" />
+              <label for="tsRptTo">To:</label>
+              <input id="tsRptTo" type="date" />
+
+              <select id="tsRptDev">
+                <option value="">— Select TechSupport —</option>
+              </select>
+              <button type="button" onclick="loadReportGenSection('ts')">Load</button>
+              <span id="tsRptStatus" class="status" role="status" aria-live="polite"></span>
+            </div>
+            <div class="table-wrap">
+              <table id="tsRptTbl" style="width:100%;border-collapse:collapse;font-size:0.85rem;">
+                <thead>
+                  <tr>
+                    <th style="width:60px;padding:4px 8px;">ID</th>
+                    <th style="width:110px;padding:4px 8px;">Type</th>
+                    <th style="text-align:left;padding:4px 8px;">Title</th>
+                    <th style="width:90px;padding:4px 8px;">State</th>
+                    <th style="width:140px;padding:4px 8px;">Assigned To</th>
+                    <th style="width:80px;padding:4px 8px;">Remaining Work (hrs)</th>
+                  </tr>
+                </thead>
+                <tbody id="tsRptTbody">
+                  <tr>
+                    <td colspan="6" style="text-align:center;padding:1rem;color:#888">Use the filters above and click
+                      Load.</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </section>
+          <!-- /reports panel -->
+
+          <!-- (5) Blockers radar -->
+          <section id="blockersSection" data-manager-panel="risks" data-manager-roles="pm,admin"
+            aria-labelledby="blockersHeader">
+            <div class="row">
+              <h3 id="blockersHeader" style="margin:0">Blockers Radar</h3>
+              <div class="toolbar right">
+                <button onclick="loadBlockers()">Refresh</button>
+                <span id="aiStatus" class="status" role="status" aria-live="polite"></span>
+              </div>
+            </div>
+
+            <div class="table-wrap">
+              <table id="blockersTbl" aria-live="polite">
+                <thead>
+                  <tr>
+                    <th style="width:100px">ID</th>
+                    <th style="width:110px">Type</th>
+                    <th style="width:350px">Title</th>
+                    <th style="width:120px">State</th>
+                    <th style="width:120px">Severity</th>
+                    <th style="width:100px">Code</th>
+                    <th style="width:90px">Risk</th>
+                    <th>Note</th>
+                    <th style="width:180px">Iteration</th>
+                    <th style="width:110px">AI</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+              <div id="triagePanel" class="hidden" aria-labelledby="triageHeader" style="margin-top:12px;">
+                <h3 id="triageHeader" style="margin:0">AI Triage — prioritized next steps</h3>
+                <ol id="triage-list" style="margin-top:10px;"></ol>
+              </div>
+            </div>
+          </section>
 
       </div>
     </section>
@@ -5659,7 +5655,7 @@
           .then(function (d) {
             function applySyncLabel(id, fmt) {
               var el = byId(id);
-              if (el) el.textContent = fmt ? '\u00b7 Synced ' + fmt : '';
+              if (el) el.textContent = fmt ? '\u00b7 Last Synced ' + fmt : '';
             }
             applySyncLabel('preLastSync', d.main_fmt);
             applySyncLabel('qaLastSync', d.qa_fmt);
