@@ -8224,10 +8224,17 @@ app.get('/api/gen/members', requireAuth, async (req, res) => {
     const me = await pool.query('select role from users where email=$1', [
       req.userEmail,
     ]);
-    if (!me.rowCount || me.rows[0].role !== 'admin') {
+    if (!me.rowCount) {
       return res.status(403).json({ error: 'admin_only' });
     }
     const team = (req.query.team || '').toLowerCase();
+    const userRole = me.rows[0].role;
+    if (userRole !== 'admin') {
+      const allowedForTs = ['pm', 'lead'];
+      if (!allowedForTs.includes(userRole) || team !== 'ts') {
+        return res.status(403).json({ error: 'admin_only' });
+      }
+    }
     const conditions = [
       't.deleted = false',
       't.assigned_to IS NOT NULL',
@@ -8255,11 +8262,18 @@ app.get('/api/gen/tickets', requireAuth, async (req, res) => {
     const me = await pool.query('select role from users where email=$1', [
       req.userEmail,
     ]);
-    if (!me.rowCount || me.rows[0].role !== 'admin') {
+    if (!me.rowCount) {
       return res.status(403).json({ error: 'admin_only' });
     }
-
     const team = (req.query.team || '').toLowerCase();
+    const userRole = me.rows[0].role;
+    if (userRole !== 'admin') {
+      const allowedForTs = ['pm', 'lead'];
+      if (!allowedForTs.includes(userRole) || team !== 'ts') {
+        return res.status(403).json({ error: 'admin_only' });
+      }
+    }
+
     const assignedTo = (req.query.assigned_to || '').toLowerCase();
     const state = (req.query.state || '').toLowerCase();
     const q = req.query.q || '';
