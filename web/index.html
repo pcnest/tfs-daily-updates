@@ -2698,11 +2698,18 @@
             tbody.innerHTML = "";
             var items = js.items || [];
             __topItems = items;
-            if (items.length === 0 && (window.__role === 'dev' || window.__role === 'lead')) {
+            var isDevOrLead = (window.__role === 'dev' || window.__role === 'lead');
+            var allDone = items.length > 0 && items.every(function (t) {
+              return (t.lastCode || t.progressCode || t.code || '').startsWith('500_');
+            });
+            if ((items.length === 0 || allDone) && isDevOrLead) {
               var noTixRow = document.createElement('tr');
               noTixRow.id = 'noTicketRow';
+              var noTixMsg = items.length === 0
+                ? 'No active tickets in this sprint.'
+                : 'All your tickets are marked done \u2014 nothing left to work on today?';
               noTixRow.innerHTML = '<td colspan="10" style="text-align:center;padding:16px">'
-                + '<div class="help">No active tickets in this sprint.</div>'
+                + '<div class="help">' + noTixMsg + '</div>'
                 + (window.__lockedToday
                   ? '<div class="help" style="margin-top:6px">Status already recorded for today.</div>'
                   : '<div style="margin-top:8px">'
