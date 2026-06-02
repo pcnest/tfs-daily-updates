@@ -8367,11 +8367,17 @@ app.get('/api/gen/report/daily', requireAuth, async (req, res) => {
     const me = await pool.query('select role from users where email=$1', [
       req.userEmail,
     ]);
-    if (!me.rowCount || me.rows[0].role !== 'admin') {
+    if (!me.rowCount) {
       return res.status(403).json({ error: 'admin_only' });
     }
-
+    const userRole = me.rows[0].role;
     const team = (req.query.team || '').toLowerCase();
+    if (userRole !== 'admin') {
+      const allowedForTs = ['pm', 'lead'];
+      if (!allowedForTs.includes(userRole) || team !== 'ts') {
+        return res.status(403).json({ error: 'admin_only' });
+      }
+    }
     const date = req.query.date || new Date().toISOString().slice(0, 10);
 
     const conditions = [
