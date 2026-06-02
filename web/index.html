@@ -1469,7 +1469,7 @@
     </section>
 
     <!-- TS Daily Report Tab Panel (Admin-only) -->
-    <section id="tsReportCard" class="card hidden" data-manager-panel="ts-report" data-manager-roles="admin"
+    <section id="tsReportCard" class="card hidden" data-manager-panel="ts-report" data-manager-roles="admin,pm"
       aria-labelledby="tsReportHeader">
       <div
         style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
@@ -1686,7 +1686,7 @@
             tab === 'qa-report' || tab === 'ts-report';
         }
         if (role === 'pm') {
-          return tab === 'dev' || tab === 'risks' || tab === 'reports';
+          return tab === 'dev' || tab === 'risks' || tab === 'reports' || tab === 'ts-report';
         }
         if (role === 'lead') {
           return tab === 'dev' || tab === 'risks' || tab === 'reports';
