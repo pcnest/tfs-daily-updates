@@ -8392,7 +8392,7 @@ app.get('/api/gen/report/daily', requireAuth, async (req, res) => {
         return res.status(403).json({ error: 'admin_only' });
       }
     }
-    const date = req.query.date || new Date().toISOString().slice(0, 10);
+    const date = req.query.date || (await todayLocal(pool));
 
     const conditions = [
       't.deleted = false',
