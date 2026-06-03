@@ -3394,7 +3394,7 @@
 
       function loadToday() {
         var box = document.getElementById("today");
-        fetch((window.API || location.origin) + "/api/updates/today")
+        fetch((window.API || location.origin) + "/api/updates/today", { headers: { "Authorization": "Bearer " + (localStorage.getItem("pocToken") || "") } })
           .then(function (res) { return res.json(); })
           .then(function (js) {
             var out = [];
@@ -3713,7 +3713,7 @@
           tbody.appendChild(tr);
         }
 
-        fetch((API || location.origin) + "/api/updates/blockers")
+        fetch((API || location.origin) + "/api/updates/blockers", { headers: { "Authorization": "Bearer " + (localStorage.getItem("pocToken") || "") } })
           .then(function (res) { return res.json(); })
           .then(function (js) {
             var items = js.items || [];
