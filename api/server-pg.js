@@ -87,7 +87,16 @@ function buildMailTransport() {
 const app = express();
 app.set('trust proxy', 1); // Render sits behind a reverse proxy; trust one hop for X-Forwarded-For
 const PORT = process.env.PORT || 8080;
-app.use(cors());
+const _allowedOrigins = (process.env.ALLOWED_ORIGIN || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+app.use(
+  cors({
+    origin: _allowedOrigins.length ? _allowedOrigins : false,
+    credentials: false,
+  }),
+);
 // Bump JSON body limit to handle larger sync batches without 502/413
 app.use(express.json({ limit: '10mb' }));
 
@@ -1405,10 +1414,8 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
     );
 
     const appBase =
-      process.env.APP_URL ||
-      (req.headers.origin
-        ? req.headers.origin
-        : `${req.protocol}://${req.get('host')}`);
+      (process.env.APP_URL || '').replace(/\/$/, '') ||
+      `${req.headers['x-forwarded-proto'] || req.protocol}://${req.headers['x-forwarded-host'] || req.get('host')}`;
     const verifyLink = `${appBase}/api/auth/verify-email?token=${verifyToken}`;
     try {
       await sendEmail({
@@ -1609,10 +1616,8 @@ app.post(
       );
 
       const appBase =
-        process.env.APP_URL ||
-        (req.headers.origin
-          ? req.headers.origin
-          : `${req.protocol}://${req.get('host')}`);
+        (process.env.APP_URL || '').replace(/\/$/, '') ||
+        `${req.headers['x-forwarded-proto'] || req.protocol}://${req.headers['x-forwarded-host'] || req.get('host')}`;
       const verifyLink = `${appBase}/api/auth/verify-email?token=${verifyToken}`;
       try {
         await sendEmail({
@@ -2067,7 +2072,7 @@ function assignedIdentityParts(v) {
   };
 }
 
-app.get('/api/tickets', async (req, res) => {
+app.get('/api/tickets', requireAuth, async (req, res) => {
   const {
     assignedTo,
     state,
@@ -2555,6 +2560,34 @@ app.post('/api/progress', requireAuth, async (req, res) => {
   if (locked.rowCount)
     return res.status(403).json({ error: 'update already submitted (locked)' });
 
+  // Ownership guard: devs may only submit progress for tickets assigned to them.
+  // PMs, admins, and leads may submit for any ticket.
+  // Ticket 0 (no-ticket status codes) is always allowed.
+  if (String(ticketId) !== '0') {
+    const _ownerRoleRow = await pool.query(
+      'select role from users where email=$1 limit 1',
+      [req.userEmail],
+    );
+    const _ownerRole = _ownerRoleRow.rows[0]?.role || 'dev';
+    if (!['pm', 'admin', 'lead'].includes(_ownerRole)) {
+      const _tkt = await pool.query(
+        'select assigned_to from tickets where id=$1 limit 1',
+        [String(ticketId)],
+      );
+      if (!_tkt.rowCount)
+        return res.status(404).json({ error: 'ticket not found' });
+      const _assignedTo = (_tkt.rows[0].assigned_to || '').toLowerCase();
+      const _alias = req.userEmail.split('@')[0].toLowerCase();
+      const _owns =
+        _assignedTo.includes(req.userEmail.toLowerCase()) ||
+        _assignedTo.includes(_alias);
+      if (!_owns)
+        return res
+          .status(403)
+          .json({ error: 'you can only submit progress for your own tickets' });
+    }
+  }
+
   if (await isNoteRequired(pool, code)) {
     if (!note || !String(note).trim())
       return res.status(400).json({ error: `note required for code ${code}` });
@@ -2590,9 +2623,10 @@ async function tryGetAuthEmail(req) {
   const token = hdr.startsWith('Bearer ') ? hdr.slice(7) : null;
   if (!token) return null;
   try {
-    const s = await pool.query('select email from sessions where token=$1', [
-      token,
-    ]);
+    const s = await pool.query(
+      `select email from sessions where token=$1 AND created_at > now() - interval '30 days'`,
+      [token],
+    );
     return s.rowCount ? s.rows[0].email : null;
   } catch (_e) {
     return null;
@@ -2695,7 +2729,7 @@ app.get('/api/updates/locks/range', requireAuth, async (req, res) => {
 });
 
 // --- collation (enriched)
-app.get('/api/updates/today', async (_req, res) => {
+app.get('/api/updates/today', requireAuth, requirePMOnly, async (req, res) => {
   const date = await todayLocal(pool);
 
   const updates = await pool.query(
@@ -3085,8 +3119,19 @@ async function selectRangeRows({ from, to, devEmail, devLocal }) {
 }
 
 // JSON: /api/updates/range?from=YYYY-MM-DD&to=YYYY-MM-DD
-app.get('/api/updates/range', async (req, res) => {
+app.get('/api/updates/range', requireAuth, async (req, res) => {
   const q = parseRangeFilters(req);
+  // Devs can only retrieve their own history; PM/admin/lead may request any developer.
+  const _rangeRoleRow = await pool.query(
+    'select role from users where email=$1 limit 1',
+    [req.userEmail],
+  );
+  const _rangeRole = _rangeRoleRow.rows[0]?.role || 'dev';
+  if (_rangeRole === 'dev') {
+    q.devEmail = req.userEmail;
+    q.devLocal = req.userEmail.split('@')[0].toLowerCase();
+    q.devFilter = req.userEmail;
+  }
   const rows = await selectRangeRows(q);
   res.json({
     from: q.from,
@@ -3098,45 +3143,50 @@ app.get('/api/updates/range', async (req, res) => {
 });
 
 // TSV: /api/updates/range.tsv?from=YYYY-MM-DD&to=YYYY-MM-DD
-app.get('/api/updates/range.tsv', async (req, res) => {
-  const q = parseRangeFilters(req);
-  const rows = await selectRangeRows(q);
+app.get(
+  '/api/updates/range.tsv',
+  requireAuth,
+  requirePMOnly,
+  async (req, res) => {
+    const q = parseRangeFilters(req);
+    const rows = await selectRangeRows(q);
 
-  const safeDev =
-    q.devFilter && q.devFilter !== 'all'
-      ? q.devFilter.replace(/[^a-z0-9._-]+/gi, '-').slice(0, 120)
-      : '';
+    const safeDev =
+      q.devFilter && q.devFilter !== 'all'
+        ? q.devFilter.replace(/[^a-z0-9._-]+/gi, '-').slice(0, 120)
+        : '';
 
-  const cell = (x) =>
-    String(x == null ? '' : x)
-      .replace(/\t/g, ' ')
-      .replace(/\r?\n/g, ' ');
-  let out =
-    'date\tticketId\ttype\ttitle\tstate\tseverity\tcode\triskLevel\tnote\n';
-  for (const r of rows) {
-    out +=
-      [
-        cell(r.date),
-        cell(r.ticketId),
-        cell(r.type),
-        cell(r.title),
-        cell(r.state),
-        cell(r.severity),
-        cell(r.code),
-        cell(r.riskLevel),
-        cell(r.note),
-      ].join('\t') + '\n';
-  }
+    const cell = (x) =>
+      String(x == null ? '' : x)
+        .replace(/\t/g, ' ')
+        .replace(/\r?\n/g, ' ');
+    let out =
+      'date\tticketId\ttype\ttitle\tstate\tseverity\tcode\triskLevel\tnote\n';
+    for (const r of rows) {
+      out +=
+        [
+          cell(r.date),
+          cell(r.ticketId),
+          cell(r.type),
+          cell(r.title),
+          cell(r.state),
+          cell(r.severity),
+          cell(r.code),
+          cell(r.riskLevel),
+          cell(r.note),
+        ].join('\t') + '\n';
+    }
 
-  res.setHeader('Content-Type', 'text/tab-separated-values; charset=utf-8');
-  res.setHeader(
-    'Content-Disposition',
-    `attachment; filename="progress_${q.from}_to_${q.to}${
-      safeDev ? '_' + safeDev : ''
-    }.tsv"`,
-  );
-  res.send(out);
-});
+    res.setHeader('Content-Type', 'text/tab-separated-values; charset=utf-8');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="progress_${q.from}_to_${q.to}${
+        safeDev ? '_' + safeDev : ''
+      }.tsv"`,
+    );
+    res.send(out);
+  },
+);
 
 // --- Developer Progress Snapshots (PDF/HTML) ---------------------------------
 async function requirePMOnly(req, res, next) {
@@ -6024,40 +6074,45 @@ app.post(
 );
 
 // --- blockers radar
-app.get('/api/updates/blockers', async (_req, res) => {
-  const date = await todayLocal(pool);
-  const r = await pool.query(
-    `select u.ticket_id as "ticketId", u.email, u.code, u.note, u.at, u.risk_level as "riskLevel",
+app.get(
+  '/api/updates/blockers',
+  requireAuth,
+  requirePMOnly,
+  async (req, res) => {
+    const date = await todayLocal(pool);
+    const r = await pool.query(
+      `select u.ticket_id as "ticketId", u.email, u.code, u.note, u.at, u.risk_level as "riskLevel",
          t.title, t.state, t.type, t.severity,
          t.state_change_date as "stateChangeDate",
          t.assigned_to as "assignedTo", t.iteration_path as "iterationPath"
      from progress_updates u
      left join tickets t on t.id = u.ticket_id
      where u.date = $1`,
-    [date],
-  );
-  // const isBlockerCode = (c) => c && /^(600|700|800)_/.test(String(c));
-  const hits = [];
-  for (const x of r.rows) {
-    const txt = `${x.code} ${x.note || ''}`.toLowerCase();
-    const kw = blockerKeywords.find((k) => k && txt.includes(k));
-    if (isBlockerCode(x.code) || kw) {
-      const derived = deriveRiskForUpdate(x);
-      x.riskLevel = derived.riskLevel;
-      x.riskReasons = derived.riskReasons;
-      x.riskStaleDays = derived.staleDays;
-      hits.push({ ...x, keyword: isBlockerCode(x.code) ? 'code' : kw || '' });
+      [date],
+    );
+    // const isBlockerCode = (c) => c && /^(600|700|800)_/.test(String(c));
+    const hits = [];
+    for (const x of r.rows) {
+      const txt = `${x.code} ${x.note || ''}`.toLowerCase();
+      const kw = blockerKeywords.find((k) => k && txt.includes(k));
+      if (isBlockerCode(x.code) || kw) {
+        const derived = deriveRiskForUpdate(x);
+        x.riskLevel = derived.riskLevel;
+        x.riskReasons = derived.riskReasons;
+        x.riskStaleDays = derived.staleDays;
+        hits.push({ ...x, keyword: isBlockerCode(x.code) ? 'code' : kw || '' });
+      }
     }
-  }
-  // latest per ticket
-  const byTicket = new Map();
-  for (const h of hits) {
-    const prev = byTicket.get(String(h.ticketId));
-    if (!prev || h.at > prev.at) byTicket.set(String(h.ticketId), h);
-  }
-  const items = Array.from(byTicket.values());
-  res.json({ date, keywords: blockerKeywords, items });
-});
+    // latest per ticket
+    const byTicket = new Map();
+    for (const h of hits) {
+      const prev = byTicket.get(String(h.ticketId));
+      if (!prev || h.at > prev.at) byTicket.set(String(h.ticketId), h);
+    }
+    const items = Array.from(byTicket.values());
+    res.json({ date, keywords: blockerKeywords, items });
+  },
+);
 
 // --- progress codes (dynamic)
 
