@@ -1481,11 +1481,16 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
       'insert into sessions(token, email, user_id) values ($1, $2, $3)',
       [token, lower, u.rows[0].id],
     );
-    // Lazy cleanup: remove expired sessions for this user (fire-and-forget)
+    // Lazy cleanup: remove expired + excess sessions for this user (fire-and-forget)
     pool
       .query(
-        `DELETE FROM sessions WHERE email=$1 AND created_at < now() - interval '30 days'`,
-        [lower],
+        `DELETE FROM sessions
+         WHERE email=$1
+           AND id NOT IN (
+             SELECT id FROM sessions WHERE email=$1
+             ORDER BY created_at DESC LIMIT 10
+           )`,
+        [lower, lower],
       )
       .catch(() => {});
 
@@ -8858,6 +8863,14 @@ pool
   .then(() => console.log('[boot] sessions.created_at column ready'))
   .catch((e) =>
     console.error('[boot] sessions.created_at migration failed:', e),
+  );
+
+// --- boot: index sessions(email) for efficient per-user session queries ---
+pool
+  .query(`CREATE INDEX IF NOT EXISTS sessions_email_idx ON sessions (email)`)
+  .then(() => console.log('[boot] sessions_email_idx ready'))
+  .catch((e) =>
+    console.error('[boot] sessions_email_idx migration failed:', e),
   );
 
 // --- boot: ensure users email verification columns exist ---
