@@ -100,6 +100,13 @@ app.use(
 // Bump JSON body limit to handle larger sync batches without 502/413
 app.use(express.json({ limit: '10mb' }));
 
+// Centralized error-response helper: logs the full error server-side and sends
+// a generic message to the client to avoid leaking internal details.
+function serverError(res, e, context = 'request') {
+  console.error(`[error][${context}]`, e);
+  return res.status(500).json({ error: 'internal_server_error' });
+}
+
 // --- rate limiters for auth endpoints ---
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
@@ -488,13 +495,13 @@ async function aiTriage(items) {
     return {
       // identity + basic context
       id: String(r.ticketId || r.id || ''),
-      title: String(r.title || ''),
+      title: sanitizeForPrompt(r.title),
       type: String(r.type || ''),
       state: String(r.state || ''),
 
       // blocker context from progress row
       code: String(r.code || ''),
-      note: String(r.note || ''),
+      note: sanitizeForPrompt(r.note),
 
       // assignment + project context
       assignedTo: String(r.assignedTo || ''),
@@ -581,11 +588,11 @@ async function aiRiskForUpdates(items) {
 
   const trimmed = (items || []).slice(0, 40).map((r) => ({
     id: String(r.ticketId || ''),
-    title: String(r.title || ''),
+    title: sanitizeForPrompt(r.title),
     type: String(r.type || ''),
     state: String(r.state || ''),
     code: String(r.code || ''),
-    note: String(r.note || ''),
+    note: sanitizeForPrompt(r.note),
     severity: String(r.severity || ''),
     impact_area: String(r.impactArea || ''),
     assigned_to: String(r.assignedTo || ''),
@@ -664,6 +671,18 @@ const scrub = (s) =>
     .replace(SECRET_PATTERNS[0], '[REDACTED_PAT]')
     .replace(SECRET_PATTERNS[1], 'https://[REDACTED]')
     .replace(SECRET_PATTERNS[2], 'apiKey=[REDACTED]');
+
+// Sanitize user-supplied text before embedding it in an AI prompt.
+// Applies secret-redaction first, then strips common prompt-injection patterns.
+function sanitizeForPrompt(text) {
+  return scrub(String(text || ''))
+    .replace(
+      /\bignore\b.{0,60}(instruction|prompt|system|rule)/gi,
+      '[redacted]',
+    )
+    .replace(/\bsystem\s*:/gi, '[sys:]')
+    .replace(/\brole\s*:/gi, '[role:]');
+}
 
 // safe string normalize: handles null/undefined and non-strings
 const S = (v) =>
@@ -1305,7 +1324,8 @@ app.get('/ready', async (_req, res) => {
     await pool.query('select 1');
     res.json({ ok: true, at: new Date().toISOString() });
   } catch (e) {
-    res.status(503).json({ ok: false, error: String(e) });
+    console.error('[error][ready]', e);
+    res.status(503).json({ ok: false, error: 'db_unavailable' });
   }
 });
 
@@ -1337,7 +1357,7 @@ app.get('/diag/puppeteer', async (req, res) => {
     await browser.close();
     res.json({ ok: true, execPath, version });
   } catch (e) {
-    res.status(500).json({ ok: false, error: String(e) });
+    return serverError(res, e, 'diag/puppeteer');
   }
 });
 
@@ -1433,7 +1453,7 @@ app.post('/api/auth/signup', signupLimiter, async (req, res) => {
 
     res.json({ status: 'ok', pendingVerification: true });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'signup');
   }
 });
 
@@ -1477,7 +1497,7 @@ app.post('/api/auth/login', loginLimiter, async (req, res) => {
       role: u.rows[0].role || 'dev',
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'login');
   }
 });
 
@@ -1510,7 +1530,7 @@ async function requireAuth(req, res, next) {
 
     next();
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'requireAuth');
   }
 }
 
@@ -1951,7 +1971,7 @@ app.get('/api/team-members', requireAuth, requirePMOnly, async (req, res) => {
 
     res.json({ items: rows });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'data/filters');
   }
 });
 
@@ -2410,8 +2430,7 @@ app.get('/api/tickets/stale', requireAuth, async (req, res) => {
       staleThresholdDays: threshold,
     });
   } catch (e) {
-    console.error('[stale] error:', e);
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'stale');
   }
 });
 
@@ -2478,8 +2497,7 @@ app.post('/api/tickets/:id/flag', requireAuth, async (req, res) => {
     }
     res.json({ ok: true, flagged, flaggedBy });
   } catch (e) {
-    console.error('[flag] error:', e.message);
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'flag');
   }
 });
 
@@ -2533,8 +2551,7 @@ app.get('/api/tickets/flagged', requireAuth, async (req, res) => {
     const r = await pool.query(sql, params);
     res.json({ items: r.rows });
   } catch (e) {
-    console.error('[flagged] error:', e.message);
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'flagged');
   }
 });
 
@@ -2724,7 +2741,7 @@ app.get('/api/updates/locks/range', requireAuth, async (req, res) => {
       dates,
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'data/progress-delta');
   }
 });
 
@@ -2936,7 +2953,10 @@ from pu
       },
     });
   } catch (e) {
-    res.status(500).json({ api_up: true, db_up: false, error: e.message });
+    console.error('[error][health]', e);
+    res
+      .status(500)
+      .json({ api_up: true, db_up: false, error: 'db_unavailable' });
   }
 });
 
@@ -2973,7 +2993,7 @@ app.get('/api/sync/last', requireAuth, async (req, res) => {
       ts_fmt: fmtSync(tsRow.rows[0]?.t),
     });
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'sync/last');
   }
 });
 
@@ -3199,7 +3219,7 @@ async function requirePMOnly(req, res, next) {
       return res.status(403).json({ error: 'pm/admin/lead only' });
     next();
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'requirePMOnly');
   }
 }
 
@@ -3212,7 +3232,7 @@ async function requireAdminOnly(req, res, next) {
     if (role !== 'admin') return res.status(403).json({ error: 'admin only' });
     next();
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'requireAdminOnly');
   }
 }
 
@@ -4892,8 +4912,7 @@ app.get(
       res.setHeader('Content-Length', String(buf.length));
       return res.end(buf); // avoid implicit string conversion
     } catch (e) {
-      console.error('[snapshots] error:', e);
-      res.status(500).json({ error: 'snapshot_failed', detail: String(e) });
+      return serverError(res, e, 'snapshots');
     }
   },
 );
@@ -6067,8 +6086,7 @@ app.post(
       console.log('[snapshot/email] Email sent successfully');
       res.json(info);
     } catch (e) {
-      console.error('[snapshot/email] Error:', e);
-      res.status(500).json({ error: String(e.message || e) });
+      return serverError(res, e, 'snapshot/email');
     }
   },
 );
@@ -7120,7 +7138,7 @@ async function buildSnapshotEvidence({
 
   const notes = [];
   const tickets = updates.map((r) => {
-    const note = clampText(scrub(r.note || ''), 240);
+    const note = clampText(sanitizeForPrompt(r.note || ''), 240);
     if (note) notes.push(note);
     const lastAt =
       r.at && typeof r.at.toISOString === 'function'
@@ -7592,7 +7610,7 @@ Do not include raw metric numbers, ticket IDs, or unsupported claims in narrativ
                 `   Value score: ${ticket.valueScore} | Evidence level driver: ${ticket.valueReasons.join('; ') || 'none'}`,
                 `   Completed in window: ${ticket.wasCompletedInWindow ? 'yes' : 'no'} | Had blockers: ${ticket.hadBlockers ? 'yes' : 'no'} | Risk: ${ticket.riskLevel || 'low'}`,
                 `   Related links: ${ticket.relatedLinkCount || 0} | Tags: ${tags}`,
-                `   Notes summary: ${ticket.notesSummary || 'none'}`,
+                `   Notes summary: ${ticket.notesSummary ? sanitizeForPrompt(ticket.notesSummary) : 'none'}`,
               ].join('\n');
             })
             .join('\n')
@@ -7876,7 +7894,7 @@ async function requireDevOrPM(req, res, next) {
     }
     next();
   } catch (e) {
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'requireDevOrPM');
   }
 }
 
@@ -8128,8 +8146,7 @@ app.get('/api/gen/qa-ts-users', requireGenSyncKey, async (req, res) => {
     `);
     res.json({ users: rows });
   } catch (e) {
-    console.error('[gen/qa-ts-users]', e.message);
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'gen/qa-ts-users');
   }
 });
 
@@ -8242,8 +8259,7 @@ app.post('/api/gen/sync', requireGenSyncKey, async (req, res) => {
     res.json({ status: 'ok', parents: parents.length, tasks: tasks.length });
   } catch (e) {
     await client.query('ROLLBACK');
-    console.error('[gen/sync] error:', e.message);
-    res.status(500).json({ error: 'sync_failed', detail: e.message });
+    return serverError(res, e, 'gen/sync');
   } finally {
     client.release();
   }
@@ -8268,8 +8284,7 @@ app.get('/api/gen/config', requireAuth, async (req, res) => {
       .filter(Boolean);
     res.json({ enabledTeams });
   } catch (e) {
-    console.error('[gen/config]', e.message);
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'gen/config');
   }
 });
 
@@ -8306,8 +8321,7 @@ app.get('/api/gen/members', requireAuth, async (req, res) => {
     );
     res.json({ members: rows.map((r) => r.assigned_to) });
   } catch (e) {
-    console.error('[gen/members]', e.message);
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'gen/members');
   }
 });
 
@@ -8425,8 +8439,7 @@ app.get('/api/gen/tickets', requireAuth, async (req, res) => {
 
     res.json({ items: [...parentMap.values()] });
   } catch (e) {
-    console.error('[gen/tickets]', e.message);
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'gen/tickets');
   }
 });
 
@@ -8561,8 +8574,7 @@ app.get('/api/gen/report/daily', requireAuth, async (req, res) => {
 
     res.json({ date, team: team || null, assignees: [...byAssignee.values()] });
   } catch (e) {
-    console.error('[gen/report/daily]', e.message);
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'gen/report/daily');
   }
 });
 
@@ -8591,8 +8603,7 @@ app.post('/api/gen/notes', requireAuth, async (req, res) => {
 
     res.json({ status: 'ok' });
   } catch (e) {
-    console.error('[gen/notes]', e.message);
-    res.status(500).json({ error: e.message });
+    return serverError(res, e, 'gen/notes');
   }
 });
 
