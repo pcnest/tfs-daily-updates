@@ -2136,6 +2136,8 @@
           var sc = byId('submitCard'); if (sc) sc.classList.add('hidden');
           var pm = byId('pm'); if (pm) pm.classList.add('hidden');
           var mtc = byId('managerTabsCard'); if (mtc) mtc.classList.add('hidden');
+          var qar = byId('qaReportCard'); if (qar) qar.classList.add('hidden');
+          var tsr = byId('tsReportCard'); if (tsr) tsr.classList.add('hidden');
         };
         if (t) {
           req('POST', (API || location.origin) + (all ? "/api/auth/logout_all" : "/api/auth/logout"), null, { "Authorization": "Bearer " + t }).then(function () { done(); }).catch(function () { done(); });
