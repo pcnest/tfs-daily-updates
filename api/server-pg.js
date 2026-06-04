@@ -8305,8 +8305,11 @@ app.get('/api/gen/members', requireAuth, async (req, res) => {
     const team = (req.query.team || '').toLowerCase();
     const userRole = me.rows[0].role;
     if (userRole !== 'admin') {
-      const allowedForTs = ['pm', 'lead'];
-      if (!allowedForTs.includes(userRole) || team !== 'ts') {
+      const pmAllowed = ['ts', 'qa'];
+      const leadAllowed = ['ts'];
+      const allowed =
+        userRole === 'pm' ? pmAllowed : userRole === 'lead' ? leadAllowed : [];
+      if (!allowed.includes(team)) {
         return res.status(403).json({ error: 'admin_only' });
       }
     }
@@ -8342,8 +8345,11 @@ app.get('/api/gen/tickets', requireAuth, async (req, res) => {
     const team = (req.query.team || '').toLowerCase();
     const userRole = me.rows[0].role;
     if (userRole !== 'admin') {
-      const allowedForTs = ['pm', 'lead'];
-      if (!allowedForTs.includes(userRole) || team !== 'ts') {
+      const pmAllowed = ['ts', 'qa'];
+      const leadAllowed = ['ts'];
+      const allowed =
+        userRole === 'pm' ? pmAllowed : userRole === 'lead' ? leadAllowed : [];
+      if (!allowed.includes(team)) {
         return res.status(403).json({ error: 'admin_only' });
       }
     }
@@ -8460,8 +8466,11 @@ app.get('/api/gen/report/daily', requireAuth, async (req, res) => {
     const userRole = me.rows[0].role;
     const team = (req.query.team || '').toLowerCase();
     if (userRole !== 'admin') {
-      const allowedForTs = ['pm', 'lead'];
-      if (!allowedForTs.includes(userRole) || team !== 'ts') {
+      const pmAllowed = ['ts', 'qa'];
+      const leadAllowed = ['ts'];
+      const allowed =
+        userRole === 'pm' ? pmAllowed : userRole === 'lead' ? leadAllowed : [];
+      if (!allowed.includes(team)) {
         return res.status(403).json({ error: 'admin_only' });
       }
     }

@@ -1338,8 +1338,8 @@
             </table>
           </div>
 
-          <!-- QA Tasks sub-section (admin only) -->
-          <section aria-labelledby="qaRptHeader" data-admin-only class="hidden" style="margin-top:24px;">
+          <!-- QA Tasks sub-section (admin, pm) -->
+          <section aria-labelledby="qaRptHeader" data-qa-section class="hidden" style="margin-top:24px;">
             <h4 id="qaRptHeader" style="margin:0 0 8px 0;">QA Tasks</h4>
             <div class="toolbar" style="margin-bottom:8px;flex-wrap:nowrap;">
               <label for="qaRptFrom">From:</label>
@@ -1453,7 +1453,7 @@
     </section>
 
     <!-- QA Daily Report Tab Panel (Admin-only) -->
-    <section id="qaReportCard" class="card hidden" data-manager-panel="qa-report" data-manager-roles="admin"
+    <section id="qaReportCard" class="card hidden" data-manager-panel="qa-report" data-manager-roles="admin,pm"
       aria-labelledby="qaReportHeader">
       <div
         style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
@@ -1686,7 +1686,7 @@
             tab === 'qa-report' || tab === 'ts-report';
         }
         if (role === 'pm') {
-          return tab === 'dev' || tab === 'risks' || tab === 'reports' || tab === 'ts-report';
+          return tab === 'dev' || tab === 'risks' || tab === 'reports' || tab === 'ts-report' || tab === 'qa-report';
         }
         if (role === 'lead') {
           return tab === 'dev' || tab === 'risks' || tab === 'reports';
@@ -1751,17 +1751,21 @@
         if (tab === 'qa-report') loadQaReport();
         if (tab === 'ts-report') loadTsReport();
         if (tab === 'reports') {
-          var isAdminRole = (role === 'admin');
+          var isQaAllowed = (role === 'admin' || role === 'pm');
           var isTsAllowed = (role === 'admin' || role === 'pm' || role === 'lead');
           var adminSections = document.querySelectorAll('[data-manager-panel="reports"] [data-admin-only]');
           for (var a = 0; a < adminSections.length; a++) {
-            adminSections[a].classList.toggle('hidden', !isAdminRole);
+            adminSections[a].classList.toggle('hidden', true);
+          }
+          var qaSections = document.querySelectorAll('[data-manager-panel="reports"] [data-qa-section]');
+          for (var q = 0; q < qaSections.length; q++) {
+            qaSections[q].classList.toggle('hidden', !isQaAllowed);
           }
           var tsSections = document.querySelectorAll('[data-manager-panel="reports"] [data-ts-section]');
           for (var t = 0; t < tsSections.length; t++) {
             tsSections[t].classList.toggle('hidden', !isTsAllowed);
           }
-          if (isAdminRole) {
+          if (isQaAllowed) {
             if (byId('qaRptDev') && !byId('qaRptDev').getAttribute('data-loaded')) {
               loadGenTeamAssignees('qa', 'qaRptDev');
             }
