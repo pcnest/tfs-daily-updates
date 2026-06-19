@@ -860,6 +860,57 @@
       background: var(--card);
     }
 
+    .pm-note-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 8px;
+      padding: 8px 12px 10px 12px;
+      border-top: 1px dashed var(--border);
+      background: var(--table-head);
+    }
+
+    .pm-note-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      white-space: nowrap;
+      padding-top: 6px;
+      min-width: 62px;
+    }
+
+    .pm-note-input {
+      flex: 1;
+      font-size: 12px;
+      padding: 5px 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      resize: vertical;
+      min-height: 38px;
+      background: var(--card);
+      color: var(--fg);
+      font-family: inherit;
+    }
+
+    .pm-note-actions {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      align-items: flex-start;
+    }
+
+    .pm-note-status {
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    .pm-note-status.ok {
+      color: var(--ok, #16a34a);
+    }
+
+    .pm-note-status.err {
+      color: var(--danger, #dc2626);
+    }
+
     .pre-head {
       display: flex;
       align-items: center;
@@ -3508,6 +3559,26 @@
                 }
               }
 
+              // PM/admin: per-developer daily note widget
+              if (window.__role === 'pm' || window.__role === 'admin') {
+                var existingNote = user.pmNote || '';
+                var devEmail = user.email || '';
+                out.push(
+                  '<div class="pm-note-row">' +
+                  '<span class="pm-note-label">PM Note</span>' +
+                  '<textarea class="pm-note-input" rows="2" ' +
+                  'data-dev-email="' + esc(devEmail) + '" ' +
+                  'placeholder="Coaching note for ' + esc(display) + '\u2026">' +
+                  esc(existingNote) +
+                  '</textarea>' +
+                  '<div class="pm-note-actions">' +
+                  '<button class="secondary small" onclick="savePmDevNote(this)">Save</button>' +
+                  '<span class="pm-note-status"></span>' +
+                  '</div>' +
+                  '</div>'
+                );
+              }
+
               out.push('</div>');
             }
 
@@ -4652,6 +4723,43 @@
         if (frame) frame.src = 'about:blank';
       }
 
+      function savePmDevNote(btn) {
+        try {
+          var row = btn && btn.closest('.pm-note-row');
+          var ta = row && row.querySelector('.pm-note-input');
+          var st = row && row.querySelector('.pm-note-status');
+          if (!ta) return;
+          var devEmail = ta.getAttribute('data-dev-email') || '';
+          var note = ta.value;
+          if (!devEmail) { if (st) { st.textContent = 'Missing dev email'; st.className = 'pm-note-status err'; } return; }
+          if (st) { st.textContent = 'Saving\u2026'; st.className = 'pm-note-status'; }
+          btn.disabled = true;
+          fetch((window.API || location.origin) + '/api/pm/dev-notes', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '')
+            },
+            body: JSON.stringify({ dev_email: devEmail, note: note })
+          })
+            .then(function (r) { return r.json(); })
+            .then(function (d) {
+              if (st) {
+                st.textContent = d.status === 'ok' ? 'Saved' : (d.error || 'Error');
+                st.className = 'pm-note-status ' + (d.status === 'ok' ? 'ok' : 'err');
+              }
+            })
+            .catch(function () {
+              if (st) { st.textContent = 'Error'; st.className = 'pm-note-status err'; }
+            })
+            .finally(function () {
+              try { btn.disabled = false; } catch (_) { }
+            });
+        } catch (e) {
+          try { console.error(e); } catch (_) { }
+        }
+      }
+
       function pmUnlockUser(btn) {
         try {
           var email = (btn && btn.getAttribute('data-email')) || '';
@@ -5273,6 +5381,7 @@
       window.lockDay = lockDay;
       window.loadMissing = loadMissing;
 
+      window.savePmDevNote = savePmDevNote;
       window.pmUnlockUser = pmUnlockUser;
       window.loadBlockers = loadBlockers;
       window.loadToday = loadToday;

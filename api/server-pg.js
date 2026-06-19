@@ -2831,6 +2831,18 @@ app.get('/api/updates/today', requireAuth, requirePMOnly, async (req, res) => {
     }))
     .sort((a, b) => a.email.localeCompare(b.email));
 
+  // Attach today's PM notes (one per dev) — only meaningful for pm/admin callers
+  const { rows: pmNoteRows } = await pool.query(
+    `SELECT dev_email, note FROM pm_dev_notes WHERE date=$1::date`,
+    [date],
+  );
+  const pmNoteMap = new Map(
+    pmNoteRows.map((r) => [r.dev_email.toLowerCase(), r.note]),
+  );
+  for (const u of users) {
+    u.pmNote = pmNoteMap.get((u.email || '').toLowerCase()) || null;
+  }
+
   res.json({ date, users });
 });
 
@@ -8592,6 +8604,54 @@ app.get('/api/gen/report/daily', requireAuth, async (req, res) => {
   }
 });
 
+// --- PM per-developer daily notes ---
+
+// GET /api/pm/dev-notes?date=YYYY-MM-DD  (pm/admin only)
+app.get('/api/pm/dev-notes', requireAuth, async (req, res) => {
+  try {
+    const me = await pool.query('SELECT role FROM users WHERE email=$1', [
+      req.userEmail,
+    ]);
+    if (!me.rowCount || !['pm', 'admin'].includes(me.rows[0].role)) {
+      return res.status(403).json({ error: 'pm_only' });
+    }
+    const date = req.query.date || (await todayLocal(pool));
+    const { rows } = await pool.query(
+      `SELECT dev_email, note, pm_email, at FROM pm_dev_notes WHERE date=$1::date ORDER BY dev_email`,
+      [date],
+    );
+    res.json({ date, notes: rows });
+  } catch (e) {
+    return serverError(res, e, 'pm/dev-notes GET');
+  }
+});
+
+// POST /api/pm/dev-notes  (pm/admin only)
+app.post('/api/pm/dev-notes', requireAuth, async (req, res) => {
+  try {
+    const me = await pool.query('SELECT role FROM users WHERE email=$1', [
+      req.userEmail,
+    ]);
+    if (!me.rowCount || !['pm', 'admin'].includes(me.rows[0].role)) {
+      return res.status(403).json({ error: 'pm_only' });
+    }
+    const { dev_email, note, date } = req.body || {};
+    if (!dev_email)
+      return res.status(400).json({ error: 'dev_email required' });
+    const noteDate = date || (await todayLocal(pool));
+    await pool.query(
+      `INSERT INTO pm_dev_notes (pm_email, dev_email, note, date, at)
+       VALUES ($1, $2, $3, $4::date, now())
+       ON CONFLICT (dev_email, date)
+       DO UPDATE SET note=$3, pm_email=$1, at=now()`,
+      [req.userEmail, dev_email, note || null, noteDate],
+    );
+    res.json({ status: 'ok' });
+  } catch (e) {
+    return serverError(res, e, 'pm/dev-notes POST');
+  }
+});
+
 // Notes: upsert a PM note for a task on a given date
 app.post('/api/gen/notes', requireAuth, async (req, res) => {
   try {
@@ -8815,6 +8875,28 @@ pool
   })
   .catch((e) => {
     console.error('[boot] gen_daily_notes table ensure failed:', e);
+  });
+
+// --- boot: ensure pm_dev_notes table (PM per-developer daily notes) ---
+pool
+  .query(
+    `
+  create table if not exists pm_dev_notes (
+    id        bigserial    primary key,
+    pm_email  text         not null,
+    dev_email text         not null,
+    note      text,
+    date      date         not null default current_date,
+    at        timestamptz  default now(),
+    unique (dev_email, date)
+  )
+`,
+  )
+  .then(() => {
+    console.log('[boot] pm_dev_notes table is ready');
+  })
+  .catch((e) => {
+    console.error('[boot] pm_dev_notes table ensure failed:', e);
   });
 
 // --- boot: seed gen_enabled_teams meta key (TS only by default) ---
