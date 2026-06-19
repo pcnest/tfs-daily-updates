@@ -1591,13 +1591,10 @@
         </div>
         <div class="modal-body">
           <input type="hidden" id="pmNoteDevEmail" />
-          <div class="row">
-            <label for="pmNoteText">Note</label>
-            <textarea id="pmNoteText" rows="5" placeholder="Coaching note, feedback, or assessment for this developer…"
-              style="width:100%;font-family:inherit;font-size:13px;"></textarea>
-          </div>
-          <small class="help">Visible to PM and admin only. One note per developer per day — saving overwrites the
-            previous entry.</small>
+          <textarea id="pmNoteText" rows="6" placeholder="Coaching note, feedback, or assessment for this developer…"
+            style="width:100%;box-sizing:border-box;font-family:inherit;font-size:13px;resize:vertical;display:block;"></textarea>
+          <small class="help" style="display:block;margin-top:8px;">Visible to PM and admin only. One note per developer
+            per day — saving overwrites the previous entry.</small>
         </div>
         <div class="modal-foot">
           <button class="secondary" onclick="closePmNoteModal()">Cancel</button>
