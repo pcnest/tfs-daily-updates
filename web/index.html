@@ -860,55 +860,9 @@
       background: var(--card);
     }
 
-    .pm-note-row {
-      display: flex;
-      align-items: flex-start;
-      gap: 8px;
-      padding: 8px 12px 10px 12px;
-      border-top: 1px dashed var(--border);
-      background: var(--table-head);
-    }
-
-    .pm-note-label {
-      font-size: 11px;
-      font-weight: 600;
-      color: var(--muted);
-      white-space: nowrap;
-      padding-top: 6px;
-      min-width: 62px;
-    }
-
-    .pm-note-input {
-      flex: 1;
-      font-size: 12px;
-      padding: 5px 8px;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      resize: vertical;
-      min-height: 38px;
-      background: var(--card);
-      color: var(--fg);
-      font-family: inherit;
-    }
-
-    .pm-note-actions {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      align-items: flex-start;
-    }
-
-    .pm-note-status {
-      font-size: 11px;
-      color: var(--muted);
-    }
-
-    .pm-note-status.ok {
-      color: var(--ok, #16a34a);
-    }
-
-    .pm-note-status.err {
-      color: var(--danger, #dc2626);
+    .pm-note-trigger.has-note {
+      border-color: var(--accent, #3b82f6);
+      color: var(--accent, #3b82f6);
     }
 
     .pre-head {
@@ -1623,6 +1577,32 @@
           <button class="secondary" onclick="closeNoTicketModal()">Cancel</button>
           <button id="noTicketSubmitBtn" onclick="submitNoTicketUpdate()">Submit</button>
           <span id="noTicketStatus" class="status" role="status" aria-live="polite"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PM Developer Note Modal -->
+    <div id="pmNoteBackdrop" class="modal-backdrop" onclick="closePmNoteModal()"></div>
+    <div id="pmNoteModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="pmNoteTitle">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-head">
+          <h3 id="pmNoteTitle">PM Note</h3>
+          <button class="modal-close" onclick="closePmNoteModal()" aria-label="Close">Close</button>
+        </div>
+        <div class="modal-body">
+          <input type="hidden" id="pmNoteDevEmail" />
+          <div class="row">
+            <label for="pmNoteText">Note</label>
+            <textarea id="pmNoteText" rows="5" placeholder="Coaching note, feedback, or assessment for this developer…"
+              style="width:100%;font-family:inherit;font-size:13px;"></textarea>
+          </div>
+          <small class="help">Visible to PM and admin only. One note per developer per day — saving overwrites the
+            previous entry.</small>
+        </div>
+        <div class="modal-foot">
+          <button class="secondary" onclick="closePmNoteModal()">Cancel</button>
+          <button id="pmNoteSaveBtn" onclick="savePmNoteModal()">Save Note</button>
+          <span id="pmNoteStatus" class="status" role="status" aria-live="polite"></span>
         </div>
       </div>
     </div>
@@ -3477,13 +3457,28 @@
               out.push('<span class="pre-meta">' + total + ' item(s)</span>');
               out.push('<span class="badge ' + (user.locked ? 'ok' : 'muted') + '">' + (user.locked ? 'Locked' : 'Open') + '</span>');
 
-              // NEW: show per-dev Unlock beside the status for PM/Admin roles
+              // show per-dev Unlock beside the status for PM/Admin roles
               if ((window.__role === 'pm' || window.__role === 'admin') && user.locked && user.email) {
                 out.push(
                   '<button class="secondary small unlock-btn" ' +
                   'data-email="' + esc(user.email) + '" ' +
                   'onclick="pmUnlockUser(this)">' +
                   'Unlock' +
+                  '</button>'
+                );
+              }
+
+              // PM Note trigger button
+              if (window.__role === 'pm' || window.__role === 'admin') {
+                var hasNote = !!(user.pmNote && String(user.pmNote).trim());
+                out.push(
+                  '<button class="secondary small pm-note-trigger' + (hasNote ? ' has-note' : '') + '" ' +
+                  'data-dev-email="' + esc(user.email || '') + '" ' +
+                  'data-dev-name="' + esc(display) + '" ' +
+                  'data-pm-note="' + esc(user.pmNote || '') + '" ' +
+                  'onclick="openPmNoteModal(this)" ' +
+                  'title="' + (hasNote ? 'Edit PM Note' : 'Add PM Note') + '">' +
+                  (hasNote ? '\u25cf\u00a0PM Note' : 'PM Note') +
                   '</button>'
                 );
               }
@@ -3557,26 +3552,6 @@
 
                   out.push('</tbody></table>');
                 }
-              }
-
-              // PM/admin: per-developer daily note widget
-              if (window.__role === 'pm' || window.__role === 'admin') {
-                var existingNote = user.pmNote || '';
-                var devEmail = user.email || '';
-                out.push(
-                  '<div class="pm-note-row">' +
-                  '<span class="pm-note-label">PM Note</span>' +
-                  '<textarea class="pm-note-input" rows="2" ' +
-                  'data-dev-email="' + esc(devEmail) + '" ' +
-                  'placeholder="Coaching note for ' + esc(display) + '\u2026">' +
-                  esc(existingNote) +
-                  '</textarea>' +
-                  '<div class="pm-note-actions">' +
-                  '<button class="secondary small" onclick="savePmDevNote(this)">Save</button>' +
-                  '<span class="pm-note-status"></span>' +
-                  '</div>' +
-                  '</div>'
-                );
               }
 
               out.push('</div>');
@@ -4723,17 +4698,43 @@
         if (frame) frame.src = 'about:blank';
       }
 
-      function savePmDevNote(btn) {
+      function openPmNoteModal(btn) {
         try {
-          var row = btn && btn.closest('.pm-note-row');
-          var ta = row && row.querySelector('.pm-note-input');
-          var st = row && row.querySelector('.pm-note-status');
-          if (!ta) return;
-          var devEmail = ta.getAttribute('data-dev-email') || '';
-          var note = ta.value;
-          if (!devEmail) { if (st) { st.textContent = 'Missing dev email'; st.className = 'pm-note-status err'; } return; }
-          if (st) { st.textContent = 'Saving\u2026'; st.className = 'pm-note-status'; }
-          btn.disabled = true;
+          var devEmail = btn.getAttribute('data-dev-email') || '';
+          var devName = btn.getAttribute('data-dev-name') || devEmail;
+          var existing = btn.getAttribute('data-pm-note') || '';
+          var titleEl = byId('pmNoteTitle');
+          var emailEl = byId('pmNoteDevEmail');
+          var textEl = byId('pmNoteText');
+          var stEl = byId('pmNoteStatus');
+          if (titleEl) titleEl.textContent = 'PM Note — ' + devName;
+          if (emailEl) emailEl.value = devEmail;
+          if (textEl) textEl.value = existing;
+          if (stEl) { stEl.textContent = ''; stEl.className = 'status'; }
+          var backdrop = byId('pmNoteBackdrop');
+          var modal = byId('pmNoteModal');
+          if (backdrop) backdrop.classList.add('open');
+          if (modal) modal.classList.add('open');
+          if (textEl) textEl.focus();
+        } catch (e) { try { console.error(e); } catch (_) { } }
+      }
+
+      function closePmNoteModal() {
+        var backdrop = byId('pmNoteBackdrop');
+        var modal = byId('pmNoteModal');
+        if (backdrop) backdrop.classList.remove('open');
+        if (modal) modal.classList.remove('open');
+      }
+
+      function savePmNoteModal() {
+        try {
+          var devEmail = (byId('pmNoteDevEmail') || {}).value || '';
+          var note = (byId('pmNoteText') || {}).value || '';
+          var saveBtn = byId('pmNoteSaveBtn');
+          var stEl = byId('pmNoteStatus');
+          if (!devEmail) { if (stEl) { stEl.textContent = 'Missing dev email'; stEl.className = 'status err'; } return; }
+          if (stEl) { stEl.textContent = 'Saving\u2026'; stEl.className = 'status'; }
+          if (saveBtn) saveBtn.disabled = true;
           fetch((window.API || location.origin) + '/api/pm/dev-notes', {
             method: 'POST',
             headers: {
@@ -4744,20 +4745,21 @@
           })
             .then(function (r) { return r.json(); })
             .then(function (d) {
-              if (st) {
-                st.textContent = d.status === 'ok' ? 'Saved' : (d.error || 'Error');
-                st.className = 'pm-note-status ' + (d.status === 'ok' ? 'ok' : 'err');
+              if (d.status === 'ok') {
+                closePmNoteModal();
+                // reload so trigger button reflects new note state
+                if (typeof loadToday === 'function') loadToday();
+              } else {
+                if (stEl) { stEl.textContent = d.error || 'Error'; stEl.className = 'status err'; }
               }
             })
             .catch(function () {
-              if (st) { st.textContent = 'Error'; st.className = 'pm-note-status err'; }
+              if (stEl) { stEl.textContent = 'Error'; stEl.className = 'status err'; }
             })
             .finally(function () {
-              try { btn.disabled = false; } catch (_) { }
+              try { if (saveBtn) saveBtn.disabled = false; } catch (_) { }
             });
-        } catch (e) {
-          try { console.error(e); } catch (_) { }
-        }
+        } catch (e) { try { console.error(e); } catch (_) { } }
       }
 
       function pmUnlockUser(btn) {
@@ -5381,7 +5383,9 @@
       window.lockDay = lockDay;
       window.loadMissing = loadMissing;
 
-      window.savePmDevNote = savePmDevNote;
+      window.openPmNoteModal = openPmNoteModal;
+      window.closePmNoteModal = closePmNoteModal;
+      window.savePmNoteModal = savePmNoteModal;
       window.pmUnlockUser = pmUnlockUser;
       window.loadBlockers = loadBlockers;
       window.loadToday = loadToday;
