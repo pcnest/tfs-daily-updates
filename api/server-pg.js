@@ -8632,6 +8632,7 @@ app.get('/api/pm/dev-notes', requireAuth, async (req, res) => {
       }
       const { rows } = await pool.query(
         `SELECT n.dev_email,
+                COALESCE(NULLIF(du.name, ''), NULLIF(tu.display_name, ''), split_part(n.dev_email, '@', 1)) AS dev_display_name,
                 n.note,
                 to_char(n.date, 'YYYY-MM-DD') AS date,
                 n.at,
@@ -8639,6 +8640,13 @@ app.get('/api/pm/dev-notes', requireAuth, async (req, res) => {
                 COALESCE(NULLIF(u.name, ''), n.pm_email) AS recorded_by
          FROM   pm_dev_notes n
          LEFT   JOIN users u ON lower(u.email) = lower(n.pm_email)
+         LEFT   JOIN users du ON lower(du.email) = lower(n.dev_email)
+         LEFT   JOIN LATERAL (
+           SELECT display_name
+           FROM   tfs_users
+           WHERE  lower(email) = lower(n.dev_email)
+           LIMIT  1
+         ) tu ON true
          WHERE  n.date BETWEEN $1::date AND $2::date
          ${devFilter}
          ORDER  BY n.date DESC, n.dev_email`,

@@ -1619,7 +1619,7 @@
         <div class="modal-body" id="pmNotesViewBody"><em>Loading…</em></div>
         <div class="modal-foot">
           <span id="pmNotesViewStatus" class="status" role="status" aria-live="polite"></span>
-          <button class="secondary" onclick="closePmNotesViewModal()">Close</button>
+          <button id="pmNotesExportBtn" class="secondary" onclick="exportPmNotesCsv()" disabled>Export CSV</button>
         </div>
       </div>
     </div>
@@ -4784,6 +4784,82 @@
         if (modal) modal.classList.remove('open');
       }
 
+      var pmNotesCsvState = {
+        from: '',
+        to: '',
+        dev: 'all',
+        devLabel: '',
+        isAllDevs: true,
+        notes: []
+      };
+
+      function setPmNotesExportEnabled(enabled) {
+        var btn = byId('pmNotesExportBtn');
+        if (btn) btn.disabled = !enabled;
+      }
+
+      function csvCell(value) {
+        var s = (value == null) ? '' : String(value);
+        if (/[",\r\n]/.test(s)) {
+          return '"' + s.replace(/"/g, '""') + '"';
+        }
+        return s;
+      }
+
+      function pmNoteDevDisplayName(note) {
+        var display = note && note.dev_display_name ? String(note.dev_display_name).trim() : '';
+        if (display) return display;
+        return String((note && note.dev_email) || '').split('@')[0];
+      }
+
+      function exportPmNotesCsv() {
+        try {
+          var state = pmNotesCsvState || {};
+          var notes = state.notes || [];
+          var isAllDevs = !!state.isAllDevs;
+          var rows = [];
+          var headers = isAllDevs
+            ? ['Date', 'Developer', 'Note', 'Recorded by', 'Saved at']
+            : ['Date', 'Note', 'Recorded by', 'Saved at'];
+          var i, n, devName, filename, safeDev, csv, blob, url, a;
+          if (!notes.length) return;
+
+          rows.push(headers);
+          for (i = 0; i < notes.length; i++) {
+            n = notes[i] || {};
+            devName = pmNoteDevDisplayName(n);
+            if (isAllDevs) {
+              rows.push([n.date || '', devName, n.note || '', n.recorded_by || '', n.saved_at || '']);
+            } else {
+              rows.push([n.date || '', n.note || '', n.recorded_by || '', n.saved_at || '']);
+            }
+          }
+
+          csv = rows.map(function (row) {
+            return row.map(csvCell).join(',');
+          }).join('\r\n') + '\r\n';
+
+          filename = 'pm-notes_' + (state.from || 'from') + '_to_' + (state.to || 'to');
+          if (!isAllDevs) {
+            safeDev = String(state.dev || state.devLabel || 'developer').split('@')[0]
+              .replace(/[^a-z0-9._-]+/gi, '-')
+              .replace(/^-+|-+$/g, '');
+            filename += '_' + (safeDev || 'developer');
+          }
+          filename += '.csv';
+
+          blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+          url = URL.createObjectURL(blob);
+          a = document.createElement('a');
+          a.href = url;
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+        } catch (e) { try { console.error(e); } catch (_) { } }
+      }
+
       function openPmNotesModal() {
         try {
           var from = (byId('repFrom') || {}).value || '';
@@ -4807,9 +4883,11 @@
           var modal = byId('pmNotesViewModal');
           var title = 'PM Notes — ' + from + ' → ' + to;
           if (snapDev !== 'all') title += ' · ' + devLabel;
+          pmNotesCsvState = { from: from, to: to, dev: snapDev, devLabel: devLabel, isAllDevs: (snapDev === 'all' || !snapDev), notes: [] };
           if (titleEl) titleEl.textContent = title;
           if (bodyEl) bodyEl.innerHTML = '<em>Loading…</em>';
           if (statusEl) { statusEl.textContent = ''; statusEl.className = 'status'; }
+          setPmNotesExportEnabled(false);
           if (backdrop) backdrop.classList.add('open');
           if (modal) modal.classList.add('open');
 
@@ -4830,6 +4908,7 @@
               var isAllDevs = (snapDev === 'all' || !snapDev);
               var html = '';
               var i, n, devName, noteDate, savedAt;
+              pmNotesCsvState = { from: from, to: to, dev: snapDev, devLabel: devLabel, isAllDevs: isAllDevs, notes: notes };
               if (!notes.length) {
                 if (bodyEl) bodyEl.innerHTML = '<p style="color:var(--muted)">No PM notes found for the selected range.</p>';
               } else {
@@ -4840,7 +4919,7 @@
                 html += '</tr></thead><tbody>';
                 for (i = 0; i < notes.length; i++) {
                   n = notes[i] || {};
-                  devName = String(n.dev_email || '').split('@')[0];
+                  devName = pmNoteDevDisplayName(n);
                   noteDate = n.date || '';
                   savedAt = n.saved_at || '';
                   html += '<tr>';
@@ -4855,10 +4934,13 @@
                 if (bodyEl) bodyEl.innerHTML = html;
               }
               if (statusEl) { statusEl.textContent = notes.length + ' note(s)'; statusEl.className = 'status ok'; }
+              setPmNotesExportEnabled(notes.length > 0);
             })
             .catch(function (e) {
               if (bodyEl) bodyEl.innerHTML = '<p class="status err">' + esc(e && e.message ? e.message : 'Error') + '</p>';
               if (statusEl) { statusEl.textContent = 'Error'; statusEl.className = 'status err'; }
+              pmNotesCsvState = { from: from, to: to, dev: snapDev, devLabel: devLabel, isAllDevs: (snapDev === 'all' || !snapDev), notes: [] };
+              setPmNotesExportEnabled(false);
             });
         } catch (e) { try { console.error(e); } catch (_) { } }
       }
@@ -5525,6 +5607,7 @@
       window.savePmNoteModal = savePmNoteModal;
       window.openPmNotesModal = openPmNotesModal;
       window.closePmNotesViewModal = closePmNotesViewModal;
+      window.exportPmNotesCsv = exportPmNotesCsv;
       window.pmUnlockUser = pmUnlockUser;
       window.loadBlockers = loadBlockers;
       window.loadToday = loadToday;
