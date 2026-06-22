@@ -892,14 +892,17 @@
     }
 
     .avatar {
-      width: 28px;
-      height: 28px;
+      width: 40px;
+      height: 40px;
       border-radius: 999px;
-      display: grid;
-      place-items: center;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      font-size: 13px;
       font-weight: 700;
       background: var(--accent-weak);
-      color: var(--fg);
+      color: var(--accent);
     }
 
     .subgroup {
@@ -3965,7 +3968,7 @@
               var focusColor = m.flaggedCount > 0 ? 'color:var(--danger);' : '';
               html += '<div style="display:flex;align-items:center;justify-content:space-between;border:1px solid var(--border);border-radius:10px;padding:12px 16px;background:var(--card);">';
               html += '<div style="display:flex;align-items:center;gap:12px;min-width:0;">';
-              html += '<div style="width:40px;height:40px;border-radius:50%;background:var(--accent-weak);color:var(--accent);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;flex-shrink:0;">' + esc(initials) + '</div>';
+              html += '<span class="avatar">' + esc(initials) + '</span>';
               html += '<div style="min-width:0;"><div style="font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(m.label) + '</div><div style="font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + esc(m.email) + '</div></div>';
               html += '</div>';
               html += '<div style="display:flex;gap:16px;text-align:center;flex-shrink:0;margin-left:8px;">';
