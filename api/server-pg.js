@@ -2755,7 +2755,8 @@ app.get('/api/updates/today', requireAuth, requirePMOnly, async (req, res) => {
   const date = await todayLocal(pool);
 
   const updates = await pool.query(
-    `select u.ticket_id as "ticketId", u.email, u.code, u.note, u.risk_level as "riskLevel",
+    `select u.ticket_id as "ticketId", u.email, u.code, pc.label as "codeLabel",
+            u.note, u.risk_level as "riskLevel",
             u.impact_area as "impactArea", u.at,
             t.title, t.state, t.type, t.severity,
             t.state_change_date as "stateChangeDate",
@@ -2764,6 +2765,7 @@ app.get('/api/updates/today', requireAuth, requirePMOnly, async (req, res) => {
             (tf.ticket_id is not null) as "isFlagged",
             fb.name as "flaggedBy"
      from progress_updates u
+     left join progress_codes pc on pc.code = u.code
      left join tickets t on t.id = u.ticket_id
      left join ticket_flags tf on tf.ticket_id = u.ticket_id
      left join users fb on fb.id = tf.flagged_by
