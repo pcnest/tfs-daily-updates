@@ -8608,7 +8608,7 @@ app.get('/api/gen/report/daily', requireAuth, async (req, res) => {
 
 // --- PM per-developer daily notes ---
 
-// GET /api/pm/dev-notes?date=YYYY-MM-DD  (pm/admin only)
+// GET /api/pm/dev-notes?date=YYYY-MM-DD or ?from=YYYY-MM-DD&to=YYYY-MM-DD  (pm/admin only)
 app.get('/api/pm/dev-notes', requireAuth, async (req, res) => {
   try {
     const me = await pool.query('SELECT role FROM users WHERE email=$1', [
@@ -8616,6 +8616,36 @@ app.get('/api/pm/dev-notes', requireAuth, async (req, res) => {
     ]);
     if (!me.rowCount || !['pm', 'admin'].includes(me.rows[0].role)) {
       return res.status(403).json({ error: 'pm_only' });
+    }
+    const { from, to } = req.query;
+    if (from && to) {
+      const dev = String(req.query.dev || '').trim().toLowerCase();
+      const params = [from, to, APP_TZ];
+      let devFilter = '';
+      if (dev && dev !== 'all') {
+        params.push(dev);
+        if (dev.includes('@')) {
+          devFilter = ' AND lower(n.dev_email) = $4';
+        } else {
+          devFilter = " AND lower(split_part(n.dev_email, '@', 1)) = $4";
+        }
+      }
+      const { rows } = await pool.query(
+        `SELECT n.dev_email,
+                n.note,
+                to_char(n.date, 'YYYY-MM-DD') AS date,
+                n.at,
+                to_char(timezone($3, n.at), 'FMMM/FMDD/YYYY, FMHH12:MI:SS AM') AS saved_at,
+                COALESCE(NULLIF(u.name, ''), n.pm_email) AS recorded_by
+         FROM   pm_dev_notes n
+         LEFT   JOIN users u ON lower(u.email) = lower(n.pm_email)
+         WHERE  n.date BETWEEN $1::date AND $2::date
+         ${devFilter}
+         ORDER  BY n.date DESC, n.dev_email`,
+        params,
+      );
+      res.json({ from, to, dev: dev || 'all', notes: rows });
+      return;
     }
     const date = req.query.date || (await todayLocal(pool));
     const { rows } = await pool.query(

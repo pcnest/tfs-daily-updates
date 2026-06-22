@@ -1309,6 +1309,7 @@
             <button onclick="loadReportRange()">Load</button>
             <button type="button" id="snapHtmlBtn" onclick="openSnapshots('html')">Preview (HTML)</button>
             <button type="button" id="snapAnalyzeBtn" onclick="openAnalyze()">Analyze</button>
+            <button type="button" id="snapPmNotesBtn" onclick="openPmNotesModal()">PM Notes</button>
             <button type="button" id="snapPdfBtn" onclick="openSnapshots('pdf')">Download PDF</button>
             <button type="button" id="snapEmailBtn" onclick="emailSnapshots()">Email Snapshot</button>
           </div>
@@ -1603,6 +1604,22 @@
           <button class="secondary" onclick="closePmNoteModal()">Cancel</button>
           <button id="pmNoteSaveBtn" onclick="savePmNoteModal()">Save Note</button>
           <span id="pmNoteStatus" class="status" role="status" aria-live="polite"></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- PM Notes History Modal -->
+    <div id="pmNotesViewBackdrop" class="modal-backdrop" onclick="closePmNotesViewModal()"></div>
+    <div id="pmNotesViewModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="pmNotesViewTitle">
+      <div class="modal-card wide" onclick="event.stopPropagation()">
+        <div class="modal-head">
+          <h3 id="pmNotesViewTitle">PM Notes</h3>
+          <button class="modal-close" onclick="closePmNotesViewModal()" aria-label="Close">Close</button>
+        </div>
+        <div class="modal-body" id="pmNotesViewBody"><em>Loading…</em></div>
+        <div class="modal-foot">
+          <span id="pmNotesViewStatus" class="status" role="status" aria-live="polite"></span>
+          <button class="secondary" onclick="closePmNotesViewModal()">Close</button>
         </div>
       </div>
     </div>
@@ -2054,6 +2071,7 @@
         var bonusAuditCard = byId('bonusAuditCard');
         var snapPdfBtn = byId('snapPdfBtn');
         var snapEmailBtn = byId('snapEmailBtn');
+        var snapPmNotesBtn = byId('snapPmNotesBtn');
         var missingSection = byId('missingSection');
         var blockersSection = byId('blockersSection');
         var preMeetingSection = byId('preMeetingSection');
@@ -2084,6 +2102,7 @@
         if (blockersSection) blockersSection.classList.toggle('hidden', !isPM && !isAdmin);
         if (aiRiskToggle) aiRiskToggle.classList.toggle('hidden', !isPM && !isAdmin);
         if (snapHtmlBtn) snapHtmlBtn.classList.toggle('hidden', !isPM && !isAdmin);
+        if (snapPmNotesBtn) snapPmNotesBtn.classList.toggle('hidden', !isPM && !isAdmin);
         syncManagerTabsForRole(role);
 
         if (pmBox) {
@@ -4758,6 +4777,92 @@
         if (modal) modal.classList.remove('open');
       }
 
+      function closePmNotesViewModal() {
+        var backdrop = byId('pmNotesViewBackdrop');
+        var modal = byId('pmNotesViewModal');
+        if (backdrop) backdrop.classList.remove('open');
+        if (modal) modal.classList.remove('open');
+      }
+
+      function openPmNotesModal() {
+        try {
+          var from = (byId('repFrom') || {}).value || '';
+          var to = (byId('repTo') || {}).value || '';
+          if (!from || !to) {
+            alert('Please set a From and To date first.');
+            return;
+          }
+
+          var snapDevEl = byId('snapDev');
+          var snapDev = ((snapDevEl && snapDevEl.value) || 'all').toLowerCase();
+          var devLabel = '';
+          if (snapDevEl && snapDevEl.options && snapDevEl.selectedIndex >= 0) {
+            devLabel = snapDevEl.options[snapDevEl.selectedIndex].text || '';
+          }
+
+          var titleEl = byId('pmNotesViewTitle');
+          var bodyEl = byId('pmNotesViewBody');
+          var statusEl = byId('pmNotesViewStatus');
+          var backdrop = byId('pmNotesViewBackdrop');
+          var modal = byId('pmNotesViewModal');
+          var title = 'PM Notes — ' + from + ' → ' + to;
+          if (snapDev !== 'all') title += ' · ' + devLabel;
+          if (titleEl) titleEl.textContent = title;
+          if (bodyEl) bodyEl.innerHTML = '<em>Loading…</em>';
+          if (statusEl) { statusEl.textContent = ''; statusEl.className = 'status'; }
+          if (backdrop) backdrop.classList.add('open');
+          if (modal) modal.classList.add('open');
+
+          var url = (window.API || location.origin) + '/api/pm/dev-notes?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
+          if (snapDev !== 'all') url += '&dev=' + encodeURIComponent(snapDev);
+
+          fetch(url, {
+            headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') }
+          })
+            .then(function (r) {
+              return r.json().then(function (js) {
+                if (!r.ok) throw new Error((js && js.error) ? js.error : ('HTTP ' + r.status));
+                return js;
+              });
+            })
+            .then(function (js) {
+              var notes = (js && js.notes) || [];
+              var isAllDevs = (snapDev === 'all' || !snapDev);
+              var html = '';
+              var i, n, devName, noteDate, savedAt;
+              if (!notes.length) {
+                if (bodyEl) bodyEl.innerHTML = '<p style="color:var(--muted)">No PM notes found for the selected range.</p>';
+              } else {
+                html += '<table><thead><tr>';
+                html += '<th>Date</th>';
+                if (isAllDevs) html += '<th>Developer</th>';
+                html += '<th>Note</th><th>Recorded by</th><th>Saved at</th>';
+                html += '</tr></thead><tbody>';
+                for (i = 0; i < notes.length; i++) {
+                  n = notes[i] || {};
+                  devName = String(n.dev_email || '').split('@')[0];
+                  noteDate = n.date || '';
+                  savedAt = n.saved_at || '';
+                  html += '<tr>';
+                  html += '<td>' + esc(noteDate) + '</td>';
+                  if (isAllDevs) html += '<td>' + esc(devName) + '</td>';
+                  html += '<td style="white-space:pre-wrap;">' + esc(n.note || '') + '</td>';
+                  html += '<td>' + esc(n.recorded_by || '') + '</td>';
+                  html += '<td>' + esc(savedAt) + '</td>';
+                  html += '</tr>';
+                }
+                html += '</tbody></table>';
+                if (bodyEl) bodyEl.innerHTML = html;
+              }
+              if (statusEl) { statusEl.textContent = notes.length + ' note(s)'; statusEl.className = 'status ok'; }
+            })
+            .catch(function (e) {
+              if (bodyEl) bodyEl.innerHTML = '<p class="status err">' + esc(e && e.message ? e.message : 'Error') + '</p>';
+              if (statusEl) { statusEl.textContent = 'Error'; statusEl.className = 'status err'; }
+            });
+        } catch (e) { try { console.error(e); } catch (_) { } }
+      }
+
       function savePmNoteModal() {
         try {
           var devEmail = (byId('pmNoteDevEmail') || {}).value || '';
@@ -5418,6 +5523,8 @@
       window.openPmNoteModal = openPmNoteModal;
       window.closePmNoteModal = closePmNoteModal;
       window.savePmNoteModal = savePmNoteModal;
+      window.openPmNotesModal = openPmNotesModal;
+      window.closePmNotesViewModal = closePmNotesViewModal;
       window.pmUnlockUser = pmUnlockUser;
       window.loadBlockers = loadBlockers;
       window.loadToday = loadToday;
