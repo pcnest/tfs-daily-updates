@@ -693,7 +693,7 @@ function ensurePmDevNotesSchema() {
           WHERE t.relname = 'pm_dev_notes'
             AND c.contype = 'u'
             AND (
-              SELECT array_agg(a.attname ORDER BY u.ord)
+              SELECT array_agg(a.attname::text ORDER BY u.ord)
               FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
               JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.attnum
             ) = ARRAY['dev_email', 'date']
@@ -2900,16 +2900,23 @@ app.get('/api/updates/today', requireAuth, requirePMOnly, async (req, res) => {
     }))
     .sort((a, b) => a.email.localeCompare(b.email));
 
-  await ensurePmDevNotesSchema();
+  let pmNoteRows = [];
+  try {
+    await ensurePmDevNotesSchema();
 
-  // Attach today's PM notes for the logged-in PM/admin only.
-  const { rows: pmNoteRows } = await pool.query(
-    `SELECT dev_email, note
-     FROM pm_dev_notes
-     WHERE date=$1::date AND lower(pm_email)=lower($2)
-     ORDER BY dev_email`,
-    [date, req.userEmail],
-  );
+    // Attach today's PM notes for the logged-in PM/admin only.
+    const pmNotes = await pool.query(
+      `SELECT dev_email, note
+       FROM pm_dev_notes
+       WHERE date=$1::date AND lower(pm_email)=lower($2)
+       ORDER BY dev_email`,
+      [date, req.userEmail],
+    );
+    pmNoteRows = pmNotes.rows;
+  } catch (e) {
+    console.error('[error][updates/today pm notes]', e);
+  }
+
   const pmNoteMap = new Map(
     pmNoteRows.map((r) => [r.dev_email.toLowerCase(), r.note]),
   );
