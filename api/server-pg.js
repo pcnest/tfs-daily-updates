@@ -653,6 +653,73 @@ try {
   console.log('[db] could not parse DATABASE_URL');
 }
 
+let pmDevNotesSchemaPromise = null;
+function ensurePmDevNotesSchema() {
+  if (!pmDevNotesSchemaPromise) {
+    pmDevNotesSchemaPromise = pool
+      .query(
+        `
+  create table if not exists pm_dev_notes (
+    id        bigserial    primary key,
+    pm_email  text         not null,
+    dev_email text         not null,
+    note      text,
+    date      date         not null default current_date,
+    at        timestamptz  default now()
+  )
+`,
+      )
+      .then(() =>
+        pool.query(`
+      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS pm_email text;
+      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS dev_email text;
+      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS note text;
+      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS date date not null default current_date;
+      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS at timestamptz default now();
+
+      ALTER TABLE pm_dev_notes DROP CONSTRAINT IF EXISTS pm_dev_notes_dev_email_date_key;
+      DROP INDEX IF EXISTS pm_dev_notes_dev_email_date_key;
+      DROP INDEX IF EXISTS pm_dev_notes_dev_email_date_idx;
+
+      DO $$
+      DECLARE
+        old_constraint record;
+      BEGIN
+        FOR old_constraint IN
+          SELECT n.nspname AS schema_name, c.conname AS constraint_name
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE t.relname = 'pm_dev_notes'
+            AND c.contype = 'u'
+            AND (
+              SELECT array_agg(a.attname ORDER BY u.ord)
+              FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
+              JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.attnum
+            ) = ARRAY['dev_email', 'date']
+        LOOP
+          EXECUTE format(
+            'ALTER TABLE %I.%I DROP CONSTRAINT IF EXISTS %I',
+            old_constraint.schema_name,
+            'pm_dev_notes',
+            old_constraint.constraint_name
+          );
+        END LOOP;
+      END
+      $$;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS pm_dev_notes_pm_email_dev_email_date_idx
+      ON pm_dev_notes (pm_email, dev_email, date);
+    `),
+      )
+      .catch((e) => {
+        pmDevNotesSchemaPromise = null;
+        throw e;
+      });
+  }
+  return pmDevNotesSchemaPromise;
+}
+
 // Auto-export TSV at day end
 const EXPORT_DIR = path.join(process.cwd(), 'exports');
 if (!fs.existsSync(EXPORT_DIR)) fs.mkdirSync(EXPORT_DIR, { recursive: true });
@@ -2832,6 +2899,8 @@ app.get('/api/updates/today', requireAuth, requirePMOnly, async (req, res) => {
       ...u,
     }))
     .sort((a, b) => a.email.localeCompare(b.email));
+
+  await ensurePmDevNotesSchema();
 
   // Attach today's PM notes for the logged-in PM/admin only.
   const { rows: pmNoteRows } = await pool.query(
@@ -8620,6 +8689,8 @@ app.get('/api/pm/dev-notes', requireAuth, async (req, res) => {
     if (!me.rowCount || !['pm', 'admin'].includes(me.rows[0].role)) {
       return res.status(403).json({ error: 'pm_only' });
     }
+    await ensurePmDevNotesSchema();
+
     const { from, to } = req.query;
     if (from && to) {
       const dev = String(req.query.dev || '').trim().toLowerCase();
@@ -8681,6 +8752,8 @@ app.post('/api/pm/dev-notes', requireAuth, async (req, res) => {
     if (!me.rowCount || !['pm', 'admin'].includes(me.rows[0].role)) {
       return res.status(403).json({ error: 'pm_only' });
     }
+    await ensurePmDevNotesSchema();
+
     const { dev_email, note, date } = req.body || {};
     if (!dev_email)
       return res.status(400).json({ error: 'dev_email required' });
@@ -8924,108 +8997,13 @@ pool
   });
 
 // --- boot: ensure pm_dev_notes table (PM per-developer daily notes) ---
-pool
-  .query(
-    `
-  create table if not exists pm_dev_notes (
-    id        bigserial    primary key,
-    pm_email  text         not null,
-    dev_email text         not null,
-    note      text,
-    date      date         not null default current_date,
-    at        timestamptz  default now(),
-    unique (pm_email, dev_email, date)
-  )
-`,
-  )
-  .then(() =>
-    pool.query(`
-      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS pm_email text;
-      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS dev_email text;
-      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS note text;
-      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS date date not null default current_date;
-      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS at timestamptz default now();
-
-      DO $$
-      DECLARE
-        old_constraint record;
-        old_index record;
-      BEGIN
-        FOR old_constraint IN
-          SELECT n.nspname AS schema_name, c.conname AS constraint_name
-          FROM pg_constraint c
-          JOIN pg_class t ON t.oid = c.conrelid
-          JOIN pg_namespace n ON n.oid = t.relnamespace
-          WHERE t.relname = 'pm_dev_notes'
-            AND c.contype = 'u'
-            AND (
-              SELECT array_agg(a.attname ORDER BY u.ord)
-              FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
-              JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.attnum
-            ) = ARRAY['dev_email', 'date']
-        LOOP
-          EXECUTE format(
-            'ALTER TABLE %I.%I DROP CONSTRAINT IF EXISTS %I',
-            old_constraint.schema_name,
-            'pm_dev_notes',
-            old_constraint.constraint_name
-          );
-        END LOOP;
-
-        FOR old_index IN
-          SELECT n.nspname AS schema_name, i.relname AS index_name
-          FROM pg_index ix
-          JOIN pg_class t ON t.oid = ix.indrelid
-          JOIN pg_class i ON i.oid = ix.indexrelid
-          JOIN pg_namespace n ON n.oid = i.relnamespace
-          WHERE t.relname = 'pm_dev_notes'
-            AND ix.indisunique
-            AND NOT ix.indisprimary
-            AND NOT EXISTS (
-              SELECT 1 FROM pg_constraint c WHERE c.conindid = ix.indexrelid
-            )
-            AND (
-              SELECT array_agg(a.attname ORDER BY u.ord)
-              FROM unnest(ix.indkey::int2[]) WITH ORDINALITY AS u(attnum, ord)
-              JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.attnum
-            ) = ARRAY['dev_email', 'date']
-        LOOP
-          EXECUTE format(
-            'DROP INDEX IF EXISTS %I.%I',
-            old_index.schema_name,
-            old_index.index_name
-          );
-        END LOOP;
-      END
-      $$;
-
-      DO $$
-      BEGIN
-        IF NOT EXISTS (
-          SELECT 1
-          FROM pg_index ix
-          JOIN pg_class t ON t.oid = ix.indrelid
-          WHERE t.relname = 'pm_dev_notes'
-            AND ix.indisunique
-            AND (
-              SELECT array_agg(a.attname ORDER BY u.ord)
-              FROM unnest(ix.indkey::int2[]) WITH ORDINALITY AS u(attnum, ord)
-              JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.attnum
-            ) = ARRAY['pm_email', 'dev_email', 'date']
-        ) THEN
-          EXECUTE 'CREATE UNIQUE INDEX pm_dev_notes_pm_email_dev_email_date_idx ON pm_dev_notes (pm_email, dev_email, date)';
-        END IF;
-      END
-      $$;
-    `),
-  )
+ensurePmDevNotesSchema()
   .then(() => {
     console.log('[boot] pm_dev_notes table is ready');
   })
   .catch((e) => {
     console.error('[boot] pm_dev_notes table ensure failed:', e);
   });
-
 // --- boot: seed gen_enabled_teams meta key (TS only by default) ---
 pool
   .query(
