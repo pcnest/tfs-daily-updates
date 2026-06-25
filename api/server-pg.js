@@ -2833,10 +2833,13 @@ app.get('/api/updates/today', requireAuth, requirePMOnly, async (req, res) => {
     }))
     .sort((a, b) => a.email.localeCompare(b.email));
 
-  // Attach today's PM notes (one per dev) — only meaningful for pm/admin callers
+  // Attach today's PM notes for the logged-in PM/admin only.
   const { rows: pmNoteRows } = await pool.query(
-    `SELECT dev_email, note FROM pm_dev_notes WHERE date=$1::date`,
-    [date],
+    `SELECT dev_email, note
+     FROM pm_dev_notes
+     WHERE date=$1::date AND lower(pm_email)=lower($2)
+     ORDER BY dev_email`,
+    [date, req.userEmail],
   );
   const pmNoteMap = new Map(
     pmNoteRows.map((r) => [r.dev_email.toLowerCase(), r.note]),
@@ -8649,7 +8652,7 @@ app.get('/api/pm/dev-notes', requireAuth, async (req, res) => {
          ) tu ON true
          WHERE  n.date BETWEEN $1::date AND $2::date
          ${devFilter}
-         ORDER  BY n.date DESC, n.dev_email`,
+         ORDER  BY n.date DESC, n.dev_email, n.pm_email`,
         params,
       );
       res.json({ from, to, dev: dev || 'all', notes: rows });
@@ -8657,8 +8660,11 @@ app.get('/api/pm/dev-notes', requireAuth, async (req, res) => {
     }
     const date = req.query.date || (await todayLocal(pool));
     const { rows } = await pool.query(
-      `SELECT dev_email, note, pm_email, at FROM pm_dev_notes WHERE date=$1::date ORDER BY dev_email`,
-      [date],
+      `SELECT dev_email, note, pm_email, at
+       FROM pm_dev_notes
+       WHERE date=$1::date AND lower(pm_email)=lower($2)
+       ORDER BY dev_email`,
+      [date, req.userEmail],
     );
     res.json({ date, notes: rows });
   } catch (e) {
@@ -8682,8 +8688,8 @@ app.post('/api/pm/dev-notes', requireAuth, async (req, res) => {
     await pool.query(
       `INSERT INTO pm_dev_notes (pm_email, dev_email, note, date, at)
        VALUES ($1, $2, $3, $4::date, now())
-       ON CONFLICT (dev_email, date)
-       DO UPDATE SET note=$3, pm_email=$1, at=now()`,
+       ON CONFLICT (pm_email, dev_email, date)
+       DO UPDATE SET note=$3, at=now()`,
       [req.userEmail, dev_email, note || null, noteDate],
     );
     res.json({ status: 'ok' });
@@ -8928,9 +8934,90 @@ pool
     note      text,
     date      date         not null default current_date,
     at        timestamptz  default now(),
-    unique (dev_email, date)
+    unique (pm_email, dev_email, date)
   )
 `,
+  )
+  .then(() =>
+    pool.query(`
+      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS pm_email text;
+      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS dev_email text;
+      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS note text;
+      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS date date not null default current_date;
+      ALTER TABLE pm_dev_notes ADD COLUMN IF NOT EXISTS at timestamptz default now();
+
+      DO $$
+      DECLARE
+        old_constraint record;
+        old_index record;
+      BEGIN
+        FOR old_constraint IN
+          SELECT n.nspname AS schema_name, c.conname AS constraint_name
+          FROM pg_constraint c
+          JOIN pg_class t ON t.oid = c.conrelid
+          JOIN pg_namespace n ON n.oid = t.relnamespace
+          WHERE t.relname = 'pm_dev_notes'
+            AND c.contype = 'u'
+            AND (
+              SELECT array_agg(a.attname ORDER BY u.ord)
+              FROM unnest(c.conkey) WITH ORDINALITY AS u(attnum, ord)
+              JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.attnum
+            ) = ARRAY['dev_email', 'date']
+        LOOP
+          EXECUTE format(
+            'ALTER TABLE %I.%I DROP CONSTRAINT IF EXISTS %I',
+            old_constraint.schema_name,
+            'pm_dev_notes',
+            old_constraint.constraint_name
+          );
+        END LOOP;
+
+        FOR old_index IN
+          SELECT n.nspname AS schema_name, i.relname AS index_name
+          FROM pg_index ix
+          JOIN pg_class t ON t.oid = ix.indrelid
+          JOIN pg_class i ON i.oid = ix.indexrelid
+          JOIN pg_namespace n ON n.oid = i.relnamespace
+          WHERE t.relname = 'pm_dev_notes'
+            AND ix.indisunique
+            AND NOT ix.indisprimary
+            AND NOT EXISTS (
+              SELECT 1 FROM pg_constraint c WHERE c.conindid = ix.indexrelid
+            )
+            AND (
+              SELECT array_agg(a.attname ORDER BY u.ord)
+              FROM unnest(ix.indkey::int2[]) WITH ORDINALITY AS u(attnum, ord)
+              JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.attnum
+            ) = ARRAY['dev_email', 'date']
+        LOOP
+          EXECUTE format(
+            'DROP INDEX IF EXISTS %I.%I',
+            old_index.schema_name,
+            old_index.index_name
+          );
+        END LOOP;
+      END
+      $$;
+
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1
+          FROM pg_index ix
+          JOIN pg_class t ON t.oid = ix.indrelid
+          WHERE t.relname = 'pm_dev_notes'
+            AND ix.indisunique
+            AND (
+              SELECT array_agg(a.attname ORDER BY u.ord)
+              FROM unnest(ix.indkey::int2[]) WITH ORDINALITY AS u(attnum, ord)
+              JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = u.attnum
+            ) = ARRAY['pm_email', 'dev_email', 'date']
+        ) THEN
+          EXECUTE 'CREATE UNIQUE INDEX pm_dev_notes_pm_email_dev_email_date_idx ON pm_dev_notes (pm_email, dev_email, date)';
+        END IF;
+      END
+      $$;
+    `),
   )
   .then(() => {
     console.log('[boot] pm_dev_notes table is ready');
