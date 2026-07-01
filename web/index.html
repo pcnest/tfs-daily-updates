@@ -1360,6 +1360,7 @@
                 <option value="">— Select QA Analyst —</option>
               </select>
               <button type="button" onclick="loadReportGenSection('qa')">Load</button>
+              <button type="button" id="qaRptPmNotesBtn" onclick="openReportPmNotesModal('qa')">PM Notes</button>
               <span id="qaRptStatus" class="status" role="status" aria-live="polite"></span>
             </div>
             <div class="table-wrap">
@@ -1397,6 +1398,7 @@
                 <option value="">— Select TechSupport —</option>
               </select>
               <button type="button" onclick="loadReportGenSection('ts')">Load</button>
+              <button type="button" id="tsRptPmNotesBtn" onclick="openReportPmNotesModal('ts')">PM Notes</button>
               <span id="tsRptStatus" class="status" role="status" aria-live="polite"></span>
             </div>
             <div class="table-wrap">
@@ -2072,6 +2074,8 @@
         var snapPdfBtn = byId('snapPdfBtn');
         var snapEmailBtn = byId('snapEmailBtn');
         var snapPmNotesBtn = byId('snapPmNotesBtn');
+        var qaRptPmNotesBtn = byId('qaRptPmNotesBtn');
+        var tsRptPmNotesBtn = byId('tsRptPmNotesBtn');
         var missingSection = byId('missingSection');
         var blockersSection = byId('blockersSection');
         var preMeetingSection = byId('preMeetingSection');
@@ -2103,6 +2107,8 @@
         if (aiRiskToggle) aiRiskToggle.classList.toggle('hidden', !isPM && !isAdmin);
         if (snapHtmlBtn) snapHtmlBtn.classList.toggle('hidden', !isPM && !isAdmin);
         if (snapPmNotesBtn) snapPmNotesBtn.classList.toggle('hidden', !isPM && !isAdmin);
+        if (qaRptPmNotesBtn) qaRptPmNotesBtn.classList.toggle('hidden', !isPM && !isAdmin);
+        if (tsRptPmNotesBtn) tsRptPmNotesBtn.classList.toggle('hidden', !isPM && !isAdmin);
         syncManagerTabsForRole(role);
 
         if (pmBox) {
@@ -3526,6 +3532,7 @@
                   'data-dev-email="' + esc(user.email || '') + '" ' +
                   'data-dev-name="' + esc(display) + '" ' +
                   'data-pm-note="' + esc(user.pmNote || '') + '" ' +
+                  'data-pm-note-context="dev" ' +
                   'onclick="openPmNoteModal(this)" ' +
                   'title="' + (hasNote ? 'Edit PM Note' : 'Add PM Note') + '">' +
                   (hasNote ? '\u25cf\u00a0PM Note' : 'PM Note') +
@@ -4749,11 +4756,14 @@
         if (frame) frame.src = 'about:blank';
       }
 
+      var pmNoteModalContext = 'dev';
+
       function openPmNoteModal(btn) {
         try {
           var devEmail = btn.getAttribute('data-dev-email') || '';
           var devName = btn.getAttribute('data-dev-name') || devEmail;
           var existing = btn.getAttribute('data-pm-note') || '';
+          pmNoteModalContext = btn.getAttribute('data-pm-note-context') || 'dev';
           var titleEl = byId('pmNoteTitle');
           var emailEl = byId('pmNoteDevEmail');
           var textEl = byId('pmNoteText');
@@ -4860,29 +4870,26 @@
         } catch (e) { try { console.error(e); } catch (_) { } }
       }
 
-      function openPmNotesModal() {
+      function openPmNotesModalFromConfig(cfg) {
         try {
-          var from = (byId('repFrom') || {}).value || '';
-          var to = (byId('repTo') || {}).value || '';
+          cfg = cfg || {};
+          var from = cfg.from || '';
+          var to = cfg.to || '';
           if (!from || !to) {
             alert('Please set a From and To date first.');
             return;
           }
 
-          var snapDevEl = byId('snapDev');
-          var snapDev = ((snapDevEl && snapDevEl.value) || 'all').toLowerCase();
-          var devLabel = '';
-          if (snapDevEl && snapDevEl.options && snapDevEl.selectedIndex >= 0) {
-            devLabel = snapDevEl.options[snapDevEl.selectedIndex].text || '';
-          }
-
+          var snapDev = (cfg.dev || 'all').toLowerCase();
+          var devLabel = cfg.devLabel || '';
+          var team = (cfg.team || '').toLowerCase();
           var titleEl = byId('pmNotesViewTitle');
           var bodyEl = byId('pmNotesViewBody');
           var statusEl = byId('pmNotesViewStatus');
           var backdrop = byId('pmNotesViewBackdrop');
           var modal = byId('pmNotesViewModal');
-          var title = 'PM Notes — ' + from + ' → ' + to;
-          if (snapDev !== 'all') title += ' · ' + devLabel;
+          var title = cfg.title || ('PM Notes — ' + from + ' → ' + to);
+          if (!cfg.title && snapDev !== 'all') title += ' · ' + devLabel;
           pmNotesCsvState = { from: from, to: to, dev: snapDev, devLabel: devLabel, isAllDevs: (snapDev === 'all' || !snapDev), notes: [] };
           if (titleEl) titleEl.textContent = title;
           if (bodyEl) bodyEl.innerHTML = '<em>Loading…</em>';
@@ -4893,6 +4900,7 @@
 
           var url = (window.API || location.origin) + '/api/pm/dev-notes?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
           if (snapDev !== 'all') url += '&dev=' + encodeURIComponent(snapDev);
+          else if (team) url += '&team=' + encodeURIComponent(team);
 
           fetch(url, {
             headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') }
@@ -4945,6 +4953,46 @@
         } catch (e) { try { console.error(e); } catch (_) { } }
       }
 
+      function openPmNotesModal() {
+        var snapDevEl = byId('snapDev');
+        var snapDev = ((snapDevEl && snapDevEl.value) || 'all').toLowerCase();
+        var devLabel = '';
+        if (snapDevEl && snapDevEl.options && snapDevEl.selectedIndex >= 0) {
+          devLabel = snapDevEl.options[snapDevEl.selectedIndex].text || '';
+        }
+        openPmNotesModalFromConfig({
+          from: (byId('repFrom') || {}).value || '',
+          to: (byId('repTo') || {}).value || '',
+          dev: snapDev,
+          devLabel: devLabel
+        });
+      }
+
+      function openReportPmNotesModal(team) {
+        team = team === 'qa' ? 'qa' : 'ts';
+        var prefix = team === 'qa' ? 'qa' : 'ts';
+        var from = (byId(prefix + 'RptFrom') || {}).value || '';
+        var to = (byId(prefix + 'RptTo') || {}).value || '';
+        var sel = byId(prefix + 'RptDev');
+        var selected = sel && sel.options && sel.selectedIndex >= 0 ? sel.options[sel.selectedIndex] : null;
+        var dev = 'all';
+        var devLabel = '';
+        if (selected && selected.value) {
+          dev = (selected.getAttribute('data-email') || selected.getAttribute('data-alias') || selected.value || '').toLowerCase();
+          devLabel = selected.text || selected.textContent || selected.value || '';
+        }
+        var teamLabel = team === 'qa' ? 'QA Tasks' : 'TS Tasks';
+        var title = 'PM Notes — ' + teamLabel + ' — ' + from + ' → ' + to;
+        if (dev !== 'all') title += ' · ' + devLabel;
+        openPmNotesModalFromConfig({
+          from: from,
+          to: to,
+          dev: dev,
+          devLabel: devLabel,
+          team: team,
+          title: title
+        });
+      }
       function savePmNoteModal() {
         try {
           var devEmail = (byId('pmNoteDevEmail') || {}).value || '';
@@ -4967,7 +5015,9 @@
               if (d.status === 'ok') {
                 closePmNoteModal();
                 // reload so trigger button reflects new note state
-                if (typeof loadToday === 'function') loadToday();
+                if (pmNoteModalContext === 'qa-report' && typeof loadQaReport === 'function') loadQaReport();
+                else if (pmNoteModalContext === 'ts-report' && typeof loadTsReport === 'function') loadTsReport();
+                else if (typeof loadToday === 'function') loadToday();
               } else {
                 if (stEl) { stEl.textContent = d.error || 'Error'; stEl.className = 'status err'; }
               }
@@ -5606,6 +5656,7 @@
       window.closePmNoteModal = closePmNoteModal;
       window.savePmNoteModal = savePmNoteModal;
       window.openPmNotesModal = openPmNotesModal;
+      window.openReportPmNotesModal = openReportPmNotesModal;
       window.closePmNotesViewModal = closePmNotesViewModal;
       window.exportPmNotesCsv = exportPmNotesCsv;
       window.pmUnlockUser = pmUnlockUser;
@@ -5654,11 +5705,20 @@
           .then(function (data) {
             if (data.error) return;
             var members = data.members || [];
+            var items = data.items || [];
+            var byAssigned = {};
+            for (var i = 0; i < items.length; i++) {
+              if (items[i] && items[i].assigned_to) byAssigned[items[i].assigned_to] = items[i];
+            }
             while (sel.options.length > 1) sel.remove(1);
             members.forEach(function (name) {
+              var item = byAssigned[name] || {};
               var opt = document.createElement('option');
               opt.value = name;
-              opt.textContent = name;
+              opt.textContent = item.display_name || name;
+              if (item.email) opt.setAttribute('data-email', String(item.email).toLowerCase());
+              if (item.alias) opt.setAttribute('data-alias', String(item.alias).toLowerCase());
+              opt.setAttribute('data-assigned-to', name);
               sel.appendChild(opt);
             });
             sel.setAttribute('data-loaded', '1');
@@ -5826,6 +5886,20 @@
               var display = a.display_name || identity.name || 'Unassigned';
               var meta = a.email || identity.meta || '';
               var tasks = a.tasks || [];
+              var canPmNote = (window.__role === 'pm' || window.__role === 'admin') && !!a.email;
+              var hasPmNote = !!(a.pmNote && String(a.pmNote).trim());
+              var pmNoteContext = team === 'qa' ? 'qa-report' : 'ts-report';
+              var pmNoteButton = canPmNote
+                ? '<button class="secondary small pm-note-trigger' + (hasPmNote ? ' has-note' : '') + '" ' +
+                  'data-dev-email="' + esc(a.email || '') + '" ' +
+                  'data-dev-name="' + esc(display) + '" ' +
+                  'data-pm-note="' + esc(a.pmNote || '') + '" ' +
+                  'data-pm-note-context="' + pmNoteContext + '" ' +
+                  'onclick="openPmNoteModal(this)" ' +
+                  'title="' + (hasPmNote ? 'Edit PM Note' : 'Add PM Note') + '">' +
+                  (hasPmNote ? '\u25cf\u00a0PM Note' : 'PM Note') +
+                  '</button>'
+                : '';
               html += '<div class="pre-user">' +
                 '<div class="pre-head">' +
                 '<div class="pre-ident">' +
@@ -5837,6 +5911,7 @@
                 '</div>' +
                 '<span class="pill">' +
                 '<span class="pre-meta">' + tasks.length + ' item(s)</span>' +
+                pmNoteButton +
                 '</span>' +
                 '</div>' +
                 '<table class="today-grid">' +

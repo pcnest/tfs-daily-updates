@@ -8420,7 +8420,56 @@ app.get('/api/gen/members', requireAuth, async (req, res) => {
       `SELECT DISTINCT t.assigned_to FROM gen_task_items t WHERE ${conditions.join(' AND ')} ORDER BY t.assigned_to`,
       params,
     );
-    res.json({ members: rows.map((r) => r.assigned_to) });
+
+    const identities = rows.map((r) => ({
+      assigned_to: r.assigned_to,
+      identity: assignedIdentityParts(r.assigned_to),
+    }));
+    const aliases = [
+      ...new Set(identities.map((item) => item.identity.alias).filter(Boolean)),
+    ];
+    const peopleByAlias = new Map();
+    if (aliases.length) {
+      const people = await pool.query(
+        `
+        select *
+        from (
+          select coalesce(
+                   nullif(lower(regexp_replace(tu.alias, '^.*\\\\', '')), ''),
+                   lower(split_part(tu.email, '@', 1))
+                 ) as alias,
+                 lower(tu.email) as email,
+                 coalesce(nullif(u.name, ''), nullif(tu.display_name, ''), '') as display_name
+          from tfs_users tu
+          left join users u on lower(u.email) = lower(tu.email)
+          where tu.active = true
+        ) people
+        where alias = any($1::text[])
+        `,
+        [aliases],
+      );
+      for (const person of people.rows) {
+        if (person.alias && !peopleByAlias.has(person.alias)) {
+          peopleByAlias.set(person.alias, person);
+        }
+      }
+    }
+
+    const items = identities.map((item) => {
+      const person = peopleByAlias.get(item.identity.alias) || {};
+      const fallbackDisplay =
+        item.identity.displayName ||
+        (item.identity.email ? item.identity.email.split('@')[0] : item.identity.raw) ||
+        'Unassigned';
+      return {
+        assigned_to: item.assigned_to,
+        email: person.email || item.identity.email || '',
+        display_name: person.display_name || fallbackDisplay,
+        alias: person.alias || item.identity.alias || '',
+      };
+    });
+
+    res.json({ members: rows.map((r) => r.assigned_to), items });
   } catch (e) {
     return serverError(res, e, 'gen/members');
   }
@@ -8679,7 +8728,36 @@ app.get('/api/gen/report/daily', requireAuth, async (req, res) => {
       });
     }
 
-    res.json({ date, team: team || null, assignees: [...byAssignee.values()] });
+    const assignees = [...byAssignee.values()];
+    if (['pm', 'admin'].includes(userRole)) {
+      try {
+        await ensurePmDevNotesSchema();
+        const emails = assignees
+          .map((a) => String(a.email || '').toLowerCase())
+          .filter(Boolean);
+        if (emails.length) {
+          const pmNotes = await pool.query(
+            `SELECT lower(dev_email) AS dev_email, note
+             FROM   pm_dev_notes
+             WHERE  date=$1::date
+               AND  lower(pm_email)=lower($2)
+               AND  lower(dev_email)=any($3::text[])`,
+            [date, req.userEmail, emails],
+          );
+          const pmNoteMap = new Map(
+            pmNotes.rows.map((r) => [r.dev_email, r.note]),
+          );
+          for (const assignee of assignees) {
+            const key = String(assignee.email || '').toLowerCase();
+            assignee.pmNote = pmNoteMap.get(key) || null;
+          }
+        }
+      } catch (e) {
+        console.error('[error][gen/report/daily pm notes]', e);
+      }
+    }
+
+    res.json({ date, team: team || null, assignees });
   } catch (e) {
     return serverError(res, e, 'gen/report/daily');
   }
@@ -8701,14 +8779,68 @@ app.get('/api/pm/dev-notes', requireAuth, async (req, res) => {
     const { from, to } = req.query;
     if (from && to) {
       const dev = String(req.query.dev || '').trim().toLowerCase();
+      const teamRaw = String(req.query.team || '').trim().toLowerCase();
+      const team = ['qa', 'ts'].includes(teamRaw) ? teamRaw : '';
       const params = [from, to, APP_TZ];
       let devFilter = '';
       if (dev && dev !== 'all') {
+        const p = params.length + 1;
         params.push(dev);
         if (dev.includes('@')) {
-          devFilter = ' AND lower(n.dev_email) = $4';
+          devFilter = ` AND lower(n.dev_email) = $${p}`;
         } else {
-          devFilter = " AND lower(split_part(n.dev_email, '@', 1)) = $4";
+          devFilter = ` AND lower(split_part(n.dev_email, '@', 1)) = $${p}`;
+        }
+      } else if (team) {
+        const teamPeople = await pool.query(
+          `SELECT DISTINCT assigned_to
+           FROM   gen_task_items
+           WHERE  deleted = false
+             AND  lower(team) = $1
+             AND  assigned_to IS NOT NULL
+             AND  assigned_to <> ''`,
+          [team],
+        );
+        const identities = teamPeople.rows.map((row) => assignedIdentityParts(row.assigned_to));
+        const aliases = [
+          ...new Set(identities.map((identity) => identity.alias).filter(Boolean)),
+        ];
+        const emails = new Set(
+          identities.map((identity) => identity.email).filter(Boolean),
+        );
+        const locals = new Set(aliases);
+        if (aliases.length) {
+          const people = await pool.query(
+            `
+            select *
+            from (
+              select coalesce(
+                       nullif(lower(regexp_replace(tu.alias, '^.*\\\\', '')), ''),
+                       lower(split_part(tu.email, '@', 1))
+                     ) as alias,
+                     lower(tu.email) as email
+              from tfs_users tu
+              where tu.active = true
+            ) people
+            where alias = any($1::text[])
+            `,
+            [aliases],
+          );
+          for (const person of people.rows) {
+            if (person.email) emails.add(person.email);
+            if (person.alias) locals.add(person.alias);
+          }
+        }
+        const emailList = [...emails];
+        const localList = [...locals];
+        if (emailList.length || localList.length) {
+          const emailParam = params.length + 1;
+          params.push(emailList);
+          const localParam = params.length + 1;
+          params.push(localList);
+          devFilter = ` AND (lower(n.dev_email) = any($${emailParam}::text[]) OR lower(split_part(n.dev_email, '@', 1)) = any($${localParam}::text[]))`;
+        } else {
+          devFilter = ' AND false';
         }
       }
       const { rows } = await pool.query(
@@ -8733,7 +8865,7 @@ app.get('/api/pm/dev-notes', requireAuth, async (req, res) => {
          ORDER  BY n.date DESC, n.dev_email, n.pm_email`,
         params,
       );
-      res.json({ from, to, dev: dev || 'all', notes: rows });
+      res.json({ from, to, dev: dev || 'all', team: team || null, notes: rows });
       return;
     }
     const date = req.query.date || (await todayLocal(pool));
