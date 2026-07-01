@@ -271,6 +271,11 @@
       white-space: nowrap;
     }
 
+    #qaRptPmNotesBtn,
+    #tsRptPmNotesBtn {
+      white-space: nowrap;
+    }
+
     /* Date inputs in toolbar */
     .snapshots-toolbar>input[type="date"] {
       flex: 0 0 auto;
@@ -5891,14 +5896,14 @@
               var pmNoteContext = team === 'qa' ? 'qa-report' : 'ts-report';
               var pmNoteButton = canPmNote
                 ? '<button class="secondary small pm-note-trigger' + (hasPmNote ? ' has-note' : '') + '" ' +
-                  'data-dev-email="' + esc(a.email || '') + '" ' +
-                  'data-dev-name="' + esc(display) + '" ' +
-                  'data-pm-note="' + esc(a.pmNote || '') + '" ' +
-                  'data-pm-note-context="' + pmNoteContext + '" ' +
-                  'onclick="openPmNoteModal(this)" ' +
-                  'title="' + (hasPmNote ? 'Edit PM Note' : 'Add PM Note') + '">' +
-                  (hasPmNote ? '\u25cf\u00a0PM Note' : 'PM Note') +
-                  '</button>'
+                'data-dev-email="' + esc(a.email || '') + '" ' +
+                'data-dev-name="' + esc(display) + '" ' +
+                'data-pm-note="' + esc(a.pmNote || '') + '" ' +
+                'data-pm-note-context="' + pmNoteContext + '" ' +
+                'onclick="openPmNoteModal(this)" ' +
+                'title="' + (hasPmNote ? 'Edit PM Note' : 'Add PM Note') + '">' +
+                (hasPmNote ? '\u25cf\u00a0PM Note' : 'PM Note') +
+                '</button>'
                 : '';
               html += '<div class="pre-user">' +
                 '<div class="pre-head">' +
