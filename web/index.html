@@ -271,8 +271,18 @@
       white-space: nowrap;
     }
 
+    #qaRptDev,
+    #tsRptDev {
+      flex: 1 1 240px;
+      min-width: 220px;
+      width: auto;
+    }
+
+    #qaRptTsvBtn,
+    #tsRptTsvBtn,
     #qaRptPmNotesBtn,
     #tsRptPmNotesBtn {
+      flex: 0 0 auto;
       white-space: nowrap;
     }
 
@@ -1296,9 +1306,7 @@
           <div class="row">
             <h3 id="reportsHeader" style="margin:0; max-width: fit-content;">Reports</h3>
             <div class="toolbar right">
-              <button onclick="presetReportThisWeek(true)">This week</button>
-              <button onclick="presetReportThisMonth(true)">This month</button>
-              <a id="dlRange" class="secondary" target="_blank" href="/api/updates/range.tsv">Download TSV</a>
+              <button type="button" id="dlRange" class="secondary" onclick="downloadReportRangeTsv()">Download TSV</button>
             </div>
           </div>
 
@@ -1365,6 +1373,7 @@
                 <option value="">— Select QA Analyst —</option>
               </select>
               <button type="button" onclick="loadReportGenSection('qa')">Load</button>
+              <button type="button" class="secondary" id="qaRptTsvBtn" onclick="downloadReportGenSectionTsv('qa')">Download TSV</button>
               <button type="button" id="qaRptPmNotesBtn" onclick="openReportPmNotesModal('qa')">PM Notes</button>
               <span id="qaRptStatus" class="status" role="status" aria-live="polite"></span>
             </div>
@@ -1403,6 +1412,7 @@
                 <option value="">— Select TechSupport —</option>
               </select>
               <button type="button" onclick="loadReportGenSection('ts')">Load</button>
+              <button type="button" class="secondary" id="tsRptTsvBtn" onclick="downloadReportGenSectionTsv('ts')">Download TSV</button>
               <button type="button" id="tsRptPmNotesBtn" onclick="openReportPmNotesModal('ts')">PM Notes</button>
               <span id="tsRptStatus" class="status" role="status" aria-live="polite"></span>
             </div>
@@ -3636,6 +3646,148 @@
         return ymd(d);
       }
 
+      function tsvCell(value) {
+        return String(value == null ? '' : value)
+          .replace(/\t/g, ' ')
+          .replace(/\r?\n/g, ' ');
+      }
+
+      function downloadBlobFile(blob, filename) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = filename || 'download.tsv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+      }
+
+      function safeFilenamePart(value, fallback) {
+        var s = String(value || fallback || '')
+          .replace(/[^a-z0-9._-]+/gi, '-')
+          .replace(/^-+|-+$/g, '')
+          .slice(0, 120);
+        return s || fallback || 'all';
+      }
+
+      function getContentDispositionFilename(header) {
+        var m;
+        header = String(header || '');
+        m = /filename\*=UTF-8''([^;]+)/i.exec(header);
+        if (m && m[1]) {
+          try { return decodeURIComponent(m[1].replace(/"/g, '').trim()); } catch (_) { return m[1].replace(/"/g, '').trim(); }
+        }
+        m = /filename="?([^";]+)"?/i.exec(header);
+        return m && m[1] ? m[1].trim() : '';
+      }
+
+      function reportRangeFilters() {
+        var fromEl = document.getElementById('repFrom');
+        var toEl = document.getElementById('repTo');
+        var devSel = document.getElementById('snapDev');
+        var from = (fromEl && fromEl.value) ? fromEl.value : ymd(new Date());
+        var to = (toEl && toEl.value) ? toEl.value : from;
+        var dev = (devSel && devSel.value) ? devSel.value : 'all';
+        var qs = '?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to);
+        if (dev && dev !== 'all') qs += '&developer=' + encodeURIComponent(dev);
+        return { from: from, to: to, dev: dev, qs: qs };
+      }
+
+      function downloadReportRangeTsv() {
+        var filters = reportRangeFilters();
+        var btn = document.getElementById('dlRange');
+        var old = btn ? btn.textContent : '';
+        var tkn = localStorage.getItem('pocToken') || '';
+        var fallbackName = 'progress_' + filters.from + '_to_' + filters.to + (filters.dev && filters.dev !== 'all' ? '_' + safeFilenamePart(filters.dev, 'developer') : '') + '.tsv';
+        var headers = { 'Accept': 'text/tab-separated-values' };
+        if (!tkn) { alert('Please log in first.'); return; }
+        headers.Authorization = 'Bearer ' + tkn;
+        if (btn) { btn.disabled = true; btn.textContent = 'Downloading...'; }
+        saveReportInputs();
+
+        fetch((API || location.origin) + '/api/updates/range.tsv' + filters.qs, { headers: headers })
+          .then(function (r) {
+            if (!r.ok) {
+              return r.text().then(function (txt) { throw new Error(txt || ('HTTP ' + r.status)); });
+            }
+            return r.blob().then(function (blob) {
+              return { blob: blob, filename: getContentDispositionFilename(r.headers.get('Content-Disposition')) || fallbackName };
+            });
+          })
+          .then(function (file) { downloadBlobFile(file.blob, file.filename); })
+          .catch(function (e) { alert('Download failed: ' + (e && e.message ? e.message : e)); })
+          .finally(function () { if (btn) { btn.disabled = false; btn.textContent = old || 'Download TSV'; } });
+      }
+
+      function reportGenSectionFilters(team) {
+        var prefix = team === 'qa' ? 'qa' : 'ts';
+        var fromEl = byId(prefix + 'RptFrom');
+        var toEl = byId(prefix + 'RptTo');
+        var devEl = byId(prefix + 'RptDev');
+        var from = fromEl ? fromEl.value : '';
+        var to = toEl ? toEl.value : '';
+        var assignedTo = devEl ? devEl.value : '';
+        var url = (API || location.origin) + '/api/gen/tickets?team=' + encodeURIComponent(team);
+        if (assignedTo) url += '&assigned_to=' + encodeURIComponent(assignedTo);
+        if (from) url += '&from=' + encodeURIComponent(from);
+        if (to) url += '&to=' + encodeURIComponent(to);
+        return { prefix: prefix, from: from, to: to, assignedTo: assignedTo, url: url };
+      }
+
+      function genTasksToTsv(items) {
+        var rows = [['rowType', 'id', 'type', 'title', 'state', 'assignedTo', 'remainingWork', 'parentId', 'parentTitle', 'iterationPath']];
+        var i, j, parent, tasks, t;
+        items = items || [];
+        for (i = 0; i < items.length; i++) {
+          parent = items[i] || {};
+          rows.push(['Parent', parent.id || '', parent.type || '', parent.title || '', parent.state || '', '', '', '', '', parent.iteration_path || '']);
+          tasks = parent.tasks || [];
+          for (j = 0; j < tasks.length; j++) {
+            t = tasks[j] || {};
+            rows.push(['Task', t.id || '', t.type || '', t.title || '', t.state || '', t.assigned_to || '', t.remaining_work != null ? t.remaining_work : '', parent.id || '', parent.title || '', parent.iteration_path || '']);
+          }
+        }
+        return rows.map(function (row) { return row.map(tsvCell).join('\t'); }).join('\r\n') + '\r\n';
+      }
+
+      function downloadReportGenSectionTsv(team) {
+        team = team === 'qa' ? 'qa' : 'ts';
+        var filters = reportGenSectionFilters(team);
+        var btn = byId(filters.prefix + 'RptTsvBtn');
+        var st = byId(filters.prefix + 'RptStatus');
+        var old = btn ? btn.textContent : '';
+        var tok = localStorage.getItem('pocToken') || '';
+        var filename = team + '-tasks_' + safeFilenamePart(filters.from, 'all') + '_to_' + safeFilenamePart(filters.to, 'all');
+        if (filters.assignedTo) filename += '_' + safeFilenamePart(filters.assignedTo, 'assignee');
+        filename += '.tsv';
+        if (!tok) { alert('Please log in first.'); return; }
+        if (btn) { btn.disabled = true; btn.textContent = 'Downloading...'; }
+        if (st) { st.textContent = 'Downloading...'; st.className = 'status'; }
+
+        fetch(filters.url, { headers: { Authorization: 'Bearer ' + tok } })
+          .then(function (r) {
+            return r.json().then(function (data) {
+              if (!r.ok || data.error) throw new Error((data && data.error) ? data.error : ('HTTP ' + r.status));
+              return data;
+            });
+          })
+          .then(function (data) {
+            var items = data.items || [];
+            if (!items.length) {
+              if (st) { st.textContent = 'No tasks found'; st.className = 'status'; }
+              alert('No tasks found for the selected filters.');
+              return;
+            }
+            downloadBlobFile(new Blob([genTasksToTsv(items)], { type: 'text/tab-separated-values;charset=utf-8' }), filename);
+            if (st) { st.textContent = items.length + ' parent(s) exported'; st.className = 'status ok'; }
+          })
+          .catch(function (e) {
+            if (st) { st.textContent = 'Error'; st.className = 'status err'; }
+            alert('Download failed: ' + (e && e.message ? e.message : e));
+          })
+          .finally(function () { if (btn) { btn.disabled = false; btn.textContent = old || 'Download TSV'; } });
+      }
       function loadReportRange() {
         var fromEl = document.getElementById('repFrom');
         var toEl = document.getElementById('repTo');
@@ -3647,13 +3799,13 @@
         var devQ = (dev && dev !== 'all') ? ('&developer=' + encodeURIComponent(dev)) : '';
 
         var dl = document.getElementById('dlRange');
-        if (dl) dl.href = '/api/updates/range.tsv?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) + devQ;
+        if (dl) dl.setAttribute('data-url', (API || location.origin) + '/api/updates/range.tsv?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) + devQ);
 
         var hdrs = {};
         var tkn = localStorage.getItem('pocToken');
         if (tkn) hdrs['Authorization'] = 'Bearer ' + tkn;
 
-        fetch('/api/updates/range?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) + devQ, { headers: hdrs })
+        fetch((API || location.origin) + '/api/updates/range?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) + devQ, { headers: hdrs })
           .then(function (r) { return r.json(); })
           .then(function (js) {
             var tb = document.querySelector('#reportTbl tbody');
@@ -5678,6 +5830,8 @@
       window.toggleFlag = toggleFlag;
       window.closeSPModal = closeSPModal;
       window.loadReportRange = loadReportRange;
+      window.downloadReportRangeTsv = downloadReportRangeTsv;
+      window.downloadReportGenSectionTsv = downloadReportGenSectionTsv;
       window.presetReportThisWeek = presetReportThisWeek;
       window.presetReportThisMonth = presetReportThisMonth;
       window.filterReportTable = filterReportTable;
