@@ -1397,7 +1397,7 @@
             </div>
           </section>
 
-          <!-- TS Tasks sub-section (admin, pm, lead) -->
+          <!-- TS Tasks sub-section (admin, pm) -->
           <section aria-labelledby="tsRptHeader" data-ts-section class="hidden" style="margin-top:24px;">
             <h4 id="tsRptHeader" style="margin:0 0 8px 0;">TS Tasks</h4>
             <div class="toolbar" style="margin-bottom:8px;flex-wrap:nowrap;">
@@ -1860,7 +1860,7 @@
         if (tab === 'ts-report') loadTsReport();
         if (tab === 'reports') {
           var isQaAllowed = (role === 'admin' || role === 'pm');
-          var isTsAllowed = (role === 'admin' || role === 'pm' || role === 'lead');
+          var isTsAllowed = (role === 'admin' || role === 'pm');
           var adminSections = document.querySelectorAll('[data-manager-panel="reports"] [data-admin-only]');
           for (var a = 0; a < adminSections.length; a++) {
             adminSections[a].classList.toggle('hidden', true);
@@ -2118,7 +2118,7 @@
         if (loginCard) loginCard.classList.add('hidden');
         if (ticketsCard) ticketsCard.classList.toggle('hidden', !isDev && !isLead); // dev + lead only
         if (devTicketsCard) devTicketsCard.classList.toggle('hidden', !isManager); // pm, admin, lead
-        if (devUpdatesSection) devUpdatesSection.classList.toggle('hidden', !isPM && !isAdmin); // pm/admin only
+        if (devUpdatesSection) devUpdatesSection.classList.toggle('hidden', !isPM && !isAdmin && !isLead); // pm/admin/lead
         // Lead keeps submitCard (has own tickets) — only hide for pure PM/Admin
         if (submitCard) submitCard.classList.toggle('hidden', isPM || isAdmin);
         if (weeklyCard) weeklyCard.classList.toggle('hidden', isPM || isAdmin);
@@ -2135,8 +2135,8 @@
         if (snapEmailBtn) snapEmailBtn.classList.toggle('hidden', !isAdmin); // admin-only button
         if (standupReviewBtn) standupReviewBtn.classList.toggle('hidden', !isAdmin); // admin-only button
         if (standupHistoryCard) standupHistoryCard.classList.toggle('hidden', !isAdmin); // admin-only section
-        // Lead-excluded sections and buttons (pm/admin only)
-        if (preMeetingSection) preMeetingSection.classList.toggle('hidden', !isPM && !isAdmin);
+        // Lead can see pre-meeting updates; other manager-only sections remain pm/admin only.
+        if (preMeetingSection) preMeetingSection.classList.toggle('hidden', !isPM && !isAdmin && !isLead);
         if (missingSection) missingSection.classList.toggle('hidden', !isPM && !isAdmin);
         if (blockersSection) blockersSection.classList.toggle('hidden', !isPM && !isAdmin);
         if (snapHtmlBtn) snapHtmlBtn.classList.toggle('hidden', !isPM && !isAdmin);

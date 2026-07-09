@@ -2967,6 +2967,26 @@ app.get('/api/updates/locks/range', requireAuth, async (req, res) => {
 // --- collation (enriched)
 app.get('/api/updates/today', requireAuth, requirePMOnly, async (req, res) => {
   const date = await todayLocal(pool);
+  const me = await pool.query(
+    `select role, nullif(btrim(team), '') as team
+     from users
+     where lower(email)=lower($1)
+     limit 1`,
+    [req.userEmail],
+  );
+  const callerRole = me.rows[0]?.role || 'dev';
+  const leadTeam = me.rows[0]?.team || null;
+  const params = [date];
+  const visibilityWhere = ['u.date = $1'];
+  if (callerRole === 'lead') {
+    visibilityWhere.push(`update_user.role = 'dev'`);
+    if (leadTeam) {
+      params.push(leadTeam);
+      visibilityWhere.push(
+        `lower(nullif(btrim(update_user.team), '')) = lower($${params.length})`,
+      );
+    }
+  }
 
   const updates = await pool.query(
     `select u.ticket_id as "ticketId", u.email, u.code, pc.label as "codeLabel",
@@ -2979,12 +2999,13 @@ app.get('/api/updates/today', requireAuth, requirePMOnly, async (req, res) => {
             (tf.ticket_id is not null) as "isFlagged",
             fb.name as "flaggedBy"
      from progress_updates u
+     left join users update_user on lower(update_user.email)=lower(u.email)
      left join progress_codes pc on pc.code = u.code
      left join tickets t on t.id = u.ticket_id
      left join ticket_flags tf on tf.ticket_id = u.ticket_id
      left join users fb on fb.id = tf.flagged_by
-     where u.date = $1`,
-    [date],
+     where ${visibilityWhere.join(' and ')}`,
+    params,
   );
   const locks = await pool.query(
     `select email from progress_locks where date=$1`,
@@ -8973,7 +8994,7 @@ app.get('/api/gen/members', requireAuth, async (req, res) => {
     const userRole = me.rows[0].role;
     if (userRole !== 'admin') {
       const pmAllowed = ['ts', 'qa'];
-      const leadAllowed = ['ts'];
+      const leadAllowed = [];
       const allowed =
         userRole === 'pm' ? pmAllowed : userRole === 'lead' ? leadAllowed : [];
       if (!allowed.includes(team)) {
@@ -9064,7 +9085,7 @@ app.get('/api/gen/tickets', requireAuth, async (req, res) => {
     const userRole = me.rows[0].role;
     if (userRole !== 'admin') {
       const pmAllowed = ['ts', 'qa'];
-      const leadAllowed = ['ts'];
+      const leadAllowed = [];
       const allowed =
         userRole === 'pm' ? pmAllowed : userRole === 'lead' ? leadAllowed : [];
       if (!allowed.includes(team)) {
@@ -9185,7 +9206,7 @@ app.get('/api/gen/report/daily', requireAuth, async (req, res) => {
     const team = (req.query.team || '').toLowerCase();
     if (userRole !== 'admin') {
       const pmAllowed = ['ts', 'qa'];
-      const leadAllowed = ['ts'];
+      const leadAllowed = [];
       const allowed =
         userRole === 'pm' ? pmAllowed : userRole === 'lead' ? leadAllowed : [];
       if (!allowed.includes(team)) {
