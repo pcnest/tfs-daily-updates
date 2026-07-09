@@ -1004,12 +1004,6 @@
     .muted {
       color: var(--muted);
     }
-
-    .ai-rationale {
-      margin-top: 4px;
-      font-size: 12px;
-      color: var(--muted);
-    }
   </style>
 </head>
 
@@ -1184,11 +1178,13 @@
                     id="preMeetingDate" style="font-size:13px;font-weight:400;"></span><span id="preLastSync"
                     style="font-size:11px;font-weight:400;color:var(--muted);"></span></h3>
                 <div class="toolbar">
-                  <button id="aiRiskToggle" class="secondary" onclick="toggleAiRisk()">AI Risk Rationale</button>
-                  <span id="aiRiskStatus" class="status" role="status" aria-live="polite"></span>
+                  <button id="standupReviewBtn" class="secondary" onclick="loadStandupReview()">Standup AI
+                    Review</button>
+                  <span id="standupReviewStatus" class="status" role="status" aria-live="polite"></span>
                 </div>
               </div>
               <div id="today"></div>
+              <div id="standupReviewCard" class="hidden" style="margin-top:1.5rem;"></div>
             </div>
 
             <!-- (2) Who hasn't updated yet -->
@@ -1306,7 +1302,8 @@
           <div class="row">
             <h3 id="reportsHeader" style="margin:0; max-width: fit-content;">Reports</h3>
             <div class="toolbar right">
-              <button type="button" id="dlRange" class="secondary" onclick="downloadReportRangeTsv()">Download TSV</button>
+              <button type="button" id="dlRange" class="secondary" onclick="downloadReportRangeTsv()">Download
+                TSV</button>
             </div>
           </div>
 
@@ -1373,7 +1370,8 @@
                 <option value="">— Select QA Analyst —</option>
               </select>
               <button type="button" onclick="loadReportGenSection('qa')">Load</button>
-              <button type="button" class="secondary" id="qaRptTsvBtn" onclick="downloadReportGenSectionTsv('qa')">Download TSV</button>
+              <button type="button" class="secondary" id="qaRptTsvBtn"
+                onclick="downloadReportGenSectionTsv('qa')">Download TSV</button>
               <button type="button" id="qaRptPmNotesBtn" onclick="openReportPmNotesModal('qa')">PM Notes</button>
               <span id="qaRptStatus" class="status" role="status" aria-live="polite"></span>
             </div>
@@ -1412,7 +1410,8 @@
                 <option value="">— Select TechSupport —</option>
               </select>
               <button type="button" onclick="loadReportGenSection('ts')">Load</button>
-              <button type="button" class="secondary" id="tsRptTsvBtn" onclick="downloadReportGenSectionTsv('ts')">Download TSV</button>
+              <button type="button" class="secondary" id="tsRptTsvBtn"
+                onclick="downloadReportGenSectionTsv('ts')">Download TSV</button>
               <button type="button" id="tsRptPmNotesBtn" onclick="openReportPmNotesModal('ts')">PM Notes</button>
               <span id="tsRptStatus" class="status" role="status" aria-live="polite"></span>
             </div>
@@ -1437,6 +1436,21 @@
               </table>
             </div>
           </section>
+
+          <!-- Standup AI Review History (pm, admin, lead) -->
+          <section id="standupHistoryCard" aria-labelledby="standupHistoryHeader" style="margin-top:24px;">
+            <h4 id="standupHistoryHeader" style="margin:0 0 10px;">Standup AI Review History</h4>
+            <div class="toolbar" style="flex-wrap:wrap;gap:8px;">
+              <label for="standupHistoryDate" style="font-size:13px;">Date:</label>
+              <select id="standupHistoryDate" style="min-width:200px;">
+                <option value="">— Loading available dates… —</option>
+              </select>
+              <button type="button" onclick="loadStandupHistoryEntry()">Load</button>
+              <span id="standupHistoryStatus" class="status" role="status" aria-live="polite"></span>
+            </div>
+            <div id="standupHistoryResult" style="margin-top:1rem;"></div>
+          </section>
+
           <!-- /reports panel -->
 
           <!-- (5) Blockers radar -->
@@ -1656,9 +1670,6 @@
       window.__serverToday = '';
       // Current user email (set after login)
       window.__meEmail = '';
-      // PM-only AI risk rationale
-      window.__aiRiskEnabled = false;
-      window.__aiRiskMap = null;
       var MANAGER_TAB_STORAGE_KEY = 'pocManagerTab';
 
       function checkLockStatus() {
@@ -1870,6 +1881,11 @@
             if (byId('tsRptDev') && !byId('tsRptDev').getAttribute('data-loaded')) {
               loadGenTeamAssignees('ts', 'tsRptDev');
             }
+          }
+          // Load standup history date list once per session
+          if (!window.__standupHistoryLoaded) {
+            window.__standupHistoryLoaded = true;
+            if (typeof loadStandupHistoryDates === 'function') loadStandupHistoryDates();
           }
         }
       }
@@ -2095,7 +2111,7 @@
         var blockersSection = byId('blockersSection');
         var preMeetingSection = byId('preMeetingSection');
         var snapHtmlBtn = byId('snapHtmlBtn');
-        var aiRiskToggle = byId('aiRiskToggle');
+        var standupReviewBtn = byId('standupReviewBtn');
 
         if (loginCard) loginCard.classList.add('hidden');
         if (ticketsCard) ticketsCard.classList.toggle('hidden', !isDev && !isLead); // dev + lead only
@@ -2115,11 +2131,11 @@
         if (bonusAuditCard) bonusAuditCard.classList.toggle('hidden', !isAdmin); // admin-only card
         if (snapPdfBtn) snapPdfBtn.classList.toggle('hidden', !isAdmin); // admin-only button
         if (snapEmailBtn) snapEmailBtn.classList.toggle('hidden', !isAdmin); // admin-only button
+        if (standupReviewBtn) standupReviewBtn.classList.toggle('hidden', !isAdmin); // admin-only button
         // Lead-excluded sections and buttons (pm/admin only)
         if (preMeetingSection) preMeetingSection.classList.toggle('hidden', !isPM && !isAdmin);
         if (missingSection) missingSection.classList.toggle('hidden', !isPM && !isAdmin);
         if (blockersSection) blockersSection.classList.toggle('hidden', !isPM && !isAdmin);
-        if (aiRiskToggle) aiRiskToggle.classList.toggle('hidden', !isPM && !isAdmin);
         if (snapHtmlBtn) snapHtmlBtn.classList.toggle('hidden', !isPM && !isAdmin);
         if (snapPmNotesBtn) snapPmNotesBtn.classList.toggle('hidden', !isPM && !isAdmin);
         if (qaRptPmNotesBtn) qaRptPmNotesBtn.classList.toggle('hidden', !isPM && !isAdmin);
@@ -3446,56 +3462,326 @@
         return '';
       }
 
-      function getAiRiskForTicket(id) {
-        if (!window.__aiRiskEnabled || !window.__aiRiskMap) return null;
-        return window.__aiRiskMap[String(id)] || null;
-      }
-
-      function fetchAiRiskForToday() {
-        var st = byId('aiRiskStatus');
-        if (st) { st.textContent = 'Thinking...'; st.classList.remove('ok', 'err'); }
-        var tkn = token();
-        return fetch((API || location.origin) + "/api/updates/today/ai", {
-          headers: { 'Authorization': 'Bearer ' + tkn }
+      // --- Standup AI Review ---------------------------------------------------
+      function loadStandupReview() {
+        var btn = byId('standupReviewBtn');
+        var st = byId('standupReviewStatus');
+        var card = byId('standupReviewCard');
+        if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
+        if (st) st.textContent = '';
+        fetch((window.API || location.origin) + '/api/ai/standup-review', {
+          headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') }
         })
-          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            if (!r.ok) return r.json().then(function (e) { throw new Error(e.error || ('HTTP ' + r.status)); });
+            return r.json();
+          })
           .then(function (js) {
-            if (js && js.error) {
-              if (st) { st.textContent = js.error; st.classList.add('err'); }
-              return null;
+            if (card) {
+              card.classList.remove('hidden');
+              card.innerHTML = renderStandupReview(js);
             }
-            var items = (js && js.items) ? js.items : [];
-            var map = {};
-            for (var i = 0; i < items.length; i++) {
-              var it = items[i];
-              if (!it || !it.id) continue;
-              map[String(it.id)] = {
-                riskLevel: it.risk_level || 'low',
-                rationale: it.rationale || ''
-              };
-            }
-            window.__aiRiskMap = map;
-            if (st) { st.textContent = 'Ready'; st.classList.add('ok'); }
-            return map;
+            if (btn) { btn.disabled = false; btn.textContent = 'Standup AI Review'; }
           })
           .catch(function (e) {
-            if (st) { st.textContent = (e && e.message) ? e.message : 'AI failed'; st.classList.add('err'); }
-            return null;
+            if (st) st.textContent = 'Error: ' + (e.message || 'unknown');
+            if (btn) { btn.disabled = false; btn.textContent = 'Standup AI Review'; }
           });
       }
 
-      function toggleAiRisk() {
-        window.__aiRiskEnabled = !window.__aiRiskEnabled;
-        var btn = byId('aiRiskToggle');
-        if (btn) btn.textContent = window.__aiRiskEnabled ? 'AI Risk: On' : 'AI Risk Rationale';
-        if (window.__aiRiskEnabled) {
-          fetchAiRiskForToday().then(function () { loadToday(); });
-        } else {
-          window.__aiRiskMap = null;
-          var st = byId('aiRiskStatus');
-          if (st) st.textContent = '';
-          loadToday();
+      function closeStandupReview(containerId) {
+        var id = containerId || 'standupReviewCard';
+        var card = byId(id);
+        if (card) { card.classList.add('hidden'); card.innerHTML = ''; }
+      }
+
+      // --- Standup AI Review History ----------------------------------------
+      function loadStandupHistoryDates() {
+        var sel = byId('standupHistoryDate');
+        var st = byId('standupHistoryStatus');
+        if (!sel) return;
+        sel.innerHTML = '<option value="">— Loading\u2026 —</option>';
+        fetch((window.API || location.origin) + '/api/ai/standup-review/history', {
+          headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') }
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (js) {
+            var dates = js.dates || [];
+            if (!dates.length) {
+              sel.innerHTML = '<option value="">— No history yet —</option>';
+              return;
+            }
+            var days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+            sel.innerHTML = '<option value="">— Select a date —</option>';
+            for (var i = 0; i < dates.length; i++) {
+              var d = dates[i];
+              var dt = new Date(String(d.date || '') + 'T12:00:00Z');
+              var dayLabel = isNaN(dt.getTime()) ? '' : ' (' + days[dt.getUTCDay()] + ')';
+              var opt = document.createElement('option');
+              opt.value = d.date || '';
+              opt.textContent = (d.date || '') + dayLabel;
+              sel.appendChild(opt);
+            }
+            if (st) st.textContent = '';
+          })
+          .catch(function (e) {
+            sel.innerHTML = '<option value="">— Failed to load —</option>';
+            if (st) st.textContent = 'Error loading history';
+          });
+      }
+
+      function loadStandupHistoryEntry() {
+        var sel = byId('standupHistoryDate');
+        var st = byId('standupHistoryStatus');
+        var result = byId('standupHistoryResult');
+        var date = sel ? sel.value : '';
+        if (!date) { if (st) st.textContent = 'Select a date first'; return; }
+        if (st) st.textContent = 'Loading\u2026';
+        if (result) result.innerHTML = '';
+        fetch((window.API || location.origin) + '/api/ai/standup-review/history?date=' + encodeURIComponent(date), {
+          headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') }
+        })
+          .then(function (r) {
+            if (!r.ok) return r.json().then(function (e) { throw new Error(e.error || ('HTTP ' + r.status)); });
+            return r.json();
+          })
+          .then(function (js) {
+            if (result) result.innerHTML = renderStandupReview(js, { closeTarget: 'standupHistoryResult' });
+            if (st) st.textContent = '';
+          })
+          .catch(function (e) {
+            if (st) st.textContent = 'Error: ' + (e.message || 'unknown');
+          });
+      }
+
+      function renderStandupReview(js, opts) {
+        var closeTarget = (opts && opts.closeTarget) || 'standupReviewCard';
+        var out = [];
+        var CATEGORY_BADGE = {
+          'On Track': 'style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;"',
+          'Blocked': 'style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;"',
+          'Missing Update': 'style="background:#f3f4f6;color:#374151;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;"',
+          'Needs Team Lead Clarification': 'style="background:#fef9c3;color:#713f12;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;"',
+          'Needs PM Escalation': 'style="background:#fff7ed;color:#c2410c;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;"',
+        };
+
+        // Header
+        out.push('<div style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:1.25rem;">');
+        out.push('<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:1rem;">');
+        out.push('<h4 style="margin:0;">Standup AI Review &mdash; ' + esc(js.date || '') + (js.cached ? ' <span style="font-size:11px;font-weight:400;color:var(--muted)">(cached result)</span>' : '') + '</h4>');
+        out.push('<button class="secondary small" onclick="closeStandupReview(\'' + closeTarget + '\')">Close</button>');
+        out.push('</div>');
+
+        // 1. Standup Summary
+        if (js.standup_summary) {
+          out.push('<section style="margin-bottom:1.25rem;">');
+          out.push('<h5 style="margin:0 0 6px;">Standup Summary</h5>');
+          out.push('<p style="margin:0;">' + esc(js.standup_summary) + '</p>');
+          out.push('</section>');
         }
+
+        // 2. Validation counts
+        if (js.validation) {
+          var v = js.validation;
+          out.push('<section style="margin-bottom:1.25rem;">');
+          out.push('<h5 style="margin:0 0 8px;">Ticket Counts</h5>');
+          out.push('<div style="display:flex;flex-wrap:wrap;gap:8px;">');
+          var counts = [
+            ['Total', v.total_reviewed],
+            ['On Track', v.on_track],
+            ['Blocked', v.blocked],
+            ['Missing', v.missing_update],
+            ['Needs TL', v.needs_tl_clarification],
+            ['Needs PM', v.needs_pm_escalation],
+            ['Delayed', v.sub_tag_delayed],
+            ['Ready QA', v.sub_tag_ready_for_qa],
+            ['Ready Release', v.sub_tag_ready_for_release],
+          ];
+          for (var ci = 0; ci < counts.length; ci++) {
+            out.push('<div style="background:var(--surface,#f9fafb);border:1px solid var(--border,#e5e7eb);border-radius:6px;padding:4px 12px;text-align:center;">');
+            out.push('<div style="font-size:11px;color:var(--muted);">' + esc(counts[ci][0]) + '</div>');
+            out.push('<div style="font-size:18px;font-weight:700;">' + (counts[ci][1] ?? 0) + '</div>');
+            out.push('</div>');
+          }
+          out.push('</div></section>');
+        }
+
+        // 3. Classification table — grouped by developer
+        if (js.classifications && js.classifications.length) {
+          // Group by developer
+          var devMap = {};
+          var devOrder = [];
+          for (var ci = 0; ci < js.classifications.length; ci++) {
+            var c = js.classifications[ci];
+            var dev = c.developer || '(unassigned)';
+            if (!devMap[dev]) { devMap[dev] = []; devOrder.push(dev); }
+            devMap[dev].push(c);
+          }
+
+          // Category priority weight — higher = needs attention first
+          var CAT_WEIGHT = {
+            'Needs PM Escalation': 4,
+            'Blocked': 3,
+            'Missing Update': 2,
+            'Needs Team Lead Clarification': 1,
+            'On Track': 0,
+          };
+          function devMaxWeight(tickets) {
+            var max = 0;
+            for (var i = 0; i < tickets.length; i++) {
+              var w = CAT_WEIGHT[tickets[i].category] || 0;
+              if (w > max) max = w;
+            }
+            return max;
+          }
+          // Sort developers: highest-priority issues first, then alphabetically
+          devOrder.sort(function (a, b) {
+            var wa = devMaxWeight(devMap[a]);
+            var wb = devMaxWeight(devMap[b]);
+            if (wb !== wa) return wb - wa;
+            return a.localeCompare(b);
+          });
+
+          out.push('<section style="margin-bottom:1.25rem;">');
+          out.push('<h5 style="margin:0 0 10px;">Ticket Classifications <span style="font-size:12px;font-weight:400;color:var(--muted);">grouped by developer &mdash; needs attention shown first</span></h5>');
+
+          for (var di = 0; di < devOrder.length; di++) {
+            var devName = devOrder[di];
+            var devTickets = devMap[devName];
+            var maxW = devMaxWeight(devTickets);
+
+            // Summarise category counts for this developer
+            var catCounts = {};
+            for (var ti = 0; ti < devTickets.length; ti++) {
+              var cat = devTickets[ti].category || 'Unknown';
+              catCounts[cat] = (catCounts[cat] || 0) + 1;
+            }
+
+            // Header accent colour based on highest-priority issue
+            var accentColor = maxW >= 4 ? '#fde8e8' : maxW >= 3 ? '#fee2e2' : maxW >= 2 ? '#f3f4f6' : maxW >= 1 ? '#fef9c3' : '#f0fdf4';
+            var borderColor = maxW >= 4 ? '#f87171' : maxW >= 3 ? '#fca5a5' : maxW >= 2 ? '#d1d5db' : maxW >= 1 ? '#fde047' : '#86efac';
+
+            // Initials helper
+            var parts = devName.replace(/<[^>]+>/g, '').split(/[\s@.]+/).filter(Boolean);
+            var initStr = parts.length >= 2
+              ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+              : devName.slice(0, 2).toUpperCase();
+
+            out.push('<div style="border:1px solid ' + borderColor + ';border-radius:8px;margin-bottom:10px;overflow:hidden;">');
+
+            // Card header
+            out.push('<div style="background:' + accentColor + ';padding:8px 12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">');
+            out.push('<span style="width:32px;height:32px;border-radius:50%;background:var(--accent,#3b82f6);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;flex-shrink:0;">' + esc(initStr) + '</span>');
+            out.push('<span style="font-weight:600;font-size:14px;">' + esc(devName) + '</span>');
+            out.push('<span style="font-size:12px;color:var(--muted);">' + devTickets.length + ' ticket' + (devTickets.length !== 1 ? 's' : '') + '</span>');
+            // Category summary pills
+            var catKeys = ['Needs PM Escalation', 'Blocked', 'Missing Update', 'Needs Team Lead Clarification', 'On Track'];
+            for (var ck = 0; ck < catKeys.length; ck++) {
+              if (!catCounts[catKeys[ck]]) continue;
+              var pillAttr = CATEGORY_BADGE[catKeys[ck]] || '';
+              out.push('<span ' + pillAttr + '>' + catCounts[catKeys[ck]] + '\u00a0' + esc(catKeys[ck]) + '</span>');
+            }
+            out.push('</div>');
+
+            // Tickets table (no Developer column — redundant inside the card)
+            out.push('<div style="overflow:auto;">');
+            out.push('<table style="margin:0;"><thead><tr>');
+            out.push('<th>ID</th><th>Title</th><th>Code</th><th>Update Summary</th><th>Category</th><th>Sub-tags</th><th>Reason</th><th>Recommended Action</th>');
+            out.push('</tr></thead><tbody>');
+            for (var ti = 0; ti < devTickets.length; ti++) {
+              var c = devTickets[ti];
+              var badgeAttr = CATEGORY_BADGE[c.category] || '';
+              out.push('<tr>');
+              out.push('<td><code>' + esc(c.ticket_id || '') + '</code></td>');
+              out.push('<td>' + esc(c.title || '') + '</td>');
+              out.push('<td><code>' + esc(c.current_code || '—') + '</code></td>');
+              out.push('<td>' + esc(c.update_summary || '—') + '</td>');
+              out.push('<td><span ' + badgeAttr + '>' + esc(c.category || '') + '</span></td>');
+              out.push('<td>' + (c.sub_tags && c.sub_tags.length ? c.sub_tags.map(function (t) { return '<span style="font-size:11px;background:#f3f4f6;border-radius:4px;padding:1px 5px;">' + esc(t) + '</span>'; }).join(' ') : '—') + '</td>');
+              out.push('<td>' + esc(c.reason || '') + '</td>');
+              out.push('<td>' + esc(c.recommended_action || '') + '</td>');
+              out.push('</tr>');
+            }
+            out.push('</tbody></table></div>');
+            out.push('</div>'); // card
+          }
+          out.push('</section>');
+        }
+
+        // 4. Exceptions
+        var exc = js.exceptions || {};
+        var excGroups = [
+          ['Missing Updates', exc.missing_updates],
+          ['Vague or Incomplete', exc.vague_or_incomplete],
+          ['Blocked', exc.blocked],
+          ['Delayed / At-Risk', exc.delayed_at_risk],
+          ['Needs Team Lead Clarification', exc.needs_tl_clarification],
+          ['Needs PM Escalation', exc.needs_pm_escalation],
+        ];
+        var hasExc = excGroups.some(function (g) { return g[1] && g[1].length; });
+        if (hasExc) {
+          out.push('<section style="margin-bottom:1.25rem;">');
+          out.push('<h5 style="margin:0 0 8px;">Exceptions</h5>');
+          for (var gi = 0; gi < excGroups.length; gi++) {
+            var grp = excGroups[gi];
+            if (!grp[1] || !grp[1].length) continue;
+            out.push('<details style="margin-bottom:6px;"><summary style="cursor:pointer;font-weight:600;">' + esc(grp[0]) + ' (' + grp[1].length + ')</summary>');
+            out.push('<ul style="margin:6px 0 0 1rem;padding:0;">');
+            for (var ei = 0; ei < grp[1].length; ei++) {
+              var ex = grp[1][ei];
+              out.push('<li><strong>' + esc(ex.ticket_id || '') + '</strong> &mdash; ' + esc(ex.developer || '') + ': ' + esc(ex.issue || '') + '</li>');
+            }
+            out.push('</ul></details>');
+          }
+          out.push('</section>');
+        }
+
+        // 5. Follow-up Questions
+        if (js.follow_up_questions && js.follow_up_questions.length) {
+          out.push('<section style="margin-bottom:1.25rem;">');
+          out.push('<h5 style="margin:0 0 8px;">Follow-Up Questions</h5>');
+          out.push('<ul style="margin:0;padding-left:1.25rem;">');
+          for (var qi = 0; qi < js.follow_up_questions.length; qi++) {
+            var q = js.follow_up_questions[qi];
+            out.push('<li style="margin-bottom:6px;">');
+            out.push('<strong>' + esc(q.ticket_id || '') + '</strong> (' + esc(q.developer || '') + '): ');
+            out.push(esc(q.reason || '') + '<br><em>&ldquo;' + esc(q.question || '') + '&rdquo;</em>');
+            out.push('</li>');
+          }
+          out.push('</ul></section>');
+        }
+
+        // 6. Team Lead Review Items
+        if (js.tl_review_items && js.tl_review_items.length) {
+          out.push('<section style="margin-bottom:1.25rem;">');
+          out.push('<h5 style="margin:0 0 8px;">Team Lead Review Items</h5>');
+          out.push('<div class="table-wrap" style="overflow:auto;"><table><thead><tr>');
+          out.push('<th>ID</th><th>Developer</th><th>Issue</th><th>Why TL Needed</th><th>Suggested Action</th>');
+          out.push('</tr></thead><tbody>');
+          for (var ti = 0; ti < js.tl_review_items.length; ti++) {
+            var tl = js.tl_review_items[ti];
+            out.push('<tr><td><code>' + esc(tl.ticket_id || '') + '</code></td><td>' + esc(tl.developer || '') + '</td><td>' + esc(tl.issue || '') + '</td><td>' + esc(tl.why_tl_needed || '') + '</td><td>' + esc(tl.suggested_action || '') + '</td></tr>');
+          }
+          out.push('</tbody></table></div></section>');
+        }
+
+        // 7. PM Escalation Items
+        if (js.pm_escalation_items && js.pm_escalation_items.length) {
+          out.push('<section style="margin-bottom:1.25rem;">');
+          out.push('<h5 style="margin:0 0 8px;">PM Escalation Items</h5>');
+          out.push('<div class="table-wrap" style="overflow:auto;"><table><thead><tr>');
+          out.push('<th>ID</th><th>Developer</th><th>Issue</th><th>Evidence</th><th>Delivery Risk</th><th>Recommended PM Action</th>');
+          out.push('</tr></thead><tbody>');
+          for (var pi = 0; pi < js.pm_escalation_items.length; pi++) {
+            var pm = js.pm_escalation_items[pi];
+            out.push('<tr><td><code>' + esc(pm.ticket_id || '') + '</code></td><td>' + esc(pm.developer || '') + '</td><td>' + esc(pm.issue || '') + '</td><td>' + esc(pm.evidence || '') + '</td><td>' + esc(pm.delivery_risk || '') + '</td><td>' + esc(pm.recommended_pm_action || '') + '</td></tr>');
+          }
+          out.push('</tbody></table></div></section>');
+        }
+
+        out.push('<div style="font-size:11px;color:var(--muted);margin-top:8px;">This review is AI-generated and advisory. Verify against direct observations before acting.</div>');
+        out.push('</div>');
+        return out.join('');
       }
 
       function loadToday() {
@@ -3610,12 +3896,7 @@
                     out.push('<td>' + priCell2 + '</td>');
                     out.push('<td>' + codeBadge + '</td>');
                     out.push('<td>' + riskBadge + '</td>');
-                    var ai = getAiRiskForTicket(it2.ticketId);
-                    var aiHtml = '';
-                    if (ai && ai.rationale) {
-                      aiHtml = '<div class="ai-rationale"><span class="badge">AI ' + esc(ai.riskLevel || 'low') + '</span> ' + esc(ai.rationale) + '</div>';
-                    }
-                    out.push('<td>' + esc(it2.note || '') + aiHtml + '</td>');
+                    out.push('<td>' + esc(it2.note || '') + '</td>');
                     var flagCell = it2.isFlagged
                       ? '<span title="' + esc('Flagged by ' + (it2.flaggedBy || 'someone')) + '" style="color:#ef4444">⚑</span>'
                       : '—';
@@ -5850,7 +6131,9 @@
       window.openDevSnapshot = openDevSnapshot;
       window.closeSnapshotModal = closeSnapshotModal;
       window.emailSnapshots = emailSnapshots;
-      window.toggleAiRisk = toggleAiRisk;
+      window.loadStandupReview = loadStandupReview;
+      window.closeStandupReview = closeStandupReview;
+      window.loadStandupHistoryEntry = loadStandupHistoryEntry;
       window.switchManagerTab = switchManagerTab;
 
       function loadGenTeamAssignees(team, selectId) {

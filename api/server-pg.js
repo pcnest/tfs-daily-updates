@@ -17,6 +17,11 @@ dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const BONUS_ELIGIBILITY_PROMPT_VERSION = 'bonus_v2_value_impact';
+const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v1';
+const STANDUP_REVIEW_RETENTION = Math.max(
+  0,
+  parseInt(process.env.STANDUP_REVIEW_RETENTION || '30', 10) || 30,
+);
 let openai = null;
 if (OPENAI_API_KEY) {
   openai = new OpenAI({ apiKey: OPENAI_API_KEY });
@@ -634,6 +639,148 @@ ${JSON.stringify(trimmed)}`;
   const js = parseOpenAIJson(resp);
   if (!js || !Array.isArray(js.items)) throw new Error('bad_ai_response');
   return js.items;
+}
+
+// --- AI: Daily Standup Review -----------------------------------------------
+async function aiStandupReview(tickets, todayUpdates, yesterdayUpdates) {
+  if (!openai)
+    throw Object.assign(new Error('AI not configured'), { status: 501 });
+
+  // Build lookup maps: ticket_id → latest update
+  const todayMap = new Map();
+  for (const u of todayUpdates) {
+    const k = String(u.ticketId || u.ticket_id || '');
+    const prev = todayMap.get(k);
+    if (!prev || u.at > prev.at) todayMap.set(k, u);
+  }
+  const yestMap = new Map();
+  for (const u of yesterdayUpdates) {
+    const k = String(u.ticketId || u.ticket_id || '');
+    const prev = yestMap.get(k);
+    if (!prev || u.at > prev.at) yestMap.set(k, u);
+  }
+
+  // Build merged payload; cap at 50 tickets
+  const payload = (tickets || []).slice(0, 50).map((t) => {
+    const id = String(t.id || '');
+    const today = todayMap.get(id);
+    const yest = yestMap.get(id);
+    return {
+      ticket_id: id,
+      title: sanitizeForPrompt(t.title),
+      type: String(t.type || ''),
+      state: String(t.state || ''),
+      assigned_to: String(t.assignedTo || t.assigned_to || ''),
+      priority: t.priority ?? null,
+      severity: String(t.severity || ''),
+      today_code: today ? String(today.code || '') : null,
+      today_note: today
+        ? sanitizeForPrompt(String(today.note || '').slice(0, 300))
+        : null,
+      prev_code: yest ? String(yest.code || '') : null,
+      prev_note: yest
+        ? sanitizeForPrompt(String(yest.note || '').slice(0, 300))
+        : null,
+      has_today_update: !!today,
+    };
+  });
+
+  const reviewDate = new Date().toISOString().slice(0, 10);
+  const system = `You are an AI workflow assistant supporting the Project Manager during the daily pre-meeting update review.
+Analyze developer progress updates, compare against prior updates, and categorize every active ticket.
+You must not make decisions on behalf of the PM, Lead, or Manager. Only analyze, summarize, flag, and draft.
+
+Progress code taxonomy (team standard — use this to interpret today_code and prev_code):
+- 100_xx = Starting Work: requirements analysis, environment setup, codebase review
+- 200_xx = In Progress: active development, ongoing implementation
+- 300_xx = Testing/Debugging: self-testing, unit tests, collaborating with QA
+- 400_xx = Code/Peer Review: code submitted for review, addressing feedback, pending final approval
+- 500_xx = Task Completion / Done / Handoff — the developer considers work FINISHED for this ticket:
+    500_01: completed and pushed to branch/environment
+    500_02: documented changes, ready for deployment
+    500_03: handing off to next team or member
+    500_04: tasks done, pending final documentation
+    500_05: closed after confirming no outstanding issues in QA/Production
+- 600_xx = Challenges: unexpected hurdle encountered but still moving forward
+- 700_xx = Investigation: root-cause analysis, reproducing bugs, exploring solutions
+- 800_xx = Delays: stalled, waiting on an external person, team, system, or dependency
+
+Key 500_xx rules:
+- A 500_xx code means the developer considers the ticket DONE or in handoff. Do NOT mark as Missing Update solely because no new prose was added.
+- 500_xx tickets should default to "On Track" with sub-tag "Ready for QA", "Ready for Release", or "Awaiting Routine Review" based on the sub-code and notes.
+- Only escalate a 500_xx ticket if: the TFS state is still Active/In Development AND there is no sign of acceptance progress, OR the ticket has sat at 500_xx for multiple days with no movement toward formal closure.
+
+Categories (assign exactly one per ticket):
+- "On Track": clear update, no blocker/escalation risk, meaningful movement, next step clear
+- "Blocked": developer cannot continue without external action (person/team/system)
+- "Missing Update": no update, no code, no usable notes, or active ticket not mentioned
+- "Needs Team Lead Clarification": update exists but issue is technical/scope-related, code/notes mismatch, too vague for PM
+- "Needs PM Escalation": affects delivery, priority, release timing, cross-team coordination, or management visibility
+
+Sub-tags (optional, include only applicable ones): Delayed, Ready for QA, Ready for Release, No Movement,
+Vague Update, Wrong or Mismatched Progress Code, Possible Risk, Normal Progress, Awaiting Routine Review,
+Waiting for Access, Waiting for Data, Waiting for Decision, Waiting for Environment, Cross-Team Dependency,
+Release Risk, No Daily Update, Missing Progress Code, Missing Notes.
+
+Validation rules:
+1. Use only provided data. Do not invent facts.
+2. Neutral professional PM language. No blame, no disciplinary recommendations.
+3. Every ticket must have one category.
+4. Do not mark On Track if update is missing, vague, blocked, delayed without explanation, or code/notes mismatch.
+5. Do not mark Blocked unless notes identify a dependency or obstacle.
+6. If unclear, use Needs Team Lead Clarification or Missing Update.
+7. If risk affects schedule/release/cross-team, use Needs PM Escalation.`;
+
+  const user = `Review the following active tickets and produce a complete standup analysis. Today is ${reviewDate}.
+
+Ticket data (JSON):
+${JSON.stringify(payload)}`;
+
+  const resp = await openai.chat.completions.create({
+    model: OPENAI_MODEL,
+    messages: [
+      { role: 'system', content: system },
+      { role: 'user', content: user },
+    ],
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        name: StandupReviewSchema.name,
+        schema: StandupReviewSchema.schema,
+        strict: !!StandupReviewSchema.strict,
+      },
+    },
+    max_tokens: 8000,
+  });
+
+  const finishReason = resp?.choices?.[0]?.finish_reason;
+  if (finishReason === 'length') {
+    console.error(
+      '[ai/standup-review] Response truncated (finish_reason=length). ' +
+        'Ticket count:',
+      (tickets || []).length,
+    );
+    throw Object.assign(
+      new Error(
+        'response_truncated — too many tickets or notes; reduce payload',
+      ),
+      { status: 500 },
+    );
+  }
+
+  const js = parseOpenAIJson(resp);
+  if (!js || !Array.isArray(js.classifications)) {
+    console.error(
+      '[ai/standup-review] bad_ai_response. finish_reason:',
+      finishReason,
+      '| content_null:',
+      !resp?.choices?.[0]?.message?.content,
+      '| refusal:',
+      resp?.choices?.[0]?.message?.refusal,
+    );
+    throw new Error('bad_ai_response');
+  }
+  return js;
 }
 
 // DB pool
@@ -2988,6 +3135,199 @@ app.get('/api/updates/today/ai', requireAuth, async (req, res) => {
     });
   }
 });
+
+// --- AI: Daily Standup Review (PM/Admin only) --------------------------------
+app.get(
+  '/api/ai/standup-review',
+  requireAuth,
+  requirePMOnly,
+  async (req, res) => {
+    try {
+      if (!openai) return res.status(501).json({ error: 'ai_not_configured' });
+
+      const date = await todayLocal(pool);
+
+      // Cache check — 30-minute window keyed to today's standup
+      const cacheRow = await pool.query(
+        `select ai_output
+         from ai_snapshot_runs
+        where dev_email = '_team_standup'
+          and period_start = $1::date
+          and period_end   = $1::date
+          and prompt_version = $2
+          and created_at > now() - interval '30 minutes'
+        order by created_at desc
+        limit 1`,
+        [date, STANDUP_REVIEW_PROMPT_VERSION],
+      );
+      if (cacheRow.rowCount) {
+        const cached = parseJsonMaybe(cacheRow.rows[0].ai_output);
+        if (cached && Array.isArray(cached.classifications)) {
+          return res.json({ cached: true, date, ...cached });
+        }
+      }
+
+      // Active tickets: non-deleted, not-Done, Bug/PBI
+      const ticketsResult = await pool.query(
+        `select t.id, t.type, t.title, t.state, t.severity, t.priority,
+              t.assigned_to as "assignedTo",
+              t.iteration_path as "iterationPath"
+         from tickets t
+        where coalesce(t.deleted, false) = false
+          and lower(t.state) <> 'done'
+          and lower(t.type) in ('bug', 'product backlog item')
+          and t.assigned_to is not null
+          and t.assigned_to <> ''
+        order by t.id::bigint`,
+      );
+
+      // Today's progress updates
+      const todayUpdates = await pool.query(
+        `select ticket_id as "ticketId", email, code, note, at
+         from progress_updates
+        where date = $1`,
+        [date],
+      );
+
+      // Yesterday's progress updates for comparison
+      const yesterday = new Date(`${date}T00:00:00Z`);
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      const yestDate = yesterday.toISOString().slice(0, 10);
+      const yestUpdates = await pool.query(
+        `select ticket_id as "ticketId", email, code, note, at
+         from progress_updates
+        where date = $1`,
+        [yestDate],
+      );
+
+      const result = await aiStandupReview(
+        ticketsResult.rows,
+        todayUpdates.rows,
+        yestUpdates.rows,
+      );
+
+      // Cache result in ai_snapshot_runs
+      await pool.query(
+        `insert into ai_snapshot_runs
+         (dev_email, period_start, period_end, period_label, prompt_version, ai_output)
+       values ($1, $2::date, $2::date, $3, $4, $5::jsonb)`,
+        [
+          '_team_standup',
+          date,
+          `standup ${date}`,
+          STANDUP_REVIEW_PROMPT_VERSION,
+          JSON.stringify(result),
+        ],
+      );
+
+      // Prune old standup rows beyond retention limit (fire-and-forget)
+      if (STANDUP_REVIEW_RETENTION > 0) {
+        pool
+          .query(
+            `with to_delete as (
+             select id from ai_snapshot_runs
+              where dev_email = '_team_standup'
+                and prompt_version = $1
+              order by created_at desc
+              offset $2
+           )
+           delete from ai_snapshot_runs where id in (select id from to_delete)`,
+            [STANDUP_REVIEW_PROMPT_VERSION, STANDUP_REVIEW_RETENTION],
+          )
+          .catch((e) =>
+            console.warn('[standup-review] cleanup failed:', e.message),
+          );
+      }
+
+      return res.json({ cached: false, date, ...result });
+    } catch (e) {
+      const http = e?.status || e?.response?.status || 500;
+      console.error('[ai/standup-review] error:', {
+        status: http,
+        code: e?.code,
+        message: e?.message,
+        data: e?.response?.data,
+        raw: e?.error || null,
+      });
+      return res.status(http).json({
+        status: 'error',
+        error: e?.message || 'server_error',
+        code: e?.code || null,
+        openai: e?.response?.data || e?.error || null,
+      });
+    }
+  },
+);
+
+// --- AI: Standup Review History (PM/Admin only) ------------------------------
+app.get(
+  '/api/ai/standup-review/history',
+  requireAuth,
+  requirePMOnly,
+  async (req, res) => {
+    try {
+      const dateParam = S(req.query.date || '');
+
+      if (!dateParam) {
+        // Return index: one row per distinct date, most-recent first
+        const r = await pool.query(
+          `select distinct on (period_start)
+                period_start::text as date,
+                period_label       as label,
+                created_at
+           from ai_snapshot_runs
+          where dev_email = '_team_standup'
+            and prompt_version = $1
+          order by period_start desc, created_at desc`,
+          [STANDUP_REVIEW_PROMPT_VERSION],
+        );
+        return res.json({ dates: r.rows });
+      }
+
+      // Validate date format
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
+        return res
+          .status(400)
+          .json({ error: 'invalid date format — use YYYY-MM-DD' });
+      }
+
+      // Return the most recent review for the requested date
+      const r = await pool.query(
+        `select ai_output, created_at
+         from ai_snapshot_runs
+        where dev_email = '_team_standup'
+          and prompt_version = $1
+          and period_start = $2::date
+        order by created_at desc
+        limit 1`,
+        [STANDUP_REVIEW_PROMPT_VERSION, dateParam],
+      );
+
+      if (!r.rowCount) {
+        return res
+          .status(404)
+          .json({ error: 'no standup review found for this date' });
+      }
+
+      const stored = parseJsonMaybe(r.rows[0].ai_output);
+      if (!stored || !Array.isArray(stored.classifications)) {
+        return res
+          .status(500)
+          .json({ error: 'stored review is corrupt or unreadable' });
+      }
+
+      return res.json({
+        date: dateParam,
+        cached: true,
+        generated_at: r.rows[0].created_at,
+        ...stored,
+      });
+    } catch (e) {
+      console.error('[ai/standup-review/history] error:', e.message);
+      return res.status(500).json({ error: e.message || 'server_error' });
+    }
+  },
+);
 
 // show a green dot when db_up is true and counts.last7 > 0
 app.get('/api/exports/status', async (req, res) => {
@@ -6461,6 +6801,240 @@ const SnapshotInsightsSchema = {
     required: ['key_findings', 'strengths', 'focus_areas', 'risk'],
   },
 };
+
+// --- JSON schema for daily standup review output ---
+const StandupReviewSchema = {
+  name: 'StandupReview',
+  strict: false,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      standup_summary: { type: 'string' },
+      classifications: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ticket_id: { type: 'string' },
+            title: { type: 'string' },
+            developer: { type: 'string' },
+            current_code: { type: 'string' },
+            update_summary: { type: 'string' },
+            category: {
+              type: 'string',
+              enum: [
+                'On Track',
+                'Blocked',
+                'Missing Update',
+                'Needs Team Lead Clarification',
+                'Needs PM Escalation',
+              ],
+            },
+            sub_tags: { type: 'array', items: { type: 'string' } },
+            reason: { type: 'string' },
+            recommended_action: { type: 'string' },
+          },
+          required: [
+            'ticket_id',
+            'title',
+            'developer',
+            'category',
+            'reason',
+            'recommended_action',
+          ],
+        },
+      },
+      exceptions: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          missing_updates: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ticket_id: { type: 'string' },
+                developer: { type: 'string' },
+                issue: { type: 'string' },
+              },
+              required: ['ticket_id', 'developer', 'issue'],
+            },
+          },
+          vague_or_incomplete: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ticket_id: { type: 'string' },
+                developer: { type: 'string' },
+                issue: { type: 'string' },
+              },
+              required: ['ticket_id', 'developer', 'issue'],
+            },
+          },
+          blocked: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ticket_id: { type: 'string' },
+                developer: { type: 'string' },
+                issue: { type: 'string' },
+              },
+              required: ['ticket_id', 'developer', 'issue'],
+            },
+          },
+          delayed_at_risk: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ticket_id: { type: 'string' },
+                developer: { type: 'string' },
+                issue: { type: 'string' },
+              },
+              required: ['ticket_id', 'developer', 'issue'],
+            },
+          },
+          needs_tl_clarification: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ticket_id: { type: 'string' },
+                developer: { type: 'string' },
+                issue: { type: 'string' },
+              },
+              required: ['ticket_id', 'developer', 'issue'],
+            },
+          },
+          needs_pm_escalation: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                ticket_id: { type: 'string' },
+                developer: { type: 'string' },
+                issue: { type: 'string' },
+              },
+              required: ['ticket_id', 'developer', 'issue'],
+            },
+          },
+        },
+        required: [
+          'missing_updates',
+          'vague_or_incomplete',
+          'blocked',
+          'delayed_at_risk',
+          'needs_tl_clarification',
+          'needs_pm_escalation',
+        ],
+      },
+      follow_up_questions: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ticket_id: { type: 'string' },
+            developer: { type: 'string' },
+            reason: { type: 'string' },
+            question: { type: 'string' },
+          },
+          required: ['ticket_id', 'developer', 'reason', 'question'],
+        },
+      },
+      tl_review_items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ticket_id: { type: 'string' },
+            developer: { type: 'string' },
+            issue: { type: 'string' },
+            why_tl_needed: { type: 'string' },
+            suggested_action: { type: 'string' },
+          },
+          required: [
+            'ticket_id',
+            'developer',
+            'issue',
+            'why_tl_needed',
+            'suggested_action',
+          ],
+        },
+      },
+      pm_escalation_items: {
+        type: 'array',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            ticket_id: { type: 'string' },
+            developer: { type: 'string' },
+            issue: { type: 'string' },
+            evidence: { type: 'string' },
+            delivery_risk: { type: 'string' },
+            recommended_pm_action: { type: 'string' },
+          },
+          required: [
+            'ticket_id',
+            'developer',
+            'issue',
+            'evidence',
+            'delivery_risk',
+            'recommended_pm_action',
+          ],
+        },
+      },
+      validation: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          total_reviewed: { type: 'integer' },
+          on_track: { type: 'integer' },
+          blocked: { type: 'integer' },
+          missing_update: { type: 'integer' },
+          needs_tl_clarification: { type: 'integer' },
+          needs_pm_escalation: { type: 'integer' },
+          sub_tag_delayed: { type: 'integer' },
+          sub_tag_ready_for_qa: { type: 'integer' },
+          sub_tag_ready_for_release: { type: 'integer' },
+        },
+        required: [
+          'total_reviewed',
+          'on_track',
+          'blocked',
+          'missing_update',
+          'needs_tl_clarification',
+          'needs_pm_escalation',
+          'sub_tag_delayed',
+          'sub_tag_ready_for_qa',
+          'sub_tag_ready_for_release',
+        ],
+      },
+    },
+    required: [
+      'standup_summary',
+      'classifications',
+      'exceptions',
+      'follow_up_questions',
+      'tl_review_items',
+      'pm_escalation_items',
+      'validation',
+    ],
+  },
+};
+
 const SNAPSHOT_PROMPT_VERSION = 'snapshot_v6_coaching_2026-03-09';
 const SNAPSHOT_EVIDENCE_MAX_TICKETS = 12;
 const SNAPSHOT_RUN_RETENTION = Math.max(
@@ -8459,7 +9033,9 @@ app.get('/api/gen/members', requireAuth, async (req, res) => {
       const person = peopleByAlias.get(item.identity.alias) || {};
       const fallbackDisplay =
         item.identity.displayName ||
-        (item.identity.email ? item.identity.email.split('@')[0] : item.identity.raw) ||
+        (item.identity.email
+          ? item.identity.email.split('@')[0]
+          : item.identity.raw) ||
         'Unassigned';
       return {
         assigned_to: item.assigned_to,
@@ -8778,8 +9354,12 @@ app.get('/api/pm/dev-notes', requireAuth, async (req, res) => {
 
     const { from, to } = req.query;
     if (from && to) {
-      const dev = String(req.query.dev || '').trim().toLowerCase();
-      const teamRaw = String(req.query.team || '').trim().toLowerCase();
+      const dev = String(req.query.dev || '')
+        .trim()
+        .toLowerCase();
+      const teamRaw = String(req.query.team || '')
+        .trim()
+        .toLowerCase();
       const team = ['qa', 'ts'].includes(teamRaw) ? teamRaw : '';
       const params = [from, to, APP_TZ];
       let devFilter = '';
@@ -8801,9 +9381,13 @@ app.get('/api/pm/dev-notes', requireAuth, async (req, res) => {
              AND  assigned_to <> ''`,
           [team],
         );
-        const identities = teamPeople.rows.map((row) => assignedIdentityParts(row.assigned_to));
+        const identities = teamPeople.rows.map((row) =>
+          assignedIdentityParts(row.assigned_to),
+        );
         const aliases = [
-          ...new Set(identities.map((identity) => identity.alias).filter(Boolean)),
+          ...new Set(
+            identities.map((identity) => identity.alias).filter(Boolean),
+          ),
         ];
         const emails = new Set(
           identities.map((identity) => identity.email).filter(Boolean),
@@ -8865,7 +9449,13 @@ app.get('/api/pm/dev-notes', requireAuth, async (req, res) => {
          ORDER  BY n.date DESC, n.dev_email, n.pm_email`,
         params,
       );
-      res.json({ from, to, dev: dev || 'all', team: team || null, notes: rows });
+      res.json({
+        from,
+        to,
+        dev: dev || 'all',
+        team: team || null,
+        notes: rows,
+      });
       return;
     }
     const date = req.query.date || (await todayLocal(pool));
