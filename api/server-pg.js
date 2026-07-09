@@ -867,6 +867,78 @@ function ensurePmDevNotesSchema() {
   return pmDevNotesSchemaPromise;
 }
 
+let leadDevNotesSchemaPromise = null;
+function ensureLeadDevNotesSchema() {
+  if (!leadDevNotesSchemaPromise) {
+    leadDevNotesSchemaPromise = pool
+      .query(
+        `
+  create table if not exists lead_dev_notes (
+    id         bigserial    primary key,
+    lead_email text         not null,
+    dev_email  text         not null,
+    note       text,
+    date       date         not null default current_date,
+    at         timestamptz  default now()
+  )
+`,
+      )
+      .then(() =>
+        pool.query(`
+      ALTER TABLE lead_dev_notes ADD COLUMN IF NOT EXISTS lead_email text;
+      ALTER TABLE lead_dev_notes ADD COLUMN IF NOT EXISTS dev_email text;
+      ALTER TABLE lead_dev_notes ADD COLUMN IF NOT EXISTS note text;
+      ALTER TABLE lead_dev_notes ADD COLUMN IF NOT EXISTS date date not null default current_date;
+      ALTER TABLE lead_dev_notes ADD COLUMN IF NOT EXISTS at timestamptz default now();
+
+      CREATE UNIQUE INDEX IF NOT EXISTS lead_dev_notes_lead_email_dev_email_date_idx
+      ON lead_dev_notes (lead_email, dev_email, date);
+    `),
+      )
+      .catch((e) => {
+        leadDevNotesSchemaPromise = null;
+        throw e;
+      });
+  }
+  return leadDevNotesSchemaPromise;
+}
+
+async function leadVisibleDevFilter(req) {
+  const me = await pool.query(
+    `select role, nullif(btrim(team), '') as team
+     from users
+     where lower(email)=lower($1)
+     limit 1`,
+    [req.userEmail],
+  );
+  if (!me.rowCount || me.rows[0].role !== 'lead') {
+    return { ok: false, error: 'lead_only' };
+  }
+  return { ok: true, team: me.rows[0].team || null };
+}
+
+async function assertLeadCanSeeDeveloper(req, devEmail) {
+  const lead = await leadVisibleDevFilter(req);
+  if (!lead.ok) return lead;
+  const target = await pool.query(
+    `select role, nullif(btrim(team), '') as team
+     from users
+     where lower(email)=lower($1)
+     limit 1`,
+    [devEmail],
+  );
+  if (!target.rowCount || target.rows[0].role !== 'dev') {
+    return { ok: false, error: 'developer_not_visible' };
+  }
+  if (
+    lead.team &&
+    String(target.rows[0].team || '').toLowerCase() !==
+      String(lead.team).toLowerCase()
+  ) {
+    return { ok: false, error: 'developer_not_visible' };
+  }
+  return { ok: true, team: lead.team };
+}
 // Auto-export TSV at day end
 const EXPORT_DIR = path.join(process.cwd(), 'exports');
 if (!fs.existsSync(EXPORT_DIR)) fs.mkdirSync(EXPORT_DIR, { recursive: true });
@@ -2171,22 +2243,39 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
   }
 });
 
-// Team member list for PMs (used to populate Assigned-to dropdown)
+// Team member list for manager dropdowns
 app.get('/api/team-members', requireAuth, requirePMOnly, async (req, res) => {
   try {
-    // Pull registered devs from users, shaped like the old tfs_users payload
-    const { rows } = await pool.query(`
-      select
+    const me = await pool.query(
+      `select role, nullif(btrim(team), '') as team
+       from users
+       where lower(email)=lower($1)
+       limit 1`,
+      [req.userEmail],
+    );
+    const role = me.rows[0]?.role || 'dev';
+    const leadTeam = role === 'lead' ? me.rows[0]?.team || null : null;
+    const params = [];
+    const where = [`role = 'dev'`];
+    if (role === 'lead' && leadTeam) {
+      params.push(leadTeam);
+      where.push(`lower(nullif(btrim(team), '')) = lower($${params.length})`);
+    }
+
+    // Pull registered devs from users, shaped like the old tfs_users payload.
+    const { rows } = await pool.query(
+      `select
         -- alias: email local-part
         split_part(lower(email), '@', 1) as alias,
         -- display_name: prefer users.name, fall back to alias
         coalesce(nullif(name, ''), split_part(email, '@', 1)) as display_name,
         lower(email) as email
       from users
-      where role = 'dev'
+      where ${where.join(' and ')}
       order by display_name nulls last, alias
-      limit 1000
-    `);
+      limit 1000`,
+      params,
+    );
 
     res.json({ items: rows });
   } catch (e) {
@@ -3068,28 +3157,53 @@ app.get('/api/updates/today', requireAuth, requirePMOnly, async (req, res) => {
     }))
     .sort((a, b) => a.email.localeCompare(b.email));
 
-  let pmNoteRows = [];
-  try {
-    await ensurePmDevNotesSchema();
+  if (callerRole === 'pm' || callerRole === 'admin') {
+    let pmNoteRows = [];
+    try {
+      await ensurePmDevNotesSchema();
 
-    // Attach today's PM notes for the logged-in PM/admin only.
-    const pmNotes = await pool.query(
-      `SELECT dev_email, note
-       FROM pm_dev_notes
-       WHERE date=$1::date AND lower(pm_email)=lower($2)
-       ORDER BY dev_email`,
-      [date, req.userEmail],
+      // Attach today's PM notes for the logged-in PM/admin only.
+      const pmNotes = await pool.query(
+        `SELECT dev_email, note
+         FROM pm_dev_notes
+         WHERE date=$1::date AND lower(pm_email)=lower($2)
+         ORDER BY dev_email`,
+        [date, req.userEmail],
+      );
+      pmNoteRows = pmNotes.rows;
+    } catch (e) {
+      console.error('[error][updates/today pm notes]', e);
+    }
+
+    const pmNoteMap = new Map(
+      pmNoteRows.map((r) => [r.dev_email.toLowerCase(), r.note]),
     );
-    pmNoteRows = pmNotes.rows;
-  } catch (e) {
-    console.error('[error][updates/today pm notes]', e);
-  }
+    for (const u of users) {
+      u.pmNote = pmNoteMap.get((u.email || '').toLowerCase()) || null;
+    }
+  } else if (callerRole === 'lead') {
+    let leadNoteRows = [];
+    try {
+      await ensureLeadDevNotesSchema();
 
-  const pmNoteMap = new Map(
-    pmNoteRows.map((r) => [r.dev_email.toLowerCase(), r.note]),
-  );
-  for (const u of users) {
-    u.pmNote = pmNoteMap.get((u.email || '').toLowerCase()) || null;
+      const leadNotes = await pool.query(
+        `SELECT dev_email, note
+         FROM lead_dev_notes
+         WHERE date=$1::date AND lower(lead_email)=lower($2)
+         ORDER BY dev_email`,
+        [date, req.userEmail],
+      );
+      leadNoteRows = leadNotes.rows;
+    } catch (e) {
+      console.error('[error][updates/today lead notes]', e);
+    }
+
+    const leadNoteMap = new Map(
+      leadNoteRows.map((r) => [r.dev_email.toLowerCase(), r.note]),
+    );
+    for (const u of users) {
+      u.leadNote = leadNoteMap.get((u.email || '').toLowerCase()) || null;
+    }
   }
 
   res.json({ date, users });
@@ -9521,6 +9635,110 @@ app.post('/api/pm/dev-notes', requireAuth, async (req, res) => {
   }
 });
 
+// --- Lead per-developer daily notes ---
+
+// GET /api/lead/dev-notes?date=YYYY-MM-DD or ?from=YYYY-MM-DD&to=YYYY-MM-DD  (lead only)
+app.get('/api/lead/dev-notes', requireAuth, async (req, res) => {
+  try {
+    const lead = await leadVisibleDevFilter(req);
+    if (!lead.ok) return res.status(403).json({ error: lead.error });
+    await ensureLeadDevNotesSchema();
+
+    const visibleParams = [req.userEmail];
+    let visibleDevWhere = `du.role = 'dev'`;
+    if (lead.team) {
+      visibleParams.push(lead.team);
+      visibleDevWhere += ` AND lower(nullif(btrim(du.team), '')) = lower($${visibleParams.length})`;
+    }
+
+    const { from, to } = req.query;
+    if (from && to) {
+      const dev = String(req.query.dev || '')
+        .trim()
+        .toLowerCase();
+      const params = [from, to, APP_TZ, ...visibleParams];
+      const leadEmailParam = 4;
+      let devFilter = '';
+      if (dev && dev !== 'all') {
+        const p = params.length + 1;
+        params.push(dev);
+        if (dev.includes('@')) {
+          devFilter = ` AND lower(n.dev_email) = $${p}`;
+        } else {
+          devFilter = ` AND lower(split_part(n.dev_email, '@', 1)) = $${p}`;
+        }
+      }
+      const { rows } = await pool.query(
+        `SELECT n.dev_email,
+                COALESCE(NULLIF(du.name, ''), NULLIF(tu.display_name, ''), split_part(n.dev_email, '@', 1)) AS dev_display_name,
+                n.note,
+                to_char(n.date, 'YYYY-MM-DD') AS date,
+                n.at,
+                to_char(timezone($3, n.at), 'FMMM/FMDD/YYYY, FMHH12:MI:SS AM') AS saved_at,
+                COALESCE(NULLIF(u.name, ''), n.lead_email) AS recorded_by
+         FROM   lead_dev_notes n
+         JOIN   users du ON lower(du.email) = lower(n.dev_email)
+         LEFT   JOIN users u ON lower(u.email) = lower(n.lead_email)
+         LEFT   JOIN LATERAL (
+           SELECT display_name
+           FROM   tfs_users
+           WHERE  lower(email) = lower(n.dev_email)
+           LIMIT  1
+         ) tu ON true
+         WHERE  n.date BETWEEN $1::date AND $2::date
+           AND  lower(n.lead_email)=lower($${leadEmailParam})
+           AND  ${visibleDevWhere.replace(/\$(\d+)/g, function (_, n) { return '$' + (Number(n) + 3); })}
+         ${devFilter}
+         ORDER  BY n.date DESC, n.dev_email, n.lead_email`,
+        params,
+      );
+      res.json({ from, to, dev: dev || 'all', notes: rows });
+      return;
+    }
+
+    const date = req.query.date || (await todayLocal(pool));
+    const params = [date, ...visibleParams];
+    const { rows } = await pool.query(
+      `SELECT n.dev_email, n.note, n.lead_email, n.at
+       FROM lead_dev_notes n
+       JOIN users du ON lower(du.email) = lower(n.dev_email)
+       WHERE n.date=$1::date
+         AND lower(n.lead_email)=lower($2)
+         AND ${visibleDevWhere.replace(/\$(\d+)/g, function (_, n) { return '$' + (Number(n) + 1); })}
+       ORDER BY n.dev_email`,
+      params,
+    );
+    res.json({ date, notes: rows });
+  } catch (e) {
+    return serverError(res, e, 'lead/dev-notes GET');
+  }
+});
+
+// POST /api/lead/dev-notes  (lead only)
+app.post('/api/lead/dev-notes', requireAuth, async (req, res) => {
+  try {
+    await ensureLeadDevNotesSchema();
+
+    const { dev_email, note, date } = req.body || {};
+    if (!dev_email)
+      return res.status(400).json({ error: 'dev_email required' });
+
+    const visible = await assertLeadCanSeeDeveloper(req, dev_email);
+    if (!visible.ok) return res.status(403).json({ error: visible.error });
+
+    const noteDate = date || (await todayLocal(pool));
+    await pool.query(
+      `INSERT INTO lead_dev_notes (lead_email, dev_email, note, date, at)
+       VALUES ($1, $2, $3, $4::date, now())
+       ON CONFLICT (lead_email, dev_email, date)
+       DO UPDATE SET note=$3, at=now()`,
+      [req.userEmail, dev_email, note || null, noteDate],
+    );
+    res.json({ status: 'ok' });
+  } catch (e) {
+    return serverError(res, e, 'lead/dev-notes POST');
+  }
+});
 // Notes: upsert a PM note for a task on a given date
 app.post('/api/gen/notes', requireAuth, async (req, res) => {
   try {
@@ -9754,6 +9972,16 @@ ensurePmDevNotesSchema()
   .catch((e) => {
     console.error('[boot] pm_dev_notes table ensure failed:', e);
   });
+
+// --- boot: ensure lead_dev_notes table (lead per-developer daily notes) ---
+ensureLeadDevNotesSchema()
+  .then(() => {
+    console.log('[boot] lead_dev_notes table is ready');
+  })
+  .catch((e) => {
+    console.error('[boot] lead_dev_notes table ensure failed:', e);
+  });
+
 // --- boot: seed gen_enabled_teams meta key (TS only by default) ---
 pool
   .query(
