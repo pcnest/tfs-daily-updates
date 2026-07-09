@@ -1437,8 +1437,9 @@
             </div>
           </section>
 
-          <!-- Standup AI Review History (pm, admin, lead) -->
-          <section id="standupHistoryCard" aria-labelledby="standupHistoryHeader" style="margin-top:24px;">
+          <!-- Standup AI Review History (admin only) -->
+          <section id="standupHistoryCard" class="hidden" aria-labelledby="standupHistoryHeader"
+            style="margin-top:24px;">
             <h4 id="standupHistoryHeader" style="margin:0 0 10px;">Standup AI Review History</h4>
             <div class="toolbar" style="flex-wrap:wrap;gap:8px;">
               <label for="standupHistoryDate" style="font-size:13px;">Date:</label>
@@ -2112,6 +2113,7 @@
         var preMeetingSection = byId('preMeetingSection');
         var snapHtmlBtn = byId('snapHtmlBtn');
         var standupReviewBtn = byId('standupReviewBtn');
+        var standupHistoryCard = byId('standupHistoryCard');
 
         if (loginCard) loginCard.classList.add('hidden');
         if (ticketsCard) ticketsCard.classList.toggle('hidden', !isDev && !isLead); // dev + lead only
@@ -2132,6 +2134,7 @@
         if (snapPdfBtn) snapPdfBtn.classList.toggle('hidden', !isAdmin); // admin-only button
         if (snapEmailBtn) snapEmailBtn.classList.toggle('hidden', !isAdmin); // admin-only button
         if (standupReviewBtn) standupReviewBtn.classList.toggle('hidden', !isAdmin); // admin-only button
+        if (standupHistoryCard) standupHistoryCard.classList.toggle('hidden', !isAdmin); // admin-only section
         // Lead-excluded sections and buttons (pm/admin only)
         if (preMeetingSection) preMeetingSection.classList.toggle('hidden', !isPM && !isAdmin);
         if (missingSection) missingSection.classList.toggle('hidden', !isPM && !isAdmin);
