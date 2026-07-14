@@ -6,6 +6,7 @@ A comprehensive sync and reporting system for tracking TFS work items, team prog
 
 - **[Data Flow Map](DATA-FLOW.md)** - Complete system architecture, data flow stages, and integrity mechanisms
 - **[Frontend Review](FRONTEND-REVIEW.md)** - Dev user ticket display, filtering logic, and security validation
+- **[Standup AI Review](STANDUP-AI-REVIEW.md)** - End-to-end workflow, decision rules, outputs, operations, and known gaps
 
 ## System Components
 

@@ -9,6 +9,24 @@ import nodemailer from 'nodemailer';
 import { Pool } from 'pg';
 import OpenAI from 'openai';
 import { rateLimit } from 'express-rate-limit';
+import {
+  getAssignedDeveloperUpdate,
+  indexLatestStandupUpdates,
+} from './standup-review-identity.js';
+import {
+  chunkStandupReviewPayload,
+  hasCompleteStandupCoverage,
+  isStandupReviewRoleAllowed,
+  standupDateOnly,
+  standupIsWeekday,
+  standupPreviousWeekday,
+  standupReviewInputHash,
+} from './standup-review-reliability.js';
+import {
+  PROGRESS_UPDATE_SNAPSHOT_SCHEMA_SQL,
+  PROGRESS_UPDATE_WITH_SNAPSHOT_INSERT_SQL,
+  historicalTicketSelectSql,
+} from './progress-update-snapshots.js';
 
 // Load environment
 dotenv.config();
@@ -17,7 +35,9 @@ dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const BONUS_ELIGIBILITY_PROMPT_VERSION = 'bonus_v2_value_impact';
-const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v1';
+const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v9';
+const STANDUP_REVIEW_BATCH_SIZE = 25;
+const STANDUP_REVIEW_BATCH_CONCURRENCY = 2;
 const STANDUP_REVIEW_RETENTION = Math.max(
   0,
   parseInt(process.env.STANDUP_REVIEW_RETENTION || '30', 10) || 30,
@@ -641,51 +661,746 @@ ${JSON.stringify(trimmed)}`;
   return js.items;
 }
 
+const STANDUP_REVIEW_CATEGORIES = new Set([
+  'On Track',
+  'Blocked',
+  'Missing Update',
+  'Needs Team Lead Clarification',
+  'Needs PM Escalation',
+]);
+
+function standupCodeFamily(code) {
+  const m = String(code || '').match(/^(\d{3})_/);
+  return m ? m[1] : '';
+}
+
+function standupCodeFamilyNumber(code) {
+  const family = standupCodeFamily(code);
+  return family ? Number(family) : null;
+}
+
+function standupNormText(value) {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function standupStateKey(value) {
+  const text = standupNormText(value).replace(/[\u2010-\u2015]/g, '-');
+  if (['branch checkin', 'branch check-in', 'branch check in'].includes(text)) {
+    return 'branch check-in';
+  }
+  if (['reopened', 're-opened', 're opened'].includes(text)) {
+    return 're-opened';
+  }
+  return text;
+}
+
+function standupIsWorkflowHandoff(ticket) {
+  return [
+    'shelved',
+    'branch check-in',
+    'resolved',
+    'ready for qa',
+    'qa testing',
+    'done',
+  ].includes(standupStateKey(ticket.state));
+}
+
+function addStandupTag(tags, tag) {
+  if (tag && !tags.includes(tag)) tags.push(tag);
+}
+
+function standupSeverity(ticket) {
+  if (standupNormText(ticket.type) !== 'bug') return '';
+  return normalizeSeverity(ticket.severity);
+}
+
+function standupSeverityTag(ticket) {
+  const severity = standupSeverity(ticket);
+  if (severity === 'critical') return 'Critical Severity';
+  if (severity === 'high') return 'High Severity';
+  return '';
+}
+
+function standupHasExplicitCurrentDeliveryRisk(source, ticket) {
+  if (!ticket.has_today_update) return false;
+  if (standupCodeFamily(ticket.today_code) === '800') return true;
+  const tags = Array.isArray(source.sub_tags) ? source.sub_tags : [];
+  return tags.some((tag) =>
+    [
+      'Release Risk',
+      'Schedule Risk',
+      'Delivery Risk',
+      'Cross-Team Dependency',
+      'Waiting for Access',
+      'Waiting for Data',
+      'Waiting for Decision',
+      'Waiting for Environment',
+      'Delayed',
+    ].includes(String(tag)),
+  );
+}
+
+function standupIsPersistentNoUpdate(ticket) {
+  if (!ticket.is_actionable_no_update) return false;
+  const reviewDate = standupDateOnly(ticket.review_date);
+  const previousWeekday = standupDateOnly(
+    ticket.previous_workday_date || standupPreviousWeekday(reviewDate),
+  );
+  const stateChangeDate = standupDateOnly(ticket.state_change_date);
+  if (
+    !standupIsWeekday(reviewDate) ||
+    !previousWeekday ||
+    !stateChangeDate ||
+    stateChangeDate > previousWeekday
+  ) {
+    return false;
+  }
+  const previousUpdateDate = standupDateOnly(ticket.prev_date);
+  return !previousUpdateDate || previousUpdateDate < previousWeekday;
+}
+
+function standupRequiresDailyUpdate(ticket) {
+  const state = standupStateKey(ticket.state);
+  if (
+    [
+      'new',
+      'approved',
+      'shelved',
+      'branch check-in',
+      'resolved',
+      'ready for qa',
+      'qa testing',
+      'done',
+    ].includes(state)
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function standupExemptWorkflowDefault(ticket) {
+  const state = standupStateKey(ticket.state);
+  if (['resolved', 'ready for qa', 'qa testing'].includes(state)) {
+    return {
+      tag: 'Ready for QA',
+      reason: 'Developer work is complete and the ticket is in the QA workflow.',
+    };
+  }
+  if (state === 'branch check-in') {
+    return {
+      tag: 'Ready for Release',
+      reason: 'Developer work is complete and the ticket is in the release workflow.',
+    };
+  }
+  if (state === 'shelved') {
+    return {
+      tag: 'Awaiting Routine Review',
+      reason: 'No developer update is required while the ticket remains Shelved.',
+    };
+  }
+  if (['new', 'approved'].includes(state)) {
+    return {
+      tag: '',
+      reason: 'No developer update is required before active development begins.',
+    };
+  }
+  if (state === 'done') {
+    return {
+      tag: 'Ready for Release',
+      reason: 'The ticket is complete and no developer update is required.',
+    };
+  }
+  return {
+    tag: '',
+    reason: 'The current workflow state does not require a developer update.',
+  };
+}
+
+function standupHasMeaningfulNoteChange(ticket) {
+  const todayNote = standupNormText(ticket.today_note);
+  const prevNote = standupNormText(ticket.prev_note);
+  return !!todayNote && todayNote !== prevNote;
+}
+
+function standupIsNoMovement(ticket) {
+  if (!ticket.has_today_update) return false;
+  const todayFamily = standupCodeFamily(ticket.today_code);
+  const prevFamily = standupCodeFamily(ticket.prev_code);
+  if (!['200', '300'].includes(todayFamily) || todayFamily !== prevFamily) {
+    return false;
+  }
+  return String(ticket.today_code || '') === String(ticket.prev_code || '') &&
+    !standupHasMeaningfulNoteChange(ticket);
+}
+
+function standupIsBackwardMovement(ticket) {
+  const today = standupCodeFamilyNumber(ticket.today_code);
+  const prev = standupCodeFamilyNumber(ticket.prev_code);
+  if (today == null || prev == null) return false;
+  return prev >= 400 && today <= 300;
+}
+
+function standupHasStateCodeMismatch(ticket, currentCode) {
+  const state = standupStateKey(ticket.state);
+  const family = standupCodeFamily(currentCode);
+  const codeNum = standupCodeFamilyNumber(currentCode);
+  if (!family) return false;
+  if (state === 'code review' && codeNum != null && codeNum <= 200) return true;
+  if (['done', 'shelved'].includes(state) && ['200', '300'].includes(family)) {
+    return true;
+  }
+  if (state === 're-opened' && family === '500' && !S(ticket.today_note)) {
+    return true;
+  }
+  return false;
+}
+
+function standupDeliveryRisk(classification, ticket, deterministic) {
+  const priority = Number(ticket.priority);
+  const severity = standupSeverity(ticket);
+  const tags = Array.isArray(classification.sub_tags) ? classification.sub_tags : [];
+  if (tags.includes('Persistent Missing Update')) {
+    return `High - ${severity === 'critical' ? 'Critical' : 'High'} severity Bug has missed two consecutive working-day updates.`;
+  }
+  if (
+    ['critical', 'high'].includes(severity) &&
+    (deterministic.isNoMovement ||
+      tags.includes('Delayed') ||
+      tags.includes('Release Risk') ||
+      tags.includes('Schedule Risk') ||
+      tags.includes('Delivery Risk') ||
+      tags.includes('Cross-Team Dependency'))
+  ) {
+    return `High - ${severity === 'critical' ? 'Critical' : 'High'} severity Bug has a current delivery-risk signal.`;
+  }
+  if (
+    (priority === 1 || priority === 2) &&
+    (deterministic.isMissingUpdate ||
+      deterministic.isNoMovement ||
+      classification.category === 'Blocked' ||
+      (classification.category === 'Needs PM Escalation' &&
+        tags.includes('Possible Risk')))
+  ) {
+    return 'High - P1/P2 item has a blocker, missing update, or no movement.';
+  }
+  if (tags.includes('Release Risk')) return 'High - Release timing may be affected.';
+  if (tags.includes('Delayed') || tags.includes('Cross-Team Dependency')) {
+    return 'Medium - Delivery depends on follow-up outside normal progress.';
+  }
+  return 'Medium - PM visibility is needed before standup.';
+}
+function makeStandupException(classification) {
+  return {
+    ticket_id: String(classification.ticket_id || ''),
+    developer: String(classification.developer || ''),
+    issue: String(classification.reason || classification.update_summary || 'Needs review.'),
+  };
+}
+
+function buildStandupSummary(classifications, validation) {
+  const attentionItems = classifications
+    .filter((item) => item.category !== 'On Track')
+    .slice(0, 2);
+  const criticalOnTrack = classifications.filter(
+    (item) =>
+      item.category === 'On Track' &&
+      Array.isArray(item.sub_tags) &&
+      item.sub_tags.includes('Critical Severity'),
+  ).length;
+  const reviewed = validation.total_reviewed;
+  const ticketLabel = reviewed === 1 ? 'ticket' : 'tickets';
+  const health = `Overall team health: ${validation.on_track} of ${reviewed} ${ticketLabel} are on track.`;
+  const counts = `The review found ${validation.blocked} blocked, ${validation.missing_update} missing update, ${validation.needs_tl_clarification} needing Team Lead clarification, and ${validation.needs_pm_escalation} needing PM escalation.`;
+  const visibility = criticalOnTrack
+    ? `${criticalOnTrack} Critical severity ${criticalOnTrack === 1 ? 'Bug is' : 'Bugs are'} On Track and highlighted for visibility.`
+    : '';
+  const risks = attentionItems.length
+    ? `Top review items: ${attentionItems
+      .map((item) => `#${item.ticket_id} (${item.category}): ${String(item.reason || 'Needs review').replace(/[.!?]+$/, '')}`)
+      .join('; ')}.`
+    : 'No blocker, missing-update, Team Lead clarification, or PM escalation items were identified.';
+  return [health, counts, visibility, risks].filter(Boolean).join(' ');
+}
+export function normalizeStandupReviewResult(result, payload) {
+  const byTicket = new Map();
+  for (const c of Array.isArray(result.classifications) ? result.classifications : []) {
+    const id = String(c?.ticket_id || '');
+    if (id && !byTicket.has(id)) byTicket.set(id, c);
+  }
+
+  const classifications = [];
+  for (const ticket of payload) {
+    const id = String(ticket.ticket_id || '');
+    const source = byTicket.get(id) || {};
+    const currentCode = String(ticket.today_code || ticket.prev_code || '');
+    const currentFamily = standupCodeFamily(currentCode);
+    const priority = Number(ticket.priority);
+    const isHighPriority = priority === 1 || priority === 2;
+    const severity = standupSeverity(ticket);
+    const severityTag = standupSeverityTag(ticket);
+    const isHighImpactBug = ['critical', 'high'].includes(severity);
+    const requiresDailyUpdate = standupRequiresDailyUpdate(ticket);
+    const hasExplicitCurrentDeliveryRisk = standupHasExplicitCurrentDeliveryRisk(
+      source,
+      ticket,
+    );
+    const isWorkflowHandoff500 =
+      standupIsWorkflowHandoff(ticket) &&
+      standupCodeFamily(ticket.today_code) === '500' &&
+      !hasExplicitCurrentDeliveryRisk;
+    const isExemptWithoutToday = !requiresDailyUpdate && !ticket.has_today_update;
+    const isWorkflowExempt = isExemptWithoutToday || isWorkflowHandoff500;
+    const ignoreIncompleteUpdate = isWorkflowHandoff500;
+    const deterministic = {
+      isNoDailyUpdate: !ticket.has_today_update && requiresDailyUpdate,
+      isMissingCode:
+        !!ticket.has_today_update && !S(ticket.today_code) && !ignoreIncompleteUpdate,
+      isMissingNotes:
+        !!ticket.has_today_update && !S(ticket.today_note) && !ignoreIncompleteUpdate,
+      isIncompleteUpdate: false,
+      isActionableNoUpdate: false,
+      isPersistentNoUpdate: false,
+      isNoMovement: standupIsNoMovement(ticket),
+      isBackwardMovement: standupIsBackwardMovement(ticket),
+      isStateCodeMismatch: standupHasStateCodeMismatch(
+        ticket,
+        ticket.today_code,
+      ),
+      hasExplicitCurrentDeliveryRisk,
+      isMissingUpdate: false,
+    };
+    deterministic.isIncompleteUpdate =
+      deterministic.isMissingCode || deterministic.isMissingNotes;
+    deterministic.isActionableNoUpdate =
+      deterministic.isNoDailyUpdate && currentFamily !== '500';
+    deterministic.isMissingUpdate =
+      deterministic.isActionableNoUpdate || deterministic.isIncompleteUpdate;
+    deterministic.isPersistentNoUpdate = standupIsPersistentNoUpdate({
+      ...ticket,
+      is_actionable_no_update: deterministic.isActionableNoUpdate,
+    });
+
+    let tags = Array.isArray(source.sub_tags)
+      ? source.sub_tags.map(String).filter(Boolean)
+      : [];
+
+    if (isWorkflowExempt) {
+      const allowedWorkflowTags = new Set([
+        'Ready for QA',
+        'Ready for Release',
+        'Awaiting Routine Review',
+        'Normal Progress',
+      ]);
+      tags = tags.filter((tag) => allowedWorkflowTags.has(tag));
+    }
+
+    addStandupTag(tags, severityTag);
+    if (deterministic.isActionableNoUpdate) {
+      addStandupTag(tags, 'No Daily Update');
+    }
+    if (deterministic.isMissingCode) addStandupTag(tags, 'Missing Progress Code');
+    if (deterministic.isMissingNotes) addStandupTag(tags, 'Missing Notes');
+    if (deterministic.isPersistentNoUpdate && isHighImpactBug) {
+      addStandupTag(tags, 'Persistent Missing Update');
+    }
+    if (deterministic.isNoMovement) addStandupTag(tags, 'No Movement');
+    if (deterministic.isBackwardMovement || deterministic.isStateCodeMismatch) {
+      addStandupTag(tags, 'Wrong or Mismatched Progress Code');
+    }
+    if (standupCodeFamily(ticket.today_code) === '800') {
+      addStandupTag(tags, 'Delayed');
+    }
+
+    let category = STANDUP_REVIEW_CATEGORIES.has(source.category)
+      ? source.category
+      : 'Needs Team Lead Clarification';
+
+    // Unsupported AI escalation is downgraded unless current evidence carries
+    // a recognized delivery-risk signal. Deterministic rules may promote it again.
+    if (
+      category === 'Needs PM Escalation' &&
+      !deterministic.hasExplicitCurrentDeliveryRisk
+    ) {
+      category = 'Needs Team Lead Clarification';
+    }
+
+    if (isWorkflowExempt) {
+      category = 'On Track';
+      const workflowDefault = standupExemptWorkflowDefault(ticket);
+      addStandupTag(tags, workflowDefault.tag);
+    } else {
+      if (deterministic.isActionableNoUpdate) {
+        category = 'Missing Update';
+      } else if (deterministic.isIncompleteUpdate) {
+        category = 'Needs Team Lead Clarification';
+      } else if (
+        standupCodeFamily(ticket.today_code) === '800' &&
+        category === 'On Track'
+      ) {
+        category = 'Blocked';
+      } else if (
+        (deterministic.isNoMovement ||
+          deterministic.isBackwardMovement ||
+          deterministic.isStateCodeMismatch) &&
+        category === 'On Track'
+      ) {
+        category = 'Needs Team Lead Clarification';
+      }
+
+      if (
+        deterministic.hasExplicitCurrentDeliveryRisk &&
+        (source.category === 'Needs PM Escalation' ||
+          deterministic.isIncompleteUpdate ||
+          standupCodeFamily(ticket.today_code) === '800')
+      ) {
+        category = 'Needs PM Escalation';
+      }
+
+      if (
+        isHighPriority &&
+        (category === 'Blocked' ||
+          deterministic.isActionableNoUpdate ||
+          deterministic.isNoMovement)
+      ) {
+        category = 'Needs PM Escalation';
+        addStandupTag(tags, 'Possible Risk');
+      } else if (!isHighPriority && isHighImpactBug) {
+        if (category === 'Blocked' || deterministic.isNoMovement) {
+          category = 'Needs PM Escalation';
+          addStandupTag(tags, 'Possible Risk');
+        } else if (deterministic.isActionableNoUpdate) {
+          category = deterministic.isPersistentNoUpdate
+            ? 'Needs PM Escalation'
+            : 'Needs Team Lead Clarification';
+          if (deterministic.isPersistentNoUpdate) {
+            addStandupTag(tags, 'Possible Risk');
+          }
+        }
+      }
+    }
+
+    const workflowDefault = isWorkflowExempt
+      ? standupExemptWorkflowDefault(ticket)
+      : null;
+    let deterministicReason = '';
+    if (deterministic.isPersistentNoUpdate && isHighImpactBug) {
+      deterministicReason = `${severity === 'critical' ? 'Critical' : 'High'} severity Bug has no update for two consecutive working days.`;
+    } else if (
+      isHighImpactBug &&
+      deterministic.isActionableNoUpdate &&
+      category === 'Needs Team Lead Clarification'
+    ) {
+      deterministicReason = `${severity === 'critical' ? 'Critical' : 'High'} severity Bug has missed its first required working-day update.`;
+    } else if (
+      deterministic.isIncompleteUpdate &&
+      category === 'Needs Team Lead Clarification'
+    ) {
+      deterministicReason = 'Today\'s submitted update is incomplete and needs Team Lead clarification.';
+    } else if (deterministic.isMissingUpdate && isHighPriority) {
+      deterministicReason = 'P1/P2 ticket is missing a usable current update.';
+    } else if (deterministic.isActionableNoUpdate) {
+      deterministicReason = 'Active ticket is missing a required daily update.';
+    } else if (deterministic.isNoMovement) {
+      deterministicReason = 'Progress code and notes did not show clear movement from the prior update.';
+    } else if (
+      deterministic.isBackwardMovement ||
+      deterministic.isStateCodeMismatch
+    ) {
+      deterministicReason = 'Progress code does not align with the prior update or current TFS state.';
+    }
+
+    const reason = workflowDefault?.reason ||
+      deterministicReason ||
+      S(source.reason) ||
+      'AI output was incomplete and needs review.';
+    let deterministicAction = '';
+    if (deterministic.isPersistentNoUpdate && isHighImpactBug) {
+      deterministicAction = 'PM should confirm the owner, current status, and delivery impact before standup.';
+    } else if (
+      category === 'Needs Team Lead Clarification' &&
+      deterministic.isActionableNoUpdate
+    ) {
+      deterministicAction = 'Team Lead should confirm ownership and obtain a usable update before the next working-day review.';
+    } else if (
+      category === 'Needs Team Lead Clarification' &&
+      deterministic.isIncompleteUpdate
+    ) {
+      deterministicAction = 'Team Lead should confirm the missing progress code or status detail before standup.';
+    }
+    const recommendedAction =
+      (isWorkflowExempt
+        ? 'No developer follow-up is required unless QA or the workflow owner reports a new risk.'
+        : deterministicAction || S(source.recommended_action)) ||
+      (category === 'Needs PM Escalation'
+        ? 'PM should confirm risk, owner, and next action before standup.'
+        : category === 'Needs Team Lead Clarification'
+          ? 'Team Lead should confirm the correct status and next technical step.'
+          : category === 'Missing Update'
+            ? 'Ask the developer to provide the missing daily update.'
+            : category === 'Blocked'
+              ? 'Confirm blocker owner and unblock path.'
+              : 'No action needed beyond normal standup review.');
+    const previousUpdateSummary = S(ticket.prev_note)
+      ? `Latest update${ticket.prev_date ? ` ${ticket.prev_date}` : ''}: ${ticket.prev_note}`
+      : '';
+    const normalProgressConflicts = [
+      'Missing Notes',
+      'Missing Progress Code',
+      'No Daily Update',
+      'No Movement',
+      'Wrong or Mismatched Progress Code',
+      'Possible Risk',
+    ];
+    if (
+      category !== 'On Track' ||
+      tags.some((tag) => normalProgressConflicts.includes(tag))
+    ) {
+      tags = tags.filter((tag) => tag !== 'Normal Progress');
+    }
+
+    classifications.push({
+      ticket_id: id,
+      title: S(source.title) || String(ticket.title || ''),
+      developer: String(ticket.assigned_to || ''),
+      current_code: currentCode,
+      update_summary: isWorkflowExempt
+        ? S(source.update_summary) || String(ticket.today_note || '') || previousUpdateSummary
+        : S(source.update_summary) || String(ticket.today_note || ''),
+      category,
+      sub_tags: tags,
+      reason,
+      recommended_action: recommendedAction,
+    });
+  }
+
+  const exceptions = {
+    missing_updates: [],
+    vague_or_incomplete: [],
+    blocked: [],
+    delayed_at_risk: [],
+    needs_tl_clarification: [],
+    needs_pm_escalation: [],
+  };
+  const tl_review_items = [];
+  const pm_escalation_items = [];
+  const validation = {
+    total_reviewed: classifications.length,
+    on_track: 0,
+    blocked: 0,
+    missing_update: 0,
+    needs_tl_clarification: 0,
+    needs_pm_escalation: 0,
+    sub_tag_delayed: 0,
+    sub_tag_ready_for_qa: 0,
+    sub_tag_ready_for_release: 0,
+  };
+
+  const payloadById = new Map(
+    payload.map((ticket) => [String(ticket.ticket_id || ''), ticket]),
+  );
+  for (const c of classifications) {
+    const ticket = payloadById.get(c.ticket_id) || {};
+    const tags = Array.isArray(c.sub_tags) ? c.sub_tags : [];
+    const exception = makeStandupException(c);
+    if (c.category === 'On Track') validation.on_track += 1;
+    if (c.category === 'Blocked') {
+      validation.blocked += 1;
+      exceptions.blocked.push(exception);
+    }
+    if (c.category === 'Missing Update') validation.missing_update += 1;
+    if (
+      c.category === 'Missing Update' ||
+      tags.includes('No Daily Update')
+    ) {
+      exceptions.missing_updates.push(exception);
+    }
+    if (c.category === 'Needs Team Lead Clarification') {
+      validation.needs_tl_clarification += 1;
+      exceptions.needs_tl_clarification.push(exception);
+    }
+    if (c.category === 'Needs PM Escalation') {
+      validation.needs_pm_escalation += 1;
+      exceptions.needs_pm_escalation.push(exception);
+    }
+    if (
+      tags.some((tag) =>
+        ['Vague Update', 'Missing Progress Code', 'Missing Notes'].includes(tag),
+      )
+    ) {
+      exceptions.vague_or_incomplete.push(exception);
+    }
+    if (
+      tags.some((tag) =>
+        [
+          'Delayed',
+          'No Movement',
+          'Possible Risk',
+          'Persistent Missing Update',
+          'Release Risk',
+          'Schedule Risk',
+          'Delivery Risk',
+          'Waiting for Access',
+          'Waiting for Data',
+          'Waiting for Decision',
+          'Waiting for Environment',
+          'Cross-Team Dependency',
+        ].includes(tag),
+      )
+    ) {
+      exceptions.delayed_at_risk.push(exception);
+    }
+    if (tags.includes('Delayed')) validation.sub_tag_delayed += 1;
+    if (tags.includes('Ready for QA')) validation.sub_tag_ready_for_qa += 1;
+    if (tags.includes('Ready for Release')) validation.sub_tag_ready_for_release += 1;
+
+    if (
+      c.category === 'Needs Team Lead Clarification' ||
+      tags.includes('Wrong or Mismatched Progress Code')
+    ) {
+      let whyTlNeeded = 'A Team Lead should resolve the technical or scope ambiguity before standup.';
+      if (
+        tags.includes('No Daily Update') &&
+        (tags.includes('Critical Severity') || tags.includes('High Severity'))
+      ) {
+        whyTlNeeded = 'A Team Lead should confirm ownership after the first missed update for a Critical/High severity Bug.';
+      } else if (
+        tags.includes('Missing Progress Code') ||
+        tags.includes('Missing Notes')
+      ) {
+        whyTlNeeded = 'A Team Lead should clarify the incomplete progress update before delivery status is accepted.';
+      } else if (tags.includes('Wrong or Mismatched Progress Code')) {
+        whyTlNeeded = 'A Team Lead should confirm the correct workflow state and progress code.';
+      }
+      tl_review_items.push({
+        ticket_id: c.ticket_id,
+        developer: c.developer,
+        issue: c.reason,
+        why_tl_needed: whyTlNeeded,
+        suggested_action: c.recommended_action ||
+          'Confirm correct status and next technical step before standup.',
+      });
+    }
+    if (c.category === 'Needs PM Escalation') {
+      const deterministic = {
+        isMissingUpdate:
+          tags.includes('No Daily Update') ||
+          tags.includes('Missing Progress Code') ||
+          tags.includes('Missing Notes'),
+        isNoMovement: tags.includes('No Movement'),
+      };
+      pm_escalation_items.push({
+        ticket_id: c.ticket_id,
+        developer: c.developer,
+        issue: c.reason,
+        evidence: c.update_summary || c.reason,
+        delivery_risk: standupDeliveryRisk(c, ticket, deterministic),
+        recommended_pm_action: c.recommended_action ||
+          'Confirm risk, owner, and next action before standup.',
+      });
+    }
+  }
+
+  const knownTicketIds = new Set(classifications.map((c) => c.ticket_id));
+  const exemptWithoutTodayIds = new Set(
+    payload
+      .filter(
+        (ticket) =>
+          !standupRequiresDailyUpdate(ticket) && !ticket.has_today_update,
+      )
+      .map((ticket) => String(ticket.ticket_id || '')),
+  );
+  const follow_up_questions = (Array.isArray(result.follow_up_questions)
+    ? result.follow_up_questions
+    : [])
+    .filter((q) => {
+      const id = String(q?.ticket_id || '');
+      return knownTicketIds.has(id) && !exemptWithoutTodayIds.has(id);
+    })
+    .slice(0, 5)
+    .map((q) => ({
+      ticket_id: String(q.ticket_id || ''),
+      developer: String(q.developer || ''),
+      reason: String(q.reason || ''),
+      question: String(q.question || ''),
+    }));
+
+  return {
+    standup_summary: buildStandupSummary(classifications, validation),
+    classifications,
+    exceptions,
+    follow_up_questions,
+    tl_review_items,
+    pm_escalation_items,
+    validation,
+  };
+}
 // --- AI: Daily Standup Review -----------------------------------------------
-async function aiStandupReview(tickets, todayUpdates, yesterdayUpdates) {
-  if (!openai)
-    throw Object.assign(new Error('AI not configured'), { status: 501 });
+function buildStandupReviewPayload(
+  tickets,
+  todayUpdates,
+  previousUpdates,
+  reviewDate,
+) {
+  // Index by ticket and author so manager/lead rows cannot satisfy a
+  // developer-owned Standup update.
+  const todayMap = indexLatestStandupUpdates(todayUpdates);
+  const previousMap = indexLatestStandupUpdates(previousUpdates);
 
-  // Build lookup maps: ticket_id → latest update
-  const todayMap = new Map();
-  for (const u of todayUpdates) {
-    const k = String(u.ticketId || u.ticket_id || '');
-    const prev = todayMap.get(k);
-    if (!prev || u.at > prev.at) todayMap.set(k, u);
-  }
-  const yestMap = new Map();
-  for (const u of yesterdayUpdates) {
-    const k = String(u.ticketId || u.ticket_id || '');
-    const prev = yestMap.get(k);
-    if (!prev || u.at > prev.at) yestMap.set(k, u);
-  }
+  const previousWorkdayDate = standupPreviousWeekday(reviewDate);
 
-  // Build merged payload; cap at 50 tickets
-  const payload = (tickets || []).slice(0, 50).map((t) => {
+  return (tickets || []).map((t) => {
     const id = String(t.id || '');
-    const today = todayMap.get(id);
-    const yest = yestMap.get(id);
+    const developerEmail = String(
+      t.assignedDeveloperEmail || t.assigned_developer_email || '',
+    );
+    const today = getAssignedDeveloperUpdate(todayMap, id, developerEmail);
+    const previous = getAssignedDeveloperUpdate(
+      previousMap,
+      id,
+      developerEmail,
+    );
     return {
       ticket_id: id,
       title: sanitizeForPrompt(t.title),
       type: String(t.type || ''),
       state: String(t.state || ''),
       assigned_to: String(t.assignedTo || t.assigned_to || ''),
+      assigned_developer_email: developerEmail,
       priority: t.priority ?? null,
       severity: String(t.severity || ''),
+      state_change_date: standupDateOnly(
+        t.stateChangeDate || t.state_change_date,
+      ),
+      review_date: standupDateOnly(reviewDate),
+      previous_workday_date: previousWorkdayDate,
       today_code: today ? String(today.code || '') : null,
       today_note: today
         ? sanitizeForPrompt(String(today.note || '').slice(0, 300))
         : null,
-      prev_code: yest ? String(yest.code || '') : null,
-      prev_note: yest
-        ? sanitizeForPrompt(String(yest.note || '').slice(0, 300))
+      prev_code: previous ? String(previous.code || '') : null,
+      prev_note: previous
+        ? sanitizeForPrompt(String(previous.note || '').slice(0, 300))
+        : null,
+      prev_date: previous
+        ? String(previous.updateDate || previous.date || '').slice(0, 10)
         : null,
       has_today_update: !!today,
     };
   });
+}
 
-  const reviewDate = new Date().toISOString().slice(0, 10);
+async function requestStandupReviewBatch(
+  payload,
+  reviewDate,
+  batchNumber,
+  totalBatches,
+) {
+  if (!openai)
+    throw Object.assign(new Error('AI not configured'), { status: 501 });
+
   const system = `You are an AI workflow assistant supporting the Project Manager during the daily pre-meeting update review.
 Analyze developer progress updates, compare against prior updates, and categorize every active ticket.
 You must not make decisions on behalf of the PM, Lead, or Manager. Only analyze, summarize, flag, and draft.
@@ -708,7 +1423,27 @@ Progress code taxonomy (team standard — use this to interpret today_code and p
 Key 500_xx rules:
 - A 500_xx code means the developer considers the ticket DONE or in handoff. Do NOT mark as Missing Update solely because no new prose was added.
 - 500_xx tickets should default to "On Track" with sub-tag "Ready for QA", "Ready for Release", or "Awaiting Routine Review" based on the sub-code and notes.
-- Only escalate a 500_xx ticket if: the TFS state is still Active/In Development AND there is no sign of acceptance progress, OR the ticket has sat at 500_xx for multiple days with no movement toward formal closure.
+- Only escalate a 500_xx ticket if the TFS state is still Active/In Development with no sign of acceptance progress. QA Testing, Ready for QA, Resolved, Branch Check-in/Branch Checkin, Shelved, and Done are evidence of workflow handoff or closure and must not be escalated solely because a 500_xx update has blank notes or the prior update is old.
+
+Work item state taxonomy (use the state field to cross-check progress codes and detect mismatches):
+- New: Created but not yet reviewed, prioritized, or approved — not yet in active development; no developer update expected.
+- Approved: Requirements reviewed and accepted; ready for planning. Developer may be in early 100_xx phase.
+- Committed: Selected for sprint, assigned for development. Expect 100_xx or 200_xx progress codes.
+- In Development: Active coding, implementation, and self-testing in progress. Expect 200_xx or 300_xx.
+- Code Review: Development complete, submitted for peer or Team Lead review. Expect 400_xx.
+- Shelved: Development and review complete but intentionally held for a future release. No active developer work expected; do NOT flag as Missing Update.
+- Branch Check-in / Branch Checkin: Changes checked into the release branch; development and code review complete. Expect 500_xx.
+- Resolved (Bug): Bug fix complete, ready for QA verification. Expect 500_xx.
+- Ready for QA (PBI): Feature complete, meets acceptance criteria, awaiting QA validation. Expect 500_xx.
+- QA Testing: QA actively validating. Developer's work is done; a 500_xx or no update is appropriate. Do NOT flag as Missing Update.
+- Re-Opened (Bug only): QA verification failed or issue recurred; returned to developer. Expect 600_xx, 700_xx, or 200_xx.
+- Done: QA passed, all criteria met, complete for release. No developer update expected; do NOT flag as Missing Update.
+
+State/code mismatch rules (flag with sub-tag "Wrong or Mismatched Progress Code" when applicable):
+- state=In Development but code=500_xx: developer may have finished but not updated TFS state — note it, do not penalize.
+- state=Code Review but code=200_xx or lower: possible update lag; flag for Team Lead clarification.
+- state=Done or Shelved but code=200_xx or 300_xx: clear mismatch; flag for PM or Team Lead.
+- state=Re-Opened but code=500_xx without supporting notes: needs clarification before accepting as done.
 
 Categories (assign exactly one per ticket):
 - "On Track": clear update, no blocker/escalation risk, meaningful movement, next step clear
@@ -720,7 +1455,8 @@ Categories (assign exactly one per ticket):
 Sub-tags (optional, include only applicable ones): Delayed, Ready for QA, Ready for Release, No Movement,
 Vague Update, Wrong or Mismatched Progress Code, Possible Risk, Normal Progress, Awaiting Routine Review,
 Waiting for Access, Waiting for Data, Waiting for Decision, Waiting for Environment, Cross-Team Dependency,
-Release Risk, No Daily Update, Missing Progress Code, Missing Notes.
+Release Risk, Schedule Risk, Delivery Risk, No Daily Update, Missing Progress Code, Missing Notes,
+Critical Severity, High Severity, Persistent Missing Update.
 
 Validation rules:
 1. Use only provided data. Do not invent facts.
@@ -729,9 +1465,62 @@ Validation rules:
 4. Do not mark On Track if update is missing, vague, blocked, delayed without explanation, or code/notes mismatch.
 5. Do not mark Blocked unless notes identify a dependency or obstacle.
 6. If unclear, use Needs Team Lead Clarification or Missing Update.
-7. If risk affects schedule/release/cross-team, use Needs PM Escalation.`;
+7. If risk affects schedule/release/cross-team, use Needs PM Escalation.
 
-  const user = `Review the following active tickets and produce a complete standup analysis. Today is ${reviewDate}.
+standup_summary format:
+- Write one concise paragraph of 3-5 sentences.
+- Cover overall team health, count of tickets by category, and the top 1-2 risks.
+- Do not add a long narrative, bullet list, or unsupported conclusion.
+
+Prior-update comparison rules:
+- review_date is the local standup date; previous_workday_date skips Saturday/Sunday; state_change_date is the current TFS-state entry date.
+- prev_code/prev_note/prev_date are the most recent update before today, not necessarily yesterday.
+- Compare today_code/today_note against prev_code/prev_note for every ticket that has a current developer update.
+- Same 200_xx or 300_xx code with no meaningful note change means sub-tag "No Movement".
+- Backward movement such as 400_xx to 200_xx means sub-tag "Wrong or Mismatched Progress Code" and category "Needs Team Lead Clarification" unless PM escalation applies.
+- has_today_update=false means sub-tag "No Daily Update" only when the current TFS state requires a developer update.
+
+Update-author ownership rules:
+- assigned_developer_email is the canonical application account for the ticket's current developer.
+- today_code/today_note and prev_code/prev_note contain only updates authored by that assigned developer.
+- PM, admin, and Team Lead progress rows and dedicated annotations are not developer progress evidence and must not affect classification.
+
+Workflow ownership rules:
+- New, Approved, Shelved, Branch Check-in/Branch Checkin, Resolved, Ready for QA, QA Testing, and Done do not require a daily developer update.
+- If one of those states has no update today, classify it "On Track" and do not add Missing Update, No Daily Update, No Movement, Possible Risk, or PM escalation solely because the latest developer update is old.
+- QA Testing means QA owns the active validation step. Use sub-tag "Ready for QA" and do not ask the developer for an update unless current evidence says the ticket was returned to development.
+- A current 500_xx update in a workflow-handoff state remains "On Track" even when notes are blank; use Ready for QA, Ready for Release, or Awaiting Routine Review. It may still be Blocked or Needs PM Escalation only when the current update explicitly identifies a blocker, release risk, schedule impact, or cross-team dependency. Do not infer those risks from update age alone.
+
+Priority and severity escalation rules (normalization is authoritative):
+- Severity policy applies only when type=Bug. PBIs ignore severity even if a value is present.
+- Bug severity 1/Critical always gets sub-tag "Critical Severity"; severity 2/High always gets "High Severity". Severity alone never creates TL or PM escalation.
+- Workflow-exempt states remain On Track without a current developer update, and workflow-handoff states with current 500_xx remain On Track unless current delivery impact is explicit, including Critical/High Bugs.
+- P1/P2 tickets with Blocked, no update, or No Movement become "Needs PM Escalation" regardless of severity. P1/P2 submitted-but-incomplete updates go to "Needs Team Lead Clarification" first unless current delivery impact is explicit.
+- For P3/P4 Critical/High Bugs: Blocked or No Movement becomes "Needs PM Escalation".
+- For P3/P4 Critical/High Bugs with no update: first missed weekday becomes "Needs Team Lead Clarification"; a miss that also occurred on the immediately preceding Monday-Friday workday becomes "Needs PM Escalation" with sub-tag "Persistent Missing Update".
+- For P1-P4 tickets at any severity, an update submitted with a blank progress code or blank note becomes "Needs Team Lead Clarification" unless the current update contains explicit delivery impact.
+- Wrong code, state/code mismatch, or vague status goes to TL first unless a current update has explicit delivery impact.
+- Explicit delivery impact requires a current update and one of Release Risk, Schedule Risk, Delivery Risk, Cross-Team Dependency, Delayed, or a Waiting-for dependency tag; current 800_xx is also explicit evidence. Historical notes alone cannot trigger escalation.
+
+Output consistency rules:
+- classifications is the source of truth. exceptions, tl_review_items, pm_escalation_items, and validation must be derived from classifications.
+- Every ticket whose category is not "On Track" must appear in the matching exceptions list.
+- A ticket may appear in multiple exceptions lists when sub-tags justify it, but it must have exactly one primary category.
+- Count validation by iterating classifications. Do not estimate counts independently.
+
+follow_up_questions rules:
+- Generate a question only when the category is ambiguous between two options, the notes mention a dependency/blocker without naming the owner, or a state/code mismatch needs verbal confirmation.
+- Cap follow_up_questions at 5 total.
+- Frame each question as something the PM should ask the developer or Team Lead.
+- If nothing is ambiguous, return an empty array.
+
+tl_review_items and pm_escalation_items format:
+- tl_review_items.why_tl_needed: one sentence naming the technical, workflow, or scope decision that requires TL review.
+- tl_review_items.suggested_action: a concrete verb phrase.
+- pm_escalation_items.delivery_risk: "High -", "Medium -", or "Low -" plus one-sentence rationale.
+- pm_escalation_items.recommended_pm_action: a concrete PM action such as confirming owner, escalation path, date impact, or cross-team dependency.`;
+
+  const user = `Review batch ${batchNumber} of ${totalBatches} of the active tickets and classify every ticket in this batch. Today is ${reviewDate}.
 
 Ticket data (JSON):
 ${JSON.stringify(payload)}`;
@@ -758,7 +1547,7 @@ ${JSON.stringify(payload)}`;
     console.error(
       '[ai/standup-review] Response truncated (finish_reason=length). ' +
         'Ticket count:',
-      (tickets || []).length,
+      payload.length,
     );
     throw Object.assign(
       new Error(
@@ -783,6 +1572,51 @@ ${JSON.stringify(payload)}`;
   return js;
 }
 
+async function aiStandupReview(payload, reviewDate) {
+  const chunks = chunkStandupReviewPayload(
+    payload || [],
+    STANDUP_REVIEW_BATCH_SIZE,
+  );
+  if (!chunks.length) {
+    return normalizeStandupReviewResult({}, []);
+  }
+
+  const batchResults = [];
+  for (
+    let offset = 0;
+    offset < chunks.length;
+    offset += STANDUP_REVIEW_BATCH_CONCURRENCY
+  ) {
+    const group = chunks.slice(
+      offset,
+      offset + STANDUP_REVIEW_BATCH_CONCURRENCY,
+    );
+    const results = await Promise.all(
+      group.map((chunk, index) =>
+        requestStandupReviewBatch(
+          chunk,
+          reviewDate,
+          offset + index + 1,
+          chunks.length,
+        ),
+      ),
+    );
+    batchResults.push(...results);
+  }
+
+  const merged = {
+    classifications: batchResults.flatMap((result) =>
+      Array.isArray(result.classifications) ? result.classifications : [],
+    ),
+    follow_up_questions: batchResults.flatMap((result) =>
+      Array.isArray(result.follow_up_questions)
+        ? result.follow_up_questions
+        : [],
+    ),
+  };
+  return normalizeStandupReviewResult(merged, payload);
+}
+
 // DB pool
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -795,9 +1629,27 @@ try {
   const hostMasked = dbUrl.host || '(none)';
   const dbName = (dbUrl.pathname || '').replace(/^\//, '') || '(none)';
   const userMasked = dbUrl.username ? `${dbUrl.username}@` : '';
-  console.log('[db]', { host: hostMasked, db: dbName, user: userMasked });
+  if (process.env.NODE_ENV !== 'test') {
+    console.log('[db]', { host: hostMasked, db: dbName, user: userMasked });
+  }
 } catch (e) {
-  console.log('[db] could not parse DATABASE_URL');
+  if (process.env.NODE_ENV !== 'test') {
+    console.log('[db] could not parse DATABASE_URL');
+  }
+}
+
+let progressUpdateSnapshotSchemaPromise = null;
+function ensureProgressUpdateSnapshotSchema() {
+  if (!progressUpdateSnapshotSchemaPromise) {
+    progressUpdateSnapshotSchemaPromise = pool
+      .query(PROGRESS_UPDATE_SNAPSHOT_SCHEMA_SQL)
+      .catch((e) => {
+        // Allow a later request or boot retry after a transient database error.
+        progressUpdateSnapshotSchemaPromise = null;
+        throw e;
+      });
+  }
+  return progressUpdateSnapshotSchemaPromise;
 }
 
 let pmDevNotesSchemaPromise = null;
@@ -1620,9 +2472,11 @@ app.get('/favicon.ico', (req, res) => {
   res.status(204).end(); // No Content
 });
 
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`[boot] listening on http://0.0.0.0:${PORT}`);
-});
+if (process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`[boot] listening on http://0.0.0.0:${PORT}`);
+  });
+}
 
 // puppeteer quick smoke test
 app.get('/diag/puppeteer', async (req, res) => {
@@ -2923,22 +3777,25 @@ app.post('/api/progress', requireAuth, async (req, res) => {
     return res.status(500).json({ error: 'server_missing_user_id' });
   }
 
-  await pool.query(
-    `insert into progress_updates
-       (ticket_id, email, user_id, code, note, risk_level, impact_area, date, at)
-     values
-       ($1,        $2,    $3,      $4,   $5,   $6,         $7,          $8,   now())`,
-    [
+  let inserted;
+  try {
+    await ensureProgressUpdateSnapshotSchema();
+    inserted = await pool.query(PROGRESS_UPDATE_WITH_SNAPSHOT_INSERT_SQL, [
       String(ticketId), // $1
       req.userEmail, // $2
-      req.userId, // $3  <-- NEW
+      req.userId, // $3
       code, // $4
       note || '', // $5
       riskLevel || 'low', // $6
       impactArea || '', // $7
       date, // $8
-    ],
-  );
+    ]);
+  } catch (e) {
+    return serverError(res, e, 'progress/snapshot');
+  }
+  if (!inserted.rowCount) {
+    return res.status(404).json({ error: 'ticket not found' });
+  }
   res.json({ status: 'ok' });
 });
 
@@ -3275,39 +4132,48 @@ app.get('/api/updates/today/ai', requireAuth, async (req, res) => {
 app.get(
   '/api/ai/standup-review',
   requireAuth,
-  requirePMOnly,
+  requirePMOrAdmin,
   async (req, res) => {
     try {
-      if (!openai) return res.status(501).json({ error: 'ai_not_configured' });
-
       const date = await todayLocal(pool);
 
-      // Cache check — 30-minute window keyed to today's standup
-      const cacheRow = await pool.query(
-        `select ai_output
-         from ai_snapshot_runs
-        where dev_email = '_team_standup'
-          and period_start = $1::date
-          and period_end   = $1::date
-          and prompt_version = $2
-          and created_at > now() - interval '30 minutes'
-        order by created_at desc
-        limit 1`,
-        [date, STANDUP_REVIEW_PROMPT_VERSION],
-      );
-      if (cacheRow.rowCount) {
-        const cached = parseJsonMaybe(cacheRow.rows[0].ai_output);
-        if (cached && Array.isArray(cached.classifications)) {
-          return res.json({ cached: true, date, ...cached });
-        }
+      if (!standupIsWeekday(date)) {
+        return res.status(409).json({
+          error: 'non_working_day',
+          message: 'Standup Review generation is available Monday-Friday.',
+          date,
+        });
       }
 
-      // Active tickets: non-deleted, not-Done, Bug/PBI
+      if (!openai) return res.status(501).json({ error: 'ai_not_configured' });
+
+      const forceRefresh = S(req.query.refresh || '') === '1';
+
+      // Resolve one canonical developer account for each eligible ticket.
       const ticketsResult = await pool.query(
         `select t.id, t.type, t.title, t.state, t.severity, t.priority,
+              t.state_change_date as "stateChangeDate",
               t.assigned_to as "assignedTo",
+              developer_owner.email as "assignedDeveloperEmail",
               t.iteration_path as "iterationPath"
          from tickets t
+         join lateral (
+           select u.email
+             from users u
+            where u.role = 'dev'
+              and (
+                lower(t.assigned_to) = lower(u.email)
+                or lower(trim(trailing '>' from regexp_replace(
+                  t.assigned_to,
+                  '^.*\\\\',
+                  ''
+                ))) = lower(split_part(u.email, '@', 1))
+              )
+            order by
+              case when lower(t.assigned_to) = lower(u.email) then 0 else 1 end,
+              lower(u.email)
+            limit 1
+         ) developer_owner on true
         where coalesce(t.deleted, false) = false
           and lower(t.state) <> 'done'
           and lower(t.type) in ('bug', 'product backlog item')
@@ -3316,31 +4182,92 @@ app.get(
         order by t.id::bigint`,
       );
 
-      // Today's progress updates
+      const reviewTicketIds = ticketsResult.rows.map((ticket) =>
+        String(ticket.id),
+      );
+      const reviewDeveloperEmails = ticketsResult.rows.map((ticket) =>
+        String(ticket.assignedDeveloperEmail),
+      );
+
+      // Only the assigned developer's row can count as today's update.
       const todayUpdates = await pool.query(
-        `select ticket_id as "ticketId", email, code, note, at
-         from progress_updates
-        where date = $1`,
-        [date],
+        `select pu.ticket_id as "ticketId", pu.email, pu.code, pu.note, pu.at
+           from progress_updates pu
+           join unnest($2::text[], $3::text[])
+             as reviewed(ticket_id, developer_email)
+             on reviewed.ticket_id = pu.ticket_id
+            and lower(reviewed.developer_email) = lower(pu.email)
+          where pu.date = $1::date
+          order by pu.ticket_id, pu.at`,
+        [date, reviewTicketIds, reviewDeveloperEmails],
       );
 
-      // Yesterday's progress updates for comparison
-      const yesterday = new Date(`${date}T00:00:00Z`);
-      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-      const yestDate = yesterday.toISOString().slice(0, 10);
-      const yestUpdates = await pool.query(
-        `select ticket_id as "ticketId", email, code, note, at
-         from progress_updates
-        where date = $1`,
-        [yestDate],
+      // Find the assigned developer's latest prior update. A newer manager or
+      // lead row cannot hide the developer's actual comparison row.
+      const previousUpdates = await pool.query(
+        `select distinct on (pu.ticket_id)
+                pu.ticket_id as "ticketId", pu.email, pu.code, pu.note,
+                pu.date::text as "updateDate", pu.at
+           from progress_updates pu
+           join unnest($2::text[], $3::text[])
+             as reviewed(ticket_id, developer_email)
+             on reviewed.ticket_id = pu.ticket_id
+            and lower(reviewed.developer_email) = lower(pu.email)
+          where pu.date < $1::date
+          order by pu.ticket_id, pu.date desc, pu.at desc`,
+        [date, reviewTicketIds, reviewDeveloperEmails],
       );
-
-      const result = await aiStandupReview(
+      const payload = buildStandupReviewPayload(
         ticketsResult.rows,
         todayUpdates.rows,
-        yestUpdates.rows,
+        previousUpdates.rows,
+        date,
       );
+      const inputHash = standupReviewInputHash(payload);
 
+      if (!forceRefresh) {
+        const cacheRow = await pool.query(
+          `select ai_output
+             from ai_snapshot_runs
+            where dev_email = '_team_standup'
+              and period_start = $1::date
+              and period_end   = $1::date
+              and prompt_version = $2
+              and ai_output->>'input_hash' = $3
+              and created_at > now() - interval '30 minutes'
+            order by created_at desc
+            limit 1`,
+          [date, STANDUP_REVIEW_PROMPT_VERSION, inputHash],
+        );
+        if (cacheRow.rowCount) {
+          const cached = parseJsonMaybe(cacheRow.rows[0].ai_output);
+          if (cached && Array.isArray(cached.classifications)) {
+            return res.json({ cached: true, date, ...cached });
+          }
+        }
+      }
+
+      const normalized = await aiStandupReview(payload, date);
+      const reviewed = normalized.classifications.length;
+      const hasCompleteCoverage = hasCompleteStandupCoverage(
+        payload,
+        normalized.classifications,
+      );
+      if (!hasCompleteCoverage) {
+        throw Object.assign(new Error('standup_coverage_mismatch'), {
+          status: 500,
+        });
+      }
+      const result = {
+        ...normalized,
+        input_hash: inputHash,
+        coverage: {
+          eligible: payload.length,
+          reviewed,
+          omitted: Math.max(0, payload.length - reviewed),
+          complete: hasCompleteCoverage,
+        },
+      };
       // Cache result in ai_snapshot_runs
       await pool.query(
         `insert into ai_snapshot_runs
@@ -3398,7 +4325,7 @@ app.get(
 app.get(
   '/api/ai/standup-review/history',
   requireAuth,
-  requirePMOnly,
+  requirePMOrAdmin,
   async (req, res) => {
     try {
       const dateParam = S(req.query.date || '');
@@ -3688,10 +4615,7 @@ const RANGE_SQL = `
   SELECT
     u.at::date        AS "date",
     u.ticket_id       AS "ticketId",
-    t.type            AS "type",
-    t.title,
-    t.state,
-    t.severity,
+    ${historicalTicketSelectSql()},
     u.code,
     u.risk_level      AS "riskLevel",
     u.note
@@ -3707,6 +4631,7 @@ const RANGE_SQL = `
 `;
 
 async function selectRangeRows({ from, to, devEmail, devLocal }) {
+  await ensureProgressUpdateSnapshotSchema();
   const r = await pool.query(RANGE_SQL, [from, to, APP_TZ, devEmail, devLocal]);
   return r.rows;
 }
@@ -3793,6 +4718,20 @@ async function requirePMOnly(req, res, next) {
     next();
   } catch (e) {
     return serverError(res, e, 'requirePMOnly');
+  }
+}
+
+async function requirePMOrAdmin(req, res, next) {
+  try {
+    const me = await pool.query('select role from users where email=$1', [
+      req.userEmail,
+    ]);
+    const role = me.rows[0]?.role || 'dev';
+    if (!isStandupReviewRoleAllowed(role))
+      return res.status(403).json({ error: 'pm/admin only' });
+    next();
+  } catch (e) {
+    return serverError(res, e, 'requirePMOrAdmin');
   }
 }
 
@@ -7890,6 +8829,7 @@ async function buildSnapshotEvidence({
     };
   }
 
+  await ensureProgressUpdateSnapshotSchema();
   const updatesSql = `
     with updates as (
       select
@@ -7899,9 +8839,7 @@ async function buildSnapshotEvidence({
         u.risk_level as "riskLevel",
         u.impact_area as "impactArea",
         u.at,
-        t.title,
-        t.type,
-        t.state,
+        ${historicalTicketSelectSql(['title', 'type', 'state'])},
         t.assigned_to as "assignedTo",
         count(*) over (partition by u.ticket_id) as "updateCount"
       from progress_updates u
@@ -9687,7 +10625,9 @@ app.get('/api/lead/dev-notes', requireAuth, async (req, res) => {
          ) tu ON true
          WHERE  n.date BETWEEN $1::date AND $2::date
            AND  lower(n.lead_email)=lower($${leadEmailParam})
-           AND  ${visibleDevWhere.replace(/\$(\d+)/g, function (_, n) { return '$' + (Number(n) + 3); })}
+           AND  ${visibleDevWhere.replace(/\$(\d+)/g, function (_, n) {
+             return '$' + (Number(n) + 3);
+           })}
          ${devFilter}
          ORDER  BY n.date DESC, n.dev_email, n.lead_email`,
         params,
@@ -9704,7 +10644,9 @@ app.get('/api/lead/dev-notes', requireAuth, async (req, res) => {
        JOIN users du ON lower(du.email) = lower(n.dev_email)
        WHERE n.date=$1::date
          AND lower(n.lead_email)=lower($2)
-         AND ${visibleDevWhere.replace(/\$(\d+)/g, function (_, n) { return '$' + (Number(n) + 1); })}
+         AND ${visibleDevWhere.replace(/\$(\d+)/g, function (_, n) {
+           return '$' + (Number(n) + 1);
+         })}
        ORDER BY n.dev_email`,
       params,
     );
@@ -9770,6 +10712,16 @@ app.post('/api/gen/notes', requireAuth, async (req, res) => {
 
 // static web
 app.use('/', express.static(path.join(process.cwd(), '..', 'web')));
+
+if (process.env.NODE_ENV !== 'test') {
+// --- boot: add immutable ticket metadata snapshots to progress updates ---
+ensureProgressUpdateSnapshotSchema()
+  .then(() => {
+    console.log('[boot] progress update snapshot columns are ready');
+  })
+  .catch((e) => {
+    console.error('[boot] progress update snapshot migration failed:', e);
+  });
 
 // --- boot: ensure meta table exists (key/value store) ---
 pool
@@ -10083,3 +11035,5 @@ pool
       e,
     ),
   );
+
+}

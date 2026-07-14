@@ -85,23 +85,34 @@
 
 **Schema**: `progress_updates`
 
-| Column        | Type        | Purpose                                           |
-| ------------- | ----------- | ------------------------------------------------- |
-| `ticket_id`   | TEXT        | References ticket ID                              |
-| `email`       | TEXT        | User's email (authenticated)                      |
-| `user_id`     | INTEGER     | FK to users.id (NOT NULL)                         |
-| `code`        | TEXT        | Progress code (e.g., 600_started, 700_inprogress) |
-| `note`        | TEXT        | User's note/comment                               |
-| `risk_level`  | TEXT        | Risk assessment (low/medium/high)                 |
-| `impact_area` | TEXT        | Impact area description                           |
-| `date`        | DATE        | Date of update (local timezone)                   |
-| `at`          | TIMESTAMPTZ | Timestamp of update (UTC)                         |
+| Column                     | Type        | Purpose                                                      |
+| -------------------------- | ----------- | ------------------------------------------------------------ |
+| `ticket_id`                | TEXT        | References ticket ID                                         |
+| `email`                    | TEXT        | User's email (authenticated)                                 |
+| `user_id`                  | INTEGER     | FK to users.id (NOT NULL)                                    |
+| `code`                     | TEXT        | Progress code (e.g., 600_started, 700_inprogress)            |
+| `note`                     | TEXT        | User's note/comment                                          |
+| `risk_level`               | TEXT        | Risk assessment (low/medium/high)                            |
+| `impact_area`              | TEXT        | Impact area description                                      |
+| `date`                     | DATE        | Date of update (local timezone)                              |
+| `at`                       | TIMESTAMPTZ | Timestamp of update (UTC)                                    |
+| `ticket_state`             | TEXT        | Ticket state captured when the progress update was submitted |
+| `ticket_title`             | TEXT        | Ticket title captured when the progress update was submitted |
+| `ticket_type`              | TEXT        | Ticket type captured when the progress update was submitted  |
+| `ticket_severity`          | TEXT        | Severity captured when the progress update was submitted     |
+| `ticket_changed_date`      | TIMESTAMPTZ | TFS changed date captured with the update                     |
+| `ticket_state_change_date` | TIMESTAMPTZ | TFS state-change date captured with the update                |
+| `ticket_snapshot_at`       | TIMESTAMPTZ | Marks rows written with immutable ticket snapshot semantics  |
 
 **Business Rules**:
 
 - Users can submit multiple updates per ticket per day
 - Latest update (`ORDER BY at DESC`) shown in UI
 - PM role can view all users' updates; dev role sees only their own
+- New progress rows store an immutable ticket metadata snapshot in the same insert operation
+- Historical range and snapshot-analysis reports use the stored snapshot when `ticket_snapshot_at` is present
+- Legacy rows without `ticket_snapshot_at` temporarily fall back to the current `tickets` values until Phase 2 backfill
+- Live ticket views continue to use the current `tickets` row
 
 ---
 

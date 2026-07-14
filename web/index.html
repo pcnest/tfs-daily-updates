@@ -1178,8 +1178,12 @@
                     id="preMeetingDate" style="font-size:13px;font-weight:400;"></span><span id="preLastSync"
                     style="font-size:11px;font-weight:400;color:var(--muted);"></span></h3>
                 <div class="toolbar">
-                  <button id="standupReviewBtn" class="secondary" onclick="loadStandupReview()">Standup AI
+                  <button id="standupReviewBtn" class="secondary" onclick="loadStandupReview(false)">Standup AI
                     Review</button>
+                  <button id="standupReviewRefreshBtn" class="secondary hidden" type="button"
+                    onclick="loadStandupReview(true)" title="Force a fresh Standup AI Review"
+                    aria-label="Force a fresh Standup AI Review"
+                    style="width:38px;height:36px;padding:0;font-size:18px;">&#8635;</button>
                   <span id="standupReviewStatus" class="status" role="status" aria-live="polite"></span>
                 </div>
               </div>
@@ -1437,7 +1441,7 @@
             </div>
           </section>
 
-          <!-- Standup AI Review History (admin only) -->
+          <!-- Standup AI Review History (PM/Admin only) -->
           <section id="standupHistoryCard" class="hidden" aria-labelledby="standupHistoryHeader"
             style="margin-top:24px;">
             <h4 id="standupHistoryHeader" style="margin:0 0 10px;">Standup AI Review History</h4>
@@ -1883,8 +1887,9 @@
               loadGenTeamAssignees('ts', 'tsRptDev');
             }
           }
-          // Load standup history date list once per session
-          if (!window.__standupHistoryLoaded) {
+          // Load standup history once per session for authorized roles.
+          if ((window.__role === 'pm' || window.__role === 'admin')
+            && !window.__standupHistoryLoaded) {
             window.__standupHistoryLoaded = true;
             if (typeof loadStandupHistoryDates === 'function') loadStandupHistoryDates();
           }
@@ -2113,6 +2118,7 @@
         var preMeetingSection = byId('preMeetingSection');
         var snapHtmlBtn = byId('snapHtmlBtn');
         var standupReviewBtn = byId('standupReviewBtn');
+        var standupReviewRefreshBtn = byId('standupReviewRefreshBtn');
         var standupHistoryCard = byId('standupHistoryCard');
 
         if (loginCard) loginCard.classList.add('hidden');
@@ -2133,8 +2139,9 @@
         if (bonusAuditCard) bonusAuditCard.classList.toggle('hidden', !isAdmin); // admin-only card
         if (snapPdfBtn) snapPdfBtn.classList.toggle('hidden', !isAdmin); // admin-only button
         if (snapEmailBtn) snapEmailBtn.classList.toggle('hidden', !isAdmin); // admin-only button
-        if (standupReviewBtn) standupReviewBtn.classList.toggle('hidden', !isAdmin); // admin-only button
-        if (standupHistoryCard) standupHistoryCard.classList.toggle('hidden', !isAdmin); // admin-only section
+        if (standupReviewBtn) standupReviewBtn.classList.toggle('hidden', !isPM && !isAdmin);
+        if (standupReviewRefreshBtn) standupReviewRefreshBtn.classList.toggle('hidden', !isPM && !isAdmin);
+        if (standupHistoryCard) standupHistoryCard.classList.toggle('hidden', !isPM && !isAdmin);
         // Lead can see pre-meeting updates; other manager-only sections remain pm/admin only.
         if (preMeetingSection) preMeetingSection.classList.toggle('hidden', !isPM && !isAdmin && !isLead);
         if (missingSection) missingSection.classList.toggle('hidden', !isPM && !isAdmin);
@@ -3466,17 +3473,23 @@
       }
 
       // --- Standup AI Review ---------------------------------------------------
-      function loadStandupReview() {
+      function loadStandupReview(forceRefresh) {
         var btn = byId('standupReviewBtn');
+        var refreshBtn = byId('standupReviewRefreshBtn');
         var st = byId('standupReviewStatus');
         var card = byId('standupReviewCard');
         if (btn) { btn.disabled = true; btn.textContent = 'Loading…'; }
-        if (st) st.textContent = '';
-        fetch((window.API || location.origin) + '/api/ai/standup-review', {
+        if (refreshBtn) refreshBtn.disabled = true;
+        if (st) st.textContent = forceRefresh ? 'Refreshing…' : '';
+        var url = (window.API || location.origin) + '/api/ai/standup-review'
+          + (forceRefresh ? '?refresh=1' : '');
+        fetch(url, {
           headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') }
         })
           .then(function (r) {
-            if (!r.ok) return r.json().then(function (e) { throw new Error(e.error || ('HTTP ' + r.status)); });
+            if (!r.ok) return r.json().then(function (e) {
+              throw new Error(e.message || e.error || ('HTTP ' + r.status));
+            });
             return r.json();
           })
           .then(function (js) {
@@ -3484,11 +3497,14 @@
               card.classList.remove('hidden');
               card.innerHTML = renderStandupReview(js);
             }
+            if (st) st.textContent = js.cached ? 'Cached result' : 'Generated now';
             if (btn) { btn.disabled = false; btn.textContent = 'Standup AI Review'; }
+            if (refreshBtn) refreshBtn.disabled = false;
           })
           .catch(function (e) {
             if (st) st.textContent = 'Error: ' + (e.message || 'unknown');
             if (btn) { btn.disabled = false; btn.textContent = 'Standup AI Review'; }
+            if (refreshBtn) refreshBtn.disabled = false;
           });
       }
 
@@ -3567,6 +3583,14 @@
           'Needs Team Lead Clarification': 'style="background:#fef9c3;color:#713f12;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;"',
           'Needs PM Escalation': 'style="background:#fff7ed;color:#c2410c;padding:2px 8px;border-radius:4px;font-size:12px;font-weight:600;"',
         };
+        var SUB_TAG_STYLE = {
+          'Critical Severity': 'background:#fee2e2;color:#991b1b;border:1px solid #fecaca;',
+          'High Severity': 'background:#fef3c7;color:#92400e;border:1px solid #fde68a;',
+        };
+        function renderStandupSubTag(tag) {
+          var severityStyle = SUB_TAG_STYLE[tag] || 'background:#f3f4f6;color:#374151;border:1px solid transparent;';
+          return '<span style="display:inline-block;font-size:11px;border-radius:4px;padding:1px 5px;margin:1px 2px 1px 0;' + severityStyle + '">' + esc(tag) + '</span>';
+        }
 
         // Header
         out.push('<div style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:1.25rem;">');
@@ -3574,6 +3598,14 @@
         out.push('<h4 style="margin:0;">Standup AI Review &mdash; ' + esc(js.date || '') + (js.cached ? ' <span style="font-size:11px;font-weight:400;color:var(--muted)">(cached result)</span>' : '') + '</h4>');
         out.push('<button class="secondary small" onclick="closeStandupReview(\'' + closeTarget + '\')">Close</button>');
         out.push('</div>');
+        if (js.coverage) {
+          var coverageComplete = js.coverage.complete === true;
+          var coverageColor = coverageComplete ? '#166534' : '#991b1b';
+          out.push('<div style="margin:-6px 0 12px;font-size:12px;color:' + coverageColor + ';">'
+            + 'Coverage: ' + esc(js.coverage.reviewed ?? 0) + ' of '
+            + esc(js.coverage.eligible ?? 0) + ' eligible tickets'
+            + (coverageComplete ? ' (complete)' : ' (incomplete)') + '</div>');
+        }
 
         // 1. Standup Summary
         if (js.standup_summary) {
@@ -3700,7 +3732,7 @@
               out.push('<td><code>' + esc(c.current_code || '—') + '</code></td>');
               out.push('<td>' + esc(c.update_summary || '—') + '</td>');
               out.push('<td><span ' + badgeAttr + '>' + esc(c.category || '') + '</span></td>');
-              out.push('<td>' + (c.sub_tags && c.sub_tags.length ? c.sub_tags.map(function (t) { return '<span style="font-size:11px;background:#f3f4f6;border-radius:4px;padding:1px 5px;">' + esc(t) + '</span>'; }).join(' ') : '—') + '</td>');
+              out.push('<td>' + (c.sub_tags && c.sub_tags.length ? c.sub_tags.map(renderStandupSubTag).join(' ') : '—') + '</td>');
               out.push('<td>' + esc(c.reason || '') + '</td>');
               out.push('<td>' + esc(c.recommended_action || '') + '</td>');
               out.push('</tr>');

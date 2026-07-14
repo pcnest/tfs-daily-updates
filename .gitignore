@@ -148,3 +148,4 @@ agent/last_sync.json
 agent/secrets.ps1
 
 *.md
+!STANDUP-AI-REVIEW.md
