@@ -138,7 +138,7 @@ Follow-up questions are model-drafted, limited to five, filtered to known ticket
 
 - Reviews are cached for 30 minutes by review date, prompt version, and canonical source `input_hash`.
 - A changed eligible ticket, canonical developer owner, TFS state, priority/severity value, assigned-developer current update, or assigned-developer prior update changes the payload hash and prevents stale-cache reuse.
-- PM/admin users can force a fresh review with the UI refresh control or `?refresh=1`.
+- Admin users can force a fresh review with the UI refresh control or `?refresh=1`.
 - Every uncached run inserts a normalized JSON snapshot into `ai_snapshot_runs`.
 - History only lists snapshots matching the current `STANDUP_REVIEW_PROMPT_VERSION`.
 - `STANDUP_REVIEW_RETENTION` defaults to 30 and is enforced separately for the current prompt version.
@@ -159,8 +159,8 @@ Follow-up questions are model-drafted, limited to five, filtered to known ticket
 The v7 implementation resolves the four conditions that previously made a successful result unsafe to trust:
 
 - **Complete coverage:** the former first-50 cap is removed. All eligible tickets are chunked, globally normalized, and reported with explicit coverage metadata.
-- **Freshness-aware cache:** cached results are reused only when the canonical source hash matches. PM/admin users can force refresh.
-- **Consistent authorization:** UI and API both use PM/admin access; leads cannot retrieve the team-wide review.
+- **Freshness-aware cache:** cached results are reused only when the canonical source hash matches. Admin users can force refresh.
+- **Consistent authorization:** UI and API both use admin-only access; PM and lead users cannot retrieve the team-wide review.
 - **Working-day boundary:** weekend generation is rejected before ticket classification begins.
 
 A result is operationally complete when `coverage.complete === true`, `coverage.reviewed === coverage.eligible`, and `coverage.omitted === 0`.
@@ -183,7 +183,7 @@ The P2 implementation extracts operational invariants into `api/standup-review-r
 - SHA-256 source-payload hashing for cache invalidation.
 - Complete-payload batching with a validated positive batch size.
 - Fail-closed coverage validation for missing, duplicate, blank, or unknown ticket IDs.
-- PM/admin-only authorization shared by the Standup middleware and tests.
+- Admin-only authorization shared by the Standup middleware and tests.
 - Table-driven Node tests for calendar boundaries, hash changes, 70-ticket batching, coverage failure modes, and role access.
 
 P2 did not change classification policy, the public response shape, or the prompt/cache version at the time; later handoff and incomplete-update policy changes moved the current version to `standup_review_v9`.

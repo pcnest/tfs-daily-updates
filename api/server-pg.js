@@ -4128,11 +4128,11 @@ app.get('/api/updates/today/ai', requireAuth, async (req, res) => {
   }
 });
 
-// --- AI: Daily Standup Review (PM/Admin only) --------------------------------
+// --- AI: Daily Standup Review (Admin only) -----------------------------------
 app.get(
   '/api/ai/standup-review',
   requireAuth,
-  requirePMOrAdmin,
+  requireAdminOnly,
   async (req, res) => {
     try {
       const date = await todayLocal(pool);
@@ -4321,11 +4321,11 @@ app.get(
   },
 );
 
-// --- AI: Standup Review History (PM/Admin only) ------------------------------
+// --- AI: Standup Review History (Admin only) --------------------------------
 app.get(
   '/api/ai/standup-review/history',
   requireAuth,
-  requirePMOrAdmin,
+  requireAdminOnly,
   async (req, res) => {
     try {
       const dateParam = S(req.query.date || '');

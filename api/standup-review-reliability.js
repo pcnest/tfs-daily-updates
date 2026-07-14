@@ -82,5 +82,5 @@ export function hasCompleteStandupCoverage(payload, classifications) {
 }
 
 export function isStandupReviewRoleAllowed(role) {
-  return ['pm', 'admin'].includes(String(role || '').trim().toLowerCase());
+  return String(role || '').trim().toLowerCase() === 'admin';
 }

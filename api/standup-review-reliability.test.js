@@ -90,8 +90,8 @@ test('coverage requires one matching classification per eligible ticket', () => 
   );
 });
 
-test('Standup Review authorization is limited to PM and admin', () => {
-  assert.equal(isStandupReviewRoleAllowed('pm'), true);
+test('Standup Review authorization is limited to admin', () => {
+  assert.equal(isStandupReviewRoleAllowed('pm'), false);
   assert.equal(isStandupReviewRoleAllowed('ADMIN'), true);
   assert.equal(isStandupReviewRoleAllowed('lead'), false);
   assert.equal(isStandupReviewRoleAllowed('dev'), false);
