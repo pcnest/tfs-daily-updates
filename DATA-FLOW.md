@@ -71,6 +71,7 @@
 | `integrated_in_build` | TEXT        |               | Build where fix was integrated                 |
 | `related_link_count`  | INTEGER     |               | Count of related links/dependencies            |
 | `effort`              | NUMERIC     |               | Story points/effort estimate                   |
+| `expected_delivery_date` | DATE     |               | TFS expected delivery date for the work item   |
 | `deleted`             | BOOLEAN     | DEFAULT false | Soft-delete flag (presence sweep)              |
 | `last_seen_at`        | TIMESTAMPTZ |               | Last time agent synced this ticket             |
 
@@ -194,6 +195,7 @@
       "iterationPath": "Project\\Sprint 2026-412",
       "changedDate": "2025-12-27T05:31:12.807Z",
       "stateChangeDate": "2025-12-26T14:22:00Z",
+      "expectedDeliveryDate": "2026-01-09",
       "tags": "release-3.2.1, hotfix",
       "priority": 1,
       "severity": "High",
@@ -255,6 +257,7 @@ ON CONFLICT (id) DO UPDATE SET
 **Business Rules**:
 
 - **Unconditional updates**: `state`, `changed_date`, `assigned_to`, `title`, etc. (always trust agent's fresh data)
+- **Expected delivery compatibility**: a supplied date updates the current ticket, explicit `null` clears it, and an omitted property from an older agent preserves the stored value.
 - **Conditional update**: `iteration_path` (only if `changed_date` is newer or equal)
   - **Rationale**: Agent may fetch ticket from cross-sprint query with old cached `iteration_path`, but newer `state`/`changed_date`. Don't overwrite newer path with stale path.
 
@@ -298,6 +301,10 @@ WHERE NOT (id = ANY($presentIds))
 ---
 
 ### Stage 4: Database → Web UI (Data Consumption)
+
+The pre-meeting endpoint (`GET /api/updates/today`) returns the current ticket's
+`expectedDeliveryDate` as `YYYY-MM-DD`. PM, admin, and lead cards display the
+value in the Expected Delivery column, or an em dash when the TFS field is empty.
 
 #### 4.1 Main Tickets View (`GET /api/tickets`)
 

@@ -937,6 +937,14 @@
       font-size: 12.5px;
     }
 
+    .pre-table-wrap {
+      overflow-x: auto;
+    }
+
+    .pre-meeting-grid {
+      min-width: 1120px;
+    }
+
     .state-chip {
       display: inline-block;
       padding: 2px 6px;
@@ -3898,7 +3906,8 @@
                   var gk = keys[k];
                   var arr = groups[gk];
 
-                  out.push('<table class="today-grid"><thead><tr>');
+                  out.push('<div class="pre-table-wrap">');
+                  out.push('<table class="today-grid pre-meeting-grid"><thead><tr>');
                   out.push('<th style="width:75px">ID</th>');
                   out.push('<th style="width:110px">Type</th>');
                   out.push('<th style="width:350px">Title</th>');
@@ -3906,7 +3915,7 @@
                   out.push('<th style="width:120px">Severity</th>');
                   out.push('<th style="width:60px">Priority</th>');
                   out.push('<th style="width:75px">Code</th>');
-                  out.push('<th style="width:90px">Risk</th>');
+                  out.push('<th style="width:125px">Expected Delivery</th>');
                   out.push('<th>Note</th>');
                   out.push('<th style="width:45px">Flag</th>');
                   out.push('</tr></thead><tbody>');
@@ -3919,7 +3928,6 @@
                     var codeBadge = it2.code
                       ? '<span class="badge code-' + fam + '"' + (codeLabel ? ' title="' + esc(codeLabel) + '"' : '') + '>' + esc(it2.code) + '</span>'
                       : '-';
-                    var riskBadge = riskBadgeHtml(it2.riskLevel, it2.riskReasons);
 
                     out.push('<tr>');
                     var isStatusRow = String(it2.ticketId) === '0';
@@ -3931,7 +3939,7 @@
                     var priCell2 = it2.priority ? '<span class="badge priority-' + it2.priority + '">P' + it2.priority + '</span>' : '—';
                     out.push('<td>' + priCell2 + '</td>');
                     out.push('<td>' + codeBadge + '</td>');
-                    out.push('<td>' + riskBadge + '</td>');
+                    out.push('<td>' + (isStatusRow ? '' : esc(it2.expectedDeliveryDate || '\u2014')) + '</td>');
                     out.push('<td>' + esc(it2.note || '') + '</td>');
                     var flagCell = it2.isFlagged
                       ? '<span title="' + esc('Flagged by ' + (it2.flaggedBy || 'someone')) + '" style="color:#ef4444">⚑</span>'
@@ -3940,7 +3948,7 @@
                     out.push('</tr>');
                   }
 
-                  out.push('</tbody></table>');
+                  out.push('</tbody></table></div>');
                 }
               }
 

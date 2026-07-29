@@ -27,6 +27,10 @@ import {
   PROGRESS_UPDATE_WITH_SNAPSHOT_INSERT_SQL,
   historicalTicketSelectSql,
 } from './progress-update-snapshots.js';
+import {
+  EXPECTED_DELIVERY_DATE_SCHEMA_SQL,
+  expectedDeliveryDateSyncValue,
+} from './expected-delivery-date.js';
 
 // Load environment
 dotenv.config();
@@ -1652,6 +1656,28 @@ function ensureProgressUpdateSnapshotSchema() {
   return progressUpdateSnapshotSchemaPromise;
 }
 
+let expectedDeliveryDateSchemaPromise = null;
+function ensureExpectedDeliveryDateSchema() {
+  if (!expectedDeliveryDateSchemaPromise) {
+    expectedDeliveryDateSchemaPromise = pool
+      .query(EXPECTED_DELIVERY_DATE_SCHEMA_SQL)
+      .catch((e) => {
+        expectedDeliveryDateSchemaPromise = null;
+        throw e;
+      });
+  }
+  return expectedDeliveryDateSchemaPromise;
+}
+
+async function requireExpectedDeliveryDateSchema(req, res, next) {
+  try {
+    await ensureExpectedDeliveryDateSchema();
+    next();
+  } catch (e) {
+    return serverError(res, e, 'expected-delivery-date-schema');
+  }
+}
+
 let pmDevNotesSchemaPromise = null;
 function ensurePmDevNotesSchema() {
   if (!pmDevNotesSchemaPromise) {
@@ -2803,7 +2829,7 @@ app.post(
 );
 
 // POST /api/sync/tickets     body: { source, tickets: [...], pushedAt, presentIds: [...] }
-app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
+app.post('/api/sync/tickets', requireSyncKey, requireExpectedDeliveryDateSchema, async (req, res) => {
   // The agent can send: { source, tickets: [...], pushedAt, presentIds: [...], presentIteration: "Sprint 2025-400", presentIterationPath: "SupplyPro.Core\2025\Sprint 400" }
   const {
     source = 'unknown',
@@ -2851,6 +2877,7 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
 
     // Upsert all tickets we just saw; set last_seen_at and clear deleted
     for (const t of tickets) {
+      const expectedDeliveryDate = expectedDeliveryDateSyncValue(t);
       if (WATCH_IDS.has(String(t.id))) {
         console.log('[sync/watch]', {
           id: String(t.id),
@@ -2870,7 +2897,8 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
     created_date, changed_date, state_change_date,
     tags, found_in_build, integrated_in_build,
     related_link_count, effort,
-    created_by,           -- << NEW
+    expected_delivery_date,
+    created_by,
     last_seen_at, deleted
   )
   VALUES (
@@ -2880,8 +2908,9 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
     $11,$12,$13,
     $14,$15,$16,
     $17,$18,
-    $19,                 -- << NEW (created_by)
-    $20,false
+    $19,
+    $20,
+    $21,false
   )
   ON CONFLICT (id) DO UPDATE SET
     type                = EXCLUDED.type,
@@ -2906,6 +2935,11 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
     integrated_in_build = EXCLUDED.integrated_in_build,
     related_link_count  = EXCLUDED.related_link_count,
     effort              = EXCLUDED.effort,
+    expected_delivery_date = CASE
+                               WHEN $22::boolean
+                               THEN EXCLUDED.expected_delivery_date
+                               ELSE tickets.expected_delivery_date
+                             END,
     -- keep the first non-empty creator we ever stored
     created_by          = CASE
                             WHEN tickets.created_by IS NULL OR tickets.created_by = ''
@@ -2940,8 +2974,10 @@ app.post('/api/sync/tickets', requireSyncKey, async (req, res) => {
           Number.isFinite(+t.relatedLinkCount) ? +t.relatedLinkCount : 0, // $17
           t.effort != null && t.effort !== '' ? String(t.effort) : null, // $18
 
-          t.createdBy || '', // $19  << NEW
-          seenAt, // $20
+          expectedDeliveryDate.value, // $19
+          t.createdBy || '', // $20
+          seenAt, // $21
+          expectedDeliveryDate.provided, // $22
         ],
       );
     }
@@ -3911,7 +3947,7 @@ app.get('/api/updates/locks/range', requireAuth, async (req, res) => {
 });
 
 // --- collation (enriched)
-app.get('/api/updates/today', requireAuth, requirePMOnly, async (req, res) => {
+app.get('/api/updates/today', requireAuth, requirePMOnly, requireExpectedDeliveryDateSchema, async (req, res) => {
   const date = await todayLocal(pool);
   const me = await pool.query(
     `select role, nullif(btrim(team), '') as team
@@ -3941,6 +3977,7 @@ app.get('/api/updates/today', requireAuth, requirePMOnly, async (req, res) => {
             t.title, t.state, t.type, t.severity,
             t.state_change_date as "stateChangeDate",
             t.assigned_to as "assignedTo", t.iteration_path as "iterationPath",
+            t.expected_delivery_date::text as "expectedDeliveryDate",
             t.priority,
             (tf.ticket_id is not null) as "isFlagged",
             fb.name as "flaggedBy"
@@ -10714,6 +10751,15 @@ app.post('/api/gen/notes', requireAuth, async (req, res) => {
 app.use('/', express.static(path.join(process.cwd(), '..', 'web')));
 
 if (process.env.NODE_ENV !== 'test') {
+// --- boot: add TFS Expected Delivery Date to current ticket metadata ---
+ensureExpectedDeliveryDateSchema()
+  .then(() => {
+    console.log('[boot] tickets.expected_delivery_date column is ready');
+  })
+  .catch((e) => {
+    console.error('[boot] expected delivery date migration failed:', e);
+  });
+
 // --- boot: add immutable ticket metadata snapshots to progress updates ---
 ensureProgressUpdateSnapshotSchema()
   .then(() => {

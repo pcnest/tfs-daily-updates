@@ -13,6 +13,7 @@ $Project = "SupplyPro.Core"
 $Team = "Enterprise Software Team"
 $WiqlFile = $null  # will be resolved after $AgentDir is determined
 $PublicApiBase = "https://tfs-daily-api.onrender.com"
+$ExpectedDeliveryDateFieldRef = "SupplyPro.SPApplication.ExpectedDeliveryDate"
 # $PublicApiBase = "http://localhost:8080"
 # $Pat and $PublicApiKey are loaded from secrets.ps1 (see Basics section below)
 # --------------------------------------------
@@ -54,6 +55,15 @@ function Sanitize([object]$v) {
   $s = $s.Trim()
   $s = $s -replace '\s{2,}', ' '
   return $s
+}
+
+function Get-TfsFieldValue([object]$fields, [string]$referenceName) {
+  if ($null -eq $fields -or [string]::IsNullOrWhiteSpace($referenceName)) {
+    return $null
+  }
+  $property = $fields.PSObject.Properties[$referenceName]
+  if ($null -eq $property) { return $null }
+  return $property.Value
 }
 
 # ---------- last_sync.json (robust) ----------
@@ -485,6 +495,7 @@ for ($i = 0; $i -lt $expandIds.Count; $i += $batchSize) {
         integratedInBuild = $f."Microsoft.VSTS.Build.IntegrationBuild"
         relatedLinkCount  = $relatedLinkCount
         effort            = $f."Microsoft.VSTS.Scheduling.Effort"       # PBIs only
+        expectedDeliveryDate = Get-TfsFieldValue $f $ExpectedDeliveryDateFieldRef
       }
     
       $tickets += $ticketObj
@@ -531,6 +542,7 @@ foreach ($wid in $WatchIds) {
             integratedInBuild = $f."Microsoft.VSTS.Build.IntegrationBuild"
             relatedLinkCount  = ($it.relations | Measure-Object).Count
             effort            = $effort
+            expectedDeliveryDate = Get-TfsFieldValue $f $ExpectedDeliveryDateFieldRef
           }
           $tickets += $ticket
           Write-Log ("[watch] id {0} added via direct refetch" -f $wid)
@@ -563,6 +575,7 @@ foreach ($wid in $WatchIds) {
               integratedInBuild = $f."Microsoft.VSTS.Build.IntegrationBuild"
               relatedLinkCount  = ($single.relations | Measure-Object).Count
               effort            = $effort
+              expectedDeliveryDate = Get-TfsFieldValue $f $ExpectedDeliveryDateFieldRef
             }
             $tickets += $ticket
             Write-Log ("[watch] id {0} added via single-item endpoint" -f $wid)
@@ -660,6 +673,13 @@ function ToIso([object]$v) {
   try { return (Get-Date $v).ToUniversalTime().ToString("o") } catch { return $null }
 }
 
+function ToDateOnly([object]$v) {
+  if ($null -eq $v -or [string]::IsNullOrWhiteSpace([string]$v)) { return $null }
+  $raw = ([string]$v).Trim()
+  if ($raw -match '^(\d{4}-\d{2}-\d{2})') { return $Matches[1] }
+  try { return (Get-Date $v).ToString("yyyy-MM-dd") } catch { return $null }
+}
+
 
 for ($i = 0; $i -lt $exactDelta.Count; $i += $pushBatchSize) {
   $end = [Math]::Min($i + $pushBatchSize - 1, $exactDelta.Count - 1)
@@ -694,6 +714,7 @@ for ($i = 0; $i -lt $exactDelta.Count; $i += $pushBatchSize) {
       integratedInBuild = Sanitize $t.integratedInBuild
       relatedLinkCount  = $t.relatedLinkCount
       effort            = $t.effort
+      expectedDeliveryDate = ToDateOnly $t.expectedDeliveryDate
     }
   }
 
@@ -797,4 +818,3 @@ else {
   # No items came back — keep the previous watermark to avoid missing near-boundary creations
   Write-Log "[delta] no items changed; watermark UNCHANGED ($($SinceUtc.ToString('o')))"
 }
-
