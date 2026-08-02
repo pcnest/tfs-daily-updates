@@ -3594,10 +3594,42 @@
         var SUB_TAG_STYLE = {
           'Critical Severity': 'background:#fee2e2;color:#991b1b;border:1px solid #fecaca;',
           'High Severity': 'background:#fef3c7;color:#92400e;border:1px solid #fde68a;',
+          'Expected Delivery Overdue': 'background:#fee2e2;color:#991b1b;border:1px solid #fecaca;',
+          'Delivery Due Today': 'background:#ffedd5;color:#9a3412;border:1px solid #fed7aa;',
+          'Delivery Due Soon': 'background:#fef3c7;color:#92400e;border:1px solid #fde68a;',
+          'Expected Delivery Missing': 'background:#fef9c3;color:#713f12;border:1px solid #fde047;',
+          'Expected Delivery Reforecasted': 'background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;',
+          'Reforecast Needs Rationale': 'background:#fef9c3;color:#713f12;border:1px solid #fde047;',
+          'Review Queue Risk': 'background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;',
         };
         function renderStandupSubTag(tag) {
           var severityStyle = SUB_TAG_STYLE[tag] || 'background:#f3f4f6;color:#374151;border:1px solid transparent;';
           return '<span style="display:inline-block;font-size:11px;border-radius:4px;padding:1px 5px;margin:1px 2px 1px 0;' + severityStyle + '">' + esc(tag) + '</span>';
+        }
+        function renderForecastStatus(c) {
+          var labels = {
+            overdue: 'Expected Delivery Overdue',
+            due_today: 'Delivery Due Today',
+            due_soon: 'Delivery Due Soon',
+            missing_required: 'Expected Delivery Missing',
+          };
+          var badges = [];
+          if (labels[c.delivery_date_status]) badges.push(renderStandupSubTag(labels[c.delivery_date_status]));
+          if (c.reforecast_direction === 'later' || c.reforecast_direction === 'earlier') {
+            badges.push(renderStandupSubTag('Expected Delivery Reforecasted'));
+          }
+          return badges.length ? badges.join(' ') : '&mdash;';
+        }
+        function renderReforecastDetail(c) {
+          if (c.reforecast_direction !== 'later') return '';
+          if (c.reforecast_explanation_status === 'Supported') {
+            return '<div style="margin-top:4px;font-size:11px;color:var(--muted);">Reforecast rationale: '
+              + esc(c.reforecast_reason_type || 'Other Supported Reason')
+              + (c.reforecast_evidence ? ' &mdash; &ldquo;' + esc(c.reforecast_evidence) + '&rdquo;' : '')
+              + '</div>';
+          }
+          return '<div style="margin-top:4px;font-size:11px;color:#713f12;">Reforecast rationale: '
+            + esc(c.reforecast_explanation_status || 'Ambiguous') + '</div>';
         }
 
         // Header
@@ -3639,6 +3671,11 @@
             ['Delayed', v.sub_tag_delayed],
             ['Ready QA', v.sub_tag_ready_for_qa],
             ['Ready Release', v.sub_tag_ready_for_release],
+            ['Overdue', v.delivery_overdue],
+            ['Due Today', v.delivery_due_today],
+            ['Due Soon', v.delivery_due_soon],
+            ['Forecast Missing', v.expected_delivery_missing],
+            ['Later Reforecast', v.expected_delivery_reforecasted],
           ];
           for (var ci = 0; ci < counts.length; ci++) {
             out.push('<div style="background:var(--surface,#f9fafb);border:1px solid var(--border,#e5e7eb);border-radius:6px;padding:4px 12px;text-align:center;">');
@@ -3669,6 +3706,15 @@
             'Needs Team Lead Clarification': 1,
             'On Track': 0,
           };
+          var DELIVERY_WEIGHT = {
+            overdue: 5,
+            due_today: 4,
+            missing_required: 3,
+            due_soon: 2,
+            scheduled: 1,
+            development_complete: 0,
+            not_required: 0,
+          };
           function devMaxWeight(tickets) {
             var max = 0;
             for (var i = 0; i < tickets.length; i++) {
@@ -3676,6 +3722,23 @@
               if (w > max) max = w;
             }
             return max;
+          }
+          function ticketIdCompare(a, b) {
+            var aNumber = Number(a.ticket_id);
+            var bNumber = Number(b.ticket_id);
+            if (Number.isFinite(aNumber) && Number.isFinite(bNumber) && aNumber !== bNumber) {
+              return aNumber - bNumber;
+            }
+            return String(a.ticket_id || '').localeCompare(String(b.ticket_id || ''));
+          }
+          function sortDeveloperTickets(tickets) {
+            tickets.sort(function (a, b) {
+              var categoryDifference = (CAT_WEIGHT[b.category] || 0) - (CAT_WEIGHT[a.category] || 0);
+              if (categoryDifference) return categoryDifference;
+              var deliveryDifference = (DELIVERY_WEIGHT[b.delivery_date_status] || 0) - (DELIVERY_WEIGHT[a.delivery_date_status] || 0);
+              if (deliveryDifference) return deliveryDifference;
+              return ticketIdCompare(a, b);
+            });
           }
           // Sort developers: highest-priority issues first, then alphabetically
           devOrder.sort(function (a, b) {
@@ -3691,6 +3754,7 @@
           for (var di = 0; di < devOrder.length; di++) {
             var devName = devOrder[di];
             var devTickets = devMap[devName];
+            sortDeveloperTickets(devTickets);
             var maxW = devMaxWeight(devTickets);
 
             // Summarise category counts for this developer
@@ -3729,7 +3793,7 @@
             // Tickets table (no Developer column — redundant inside the card)
             out.push('<div style="overflow:auto;">');
             out.push('<table style="margin:0;"><thead><tr>');
-            out.push('<th>ID</th><th>Title</th><th>Code</th><th>Update Summary</th><th>Category</th><th>Sub-tags</th><th>Reason</th><th>Recommended Action</th>');
+            out.push('<th>ID</th><th>Title</th><th>Code</th><th>Expected Delivery</th><th>Forecast Status</th><th>Update Summary</th><th>Category</th><th>Sub-tags</th><th>Reason</th><th>Recommended Action</th>');
             out.push('</tr></thead><tbody>');
             for (var ti = 0; ti < devTickets.length; ti++) {
               var c = devTickets[ti];
@@ -3738,10 +3802,12 @@
               out.push('<td><code>' + esc(c.ticket_id || '') + '</code></td>');
               out.push('<td>' + esc(c.title || '') + '</td>');
               out.push('<td><code>' + esc(c.current_code || '—') + '</code></td>');
+              out.push('<td>' + (c.expected_delivery_date ? esc(c.expected_delivery_date) : '&mdash;') + '</td>');
+              out.push('<td>' + renderForecastStatus(c) + '</td>');
               out.push('<td>' + esc(c.update_summary || '—') + '</td>');
               out.push('<td><span ' + badgeAttr + '>' + esc(c.category || '') + '</span></td>');
               out.push('<td>' + (c.sub_tags && c.sub_tags.length ? c.sub_tags.map(renderStandupSubTag).join(' ') : '—') + '</td>');
-              out.push('<td>' + esc(c.reason || '') + '</td>');
+              out.push('<td>' + esc(c.reason || '') + renderReforecastDetail(c) + '</td>');
               out.push('<td>' + esc(c.recommended_action || '') + '</td>');
               out.push('</tr>');
             }

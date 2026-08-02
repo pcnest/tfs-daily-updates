@@ -71,7 +71,7 @@
 | `integrated_in_build` | TEXT        |               | Build where fix was integrated                 |
 | `related_link_count`  | INTEGER     |               | Count of related links/dependencies            |
 | `effort`              | NUMERIC     |               | Story points/effort estimate                   |
-| `expected_delivery_date` | DATE     |               | TFS expected delivery date for the work item   |
+| `expected_delivery_date` | DATE     |               | Developer forecast for development completion  |
 | `deleted`             | BOOLEAN     | DEFAULT false | Soft-delete flag (presence sweep)              |
 | `last_seen_at`        | TIMESTAMPTZ |               | Last time agent synced this ticket             |
 
@@ -79,6 +79,27 @@
 
 - Primary: `id`
 - Query optimization: `iteration_path`, `assigned_to`, `state`
+
+---
+
+### 1a. **Expected Delivery History Table** (Forecast audit)
+
+**Schema**: `ticket_expected_delivery_history`
+
+| Column                            | Type        | Purpose                                      |
+| --------------------------------- | ----------- | -------------------------------------------- |
+| `ticket_id`                       | TEXT        | TFS work item ID                             |
+| `previous_expected_delivery_date` | DATE        | Forecast before the observed change          |
+| `expected_delivery_date`          | DATE        | Forecast after the observed change           |
+| `change_direction`                | TEXT        | `set`, `later`, `earlier`, or `cleared`   |
+| `tfs_changed_date`                | TIMESTAMPTZ | TFS change timestamp supplied by the agent   |
+| `observed_at`                     | TIMESTAMPTZ | API observation timestamp                    |
+
+The API writes an event only when the sync payload explicitly includes Expected
+Delivery and the incoming value differs from the stored value. Omission remains
+distinct from clearing for compatibility with older agents. The idempotent insert
+prevents a retried sync from duplicating an event. History begins at feature
+deployment; existing forecast history is not backfilled.
 
 ---
 
@@ -305,6 +326,14 @@ WHERE NOT (id = ANY($presentIds))
 The pre-meeting endpoint (`GET /api/updates/today`) returns the current ticket's
 `expectedDeliveryDate` as `YYYY-MM-DD`. PM, admin, and lead cards display the
 value in the Expected Delivery column, or an em dash when the TFS field is empty.
+
+The admin-only Standup AI Review also consumes the current forecast and the first
+audit change observed since the preceding successful review. The server derives
+the previous forecast, direction, working-day distance, due/overdue status, and
+persistence before sending the canonical payload to OpenAI. These fields are
+included in the review input hash. OpenAI only interprets same-day developer note
+language for a later-reforecast rationale; deterministic normalization owns date
+calculations and escalation.
 
 #### 4.1 Main Tickets View (`GET /api/tickets`)
 

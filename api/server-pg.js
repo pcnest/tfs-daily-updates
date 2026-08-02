@@ -28,9 +28,16 @@ import {
   historicalTicketSelectSql,
 } from './progress-update-snapshots.js';
 import {
+  EXPECTED_DELIVERY_DATE_HISTORY_INSERT_SQL,
+  EXPECTED_DELIVERY_DATE_HISTORY_SCHEMA_SQL,
   EXPECTED_DELIVERY_DATE_SCHEMA_SQL,
+  expectedDeliveryDateChangeDirection,
   expectedDeliveryDateSyncValue,
 } from './expected-delivery-date.js';
+import {
+  deriveStandupDeliveryContext,
+  validateStandupReforecastAssessment,
+} from './standup-review-delivery.js';
 
 // Load environment
 dotenv.config();
@@ -39,7 +46,7 @@ dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const BONUS_ELIGIBILITY_PROMPT_VERSION = 'bonus_v2_value_impact';
-const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v9';
+const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v10';
 const STANDUP_REVIEW_BATCH_SIZE = 25;
 const STANDUP_REVIEW_BATCH_CONCURRENCY = 2;
 const STANDUP_REVIEW_RETENTION = Math.max(
@@ -853,6 +860,12 @@ function standupHasStateCodeMismatch(ticket, currentCode) {
   const codeNum = standupCodeFamilyNumber(currentCode);
   if (!family) return false;
   if (state === 'code review' && codeNum != null && codeNum <= 200) return true;
+  if (
+    ['in development', 'code review', 're-opened'].includes(state) &&
+    family === '500'
+  ) {
+    return true;
+  }
   if (['done', 'shelved'].includes(state) && ['200', '300'].includes(family)) {
     return true;
   }
@@ -866,6 +879,15 @@ function standupDeliveryRisk(classification, ticket, deterministic) {
   const priority = Number(ticket.priority);
   const severity = standupSeverity(ticket);
   const tags = Array.isArray(classification.sub_tags) ? classification.sub_tags : [];
+  if (classification.delivery_date_status === 'overdue') {
+    return `High - Expected Delivery ${classification.expected_delivery_date} has passed while development remains incomplete.`;
+  }
+  if (classification.delivery_date_status === 'due_today') {
+    return `High - Expected Delivery ${classification.expected_delivery_date} is due today and current evidence puts the forecast at risk.`;
+  }
+  if (classification.delivery_date_status === 'due_soon') {
+    return `Medium - Expected Delivery ${classification.expected_delivery_date} is due within two working days and current evidence needs PM follow-up.`;
+  }
   if (tags.includes('Persistent Missing Update')) {
     return `High - ${severity === 'critical' ? 'Critical' : 'High'} severity Bug has missed two consecutive working-day updates.`;
   }
@@ -921,12 +943,20 @@ function buildStandupSummary(classifications, validation) {
   const visibility = criticalOnTrack
     ? `${criticalOnTrack} Critical severity ${criticalOnTrack === 1 ? 'Bug is' : 'Bugs are'} On Track and highlighted for visibility.`
     : '';
+  const deliveryVisibility =
+    validation.delivery_overdue ||
+    validation.delivery_due_today ||
+    validation.delivery_due_soon ||
+    validation.expected_delivery_missing ||
+    validation.expected_delivery_reforecasted
+      ? `Delivery forecast: ${validation.delivery_overdue} overdue, ${validation.delivery_due_today} due today, ${validation.delivery_due_soon} due soon, ${validation.expected_delivery_missing} missing required dates, and ${validation.expected_delivery_reforecasted} later reforecasts.`
+      : '';
   const risks = attentionItems.length
     ? `Top review items: ${attentionItems
       .map((item) => `#${item.ticket_id} (${item.category}): ${String(item.reason || 'Needs review').replace(/[.!?]+$/, '')}`)
       .join('; ')}.`
     : 'No blocker, missing-update, Team Lead clarification, or PM escalation items were identified.';
-  return [health, counts, visibility, risks].filter(Boolean).join(' ');
+  return [health, counts, visibility, deliveryVisibility, risks].filter(Boolean).join(' ');
 }
 export function normalizeStandupReviewResult(result, payload) {
   const byTicket = new Map();
@@ -947,6 +977,11 @@ export function normalizeStandupReviewResult(result, payload) {
     const severityTag = standupSeverityTag(ticket);
     const isHighImpactBug = ['critical', 'high'].includes(severity);
     const requiresDailyUpdate = standupRequiresDailyUpdate(ticket);
+    const delivery = deriveStandupDeliveryContext(ticket);
+    const reforecastAssessment = validateStandupReforecastAssessment(source, {
+      ...ticket,
+      reforecast_direction: delivery.reforecastDirection,
+    });
     const hasExplicitCurrentDeliveryRisk = standupHasExplicitCurrentDeliveryRisk(
       source,
       ticket,
@@ -1017,6 +1052,27 @@ export function normalizeStandupReviewResult(result, payload) {
     if (standupCodeFamily(ticket.today_code) === '800') {
       addStandupTag(tags, 'Delayed');
     }
+    if (!delivery.developmentComplete) {
+      if (delivery.status === 'missing_required') {
+        addStandupTag(tags, 'Expected Delivery Missing');
+      } else if (delivery.status === 'due_soon') {
+        addStandupTag(tags, 'Delivery Due Soon');
+      } else if (delivery.status === 'due_today') {
+        addStandupTag(tags, 'Delivery Due Today');
+      } else if (delivery.status === 'overdue') {
+        addStandupTag(tags, 'Expected Delivery Overdue');
+      }
+    }
+    if (!delivery.developmentComplete) {
+      if (delivery.reforecastDirection === 'later') {
+        addStandupTag(tags, 'Expected Delivery Reforecasted');
+        if (reforecastAssessment.status !== 'Supported') {
+          addStandupTag(tags, 'Reforecast Needs Rationale');
+        }
+      } else if (delivery.reforecastDirection === 'earlier') {
+        addStandupTag(tags, 'Expected Delivery Reforecasted');
+      }
+    }
 
     let category = STANDUP_REVIEW_CATEGORIES.has(source.category)
       ? source.category
@@ -1084,11 +1140,88 @@ export function normalizeStandupReviewResult(result, payload) {
           }
         }
       }
+
+      const deliveryAdverseSignal =
+        category === 'Blocked' ||
+        deterministic.isActionableNoUpdate ||
+        deterministic.isNoMovement;
+      const nearTermDelivery =
+        delivery.status === 'due_soon' ||
+        delivery.status === 'due_today';
+
+      if (!delivery.developmentComplete) {
+        if (
+          delivery.status === 'missing_required' &&
+          !['Needs PM Escalation', 'Blocked'].includes(category)
+        ) {
+          category = 'Needs Team Lead Clarification';
+        }
+
+        if (
+          delivery.reforecastDirection === 'later' &&
+          reforecastAssessment.status !== 'Supported' &&
+          !['Needs PM Escalation', 'Blocked'].includes(category)
+        ) {
+          category = 'Needs Team Lead Clarification';
+        }
+
+        if (
+          delivery.status === 'overdue' &&
+          delivery.isCodeReview &&
+          !delivery.developerRework
+        ) {
+          addStandupTag(tags, 'Review Queue Risk');
+          if (category !== 'Needs PM Escalation') {
+            category = 'Needs Team Lead Clarification';
+          }
+        } else if (delivery.status === 'overdue') {
+          if (
+            deliveryAdverseSignal ||
+            deterministic.hasExplicitCurrentDeliveryRisk ||
+            delivery.persistentOverdue
+          ) {
+            category = 'Needs PM Escalation';
+            addStandupTag(tags, 'Delivery Risk');
+            addStandupTag(tags, 'Possible Risk');
+          } else if (category === 'On Track') {
+            category = 'Needs Team Lead Clarification';
+          }
+        } else if (nearTermDelivery && deliveryAdverseSignal) {
+          category = 'Needs PM Escalation';
+          addStandupTag(tags, 'Delivery Risk');
+          addStandupTag(tags, 'Possible Risk');
+        }
+      }
     }
 
     const workflowDefault = isWorkflowExempt
       ? standupExemptWorkflowDefault(ticket)
       : null;
+    let deliveryReason = '';
+    if (
+      delivery.status === 'overdue' &&
+      delivery.isCodeReview &&
+      !delivery.developerRework
+    ) {
+      deliveryReason = `Expected Delivery ${delivery.expectedDeliveryDate} has passed while the ticket remains in Code Review; Team Lead review is needed to confirm review ownership.`;
+    } else if (delivery.status === 'overdue') {
+      deliveryReason = category === 'Needs PM Escalation'
+        ? `Expected Delivery ${delivery.expectedDeliveryDate} has passed and current evidence requires PM visibility or reforecasting.`
+        : `Expected Delivery ${delivery.expectedDeliveryDate} has passed; the developer's current forecast needs Team Lead clarification.`;
+    } else if (
+      ['due_soon', 'due_today'].includes(delivery.status) &&
+      category === 'Needs PM Escalation'
+    ) {
+      deliveryReason = `Expected Delivery ${delivery.expectedDeliveryDate} is near and the current blocker, missing update, or lack of movement puts the forecast at risk.`;
+    } else if (delivery.status === 'missing_required') {
+      deliveryReason = 'Expected Delivery is required for this development stage but is missing.';
+    } else if (
+      delivery.reforecastDirection === 'later' &&
+      reforecastAssessment.status !== 'Supported'
+    ) {
+      deliveryReason = `Expected Delivery moved from ${delivery.previousExpectedDeliveryDate || 'not set'} to ${delivery.expectedDeliveryDate || 'not set'} without a clear same-day developer rationale.`;
+    }
+
     let deterministicReason = '';
     if (deterministic.isPersistentNoUpdate && isHighImpactBug) {
       deterministicReason = `${severity === 'critical' ? 'Critical' : 'High'} severity Bug has no update for two consecutive working days.`;
@@ -1117,9 +1250,37 @@ export function normalizeStandupReviewResult(result, payload) {
     }
 
     const reason = workflowDefault?.reason ||
+      deliveryReason ||
       deterministicReason ||
       S(source.reason) ||
       'AI output was incomplete and needs review.';
+    let deliveryAction = '';
+    if (
+      delivery.status === 'overdue' &&
+      delivery.isCodeReview &&
+      !delivery.developerRework
+    ) {
+      deliveryAction = 'Team Lead should confirm the review owner and whether the development-complete forecast needs revision.';
+    } else if (
+      delivery.status === 'overdue' &&
+      category === 'Needs PM Escalation'
+    ) {
+      deliveryAction = `PM should confirm the owner, delivery impact, and a revised development-complete date for ${delivery.expectedDeliveryDate}.`;
+    } else if (delivery.status === 'overdue') {
+      deliveryAction = 'Team Lead should obtain a current development-complete estimate before standup.';
+    } else if (delivery.status === 'missing_required') {
+      deliveryAction = category === 'Needs PM Escalation'
+        ? 'PM should confirm current delivery risk and have the Team Lead obtain the required Expected Delivery date.'
+        : 'Team Lead should have the developer set the required Expected Delivery date in TFS.';
+    } else if (
+      delivery.reforecastDirection === 'later' &&
+      reforecastAssessment.status !== 'Supported'
+    ) {
+      deliveryAction = category === 'Needs PM Escalation'
+        ? 'PM should address the underlying delivery risk and have the Team Lead confirm the later forecast rationale.'
+        : 'Team Lead should ask what changed and confirm why the later date is now the best estimate.';
+    }
+
     let deterministicAction = '';
     if (deterministic.isPersistentNoUpdate && isHighImpactBug) {
       deterministicAction = 'PM should confirm the owner, current status, and delivery impact before standup.';
@@ -1137,7 +1298,7 @@ export function normalizeStandupReviewResult(result, payload) {
     const recommendedAction =
       (isWorkflowExempt
         ? 'No developer follow-up is required unless QA or the workflow owner reports a new risk.'
-        : deterministicAction || S(source.recommended_action)) ||
+        : deliveryAction || deterministicAction || S(source.recommended_action)) ||
       (category === 'Needs PM Escalation'
         ? 'PM should confirm risk, owner, and next action before standup.'
         : category === 'Needs Team Lead Clarification'
@@ -1177,6 +1338,16 @@ export function normalizeStandupReviewResult(result, payload) {
       sub_tags: tags,
       reason,
       recommended_action: recommendedAction,
+      expected_delivery_date: delivery.expectedDeliveryDate,
+      previous_expected_delivery_date:
+        delivery.previousExpectedDeliveryDate,
+      delivery_date_status: delivery.status,
+      working_days_to_expected_delivery:
+        delivery.workingDaysToExpectedDelivery,
+      reforecast_direction: delivery.reforecastDirection,
+      reforecast_explanation_status: reforecastAssessment.status,
+      reforecast_reason_type: reforecastAssessment.reasonType,
+      reforecast_evidence: reforecastAssessment.evidence,
     });
   }
 
@@ -1200,6 +1371,11 @@ export function normalizeStandupReviewResult(result, payload) {
     sub_tag_delayed: 0,
     sub_tag_ready_for_qa: 0,
     sub_tag_ready_for_release: 0,
+    delivery_overdue: 0,
+    delivery_due_today: 0,
+    delivery_due_soon: 0,
+    expected_delivery_missing: 0,
+    expected_delivery_reforecasted: 0,
   };
 
   const payloadById = new Map(
@@ -1231,7 +1407,13 @@ export function normalizeStandupReviewResult(result, payload) {
     }
     if (
       tags.some((tag) =>
-        ['Vague Update', 'Missing Progress Code', 'Missing Notes'].includes(tag),
+        [
+          'Vague Update',
+          'Missing Progress Code',
+          'Missing Notes',
+          'Expected Delivery Missing',
+          'Reforecast Needs Rationale',
+        ].includes(tag),
       )
     ) {
       exceptions.vague_or_incomplete.push(exception);
@@ -1251,6 +1433,10 @@ export function normalizeStandupReviewResult(result, payload) {
           'Waiting for Decision',
           'Waiting for Environment',
           'Cross-Team Dependency',
+          'Expected Delivery Overdue',
+          'Delivery Due Today',
+          'Delivery Due Soon',
+          'Review Queue Risk',
         ].includes(tag),
       )
     ) {
@@ -1259,10 +1445,22 @@ export function normalizeStandupReviewResult(result, payload) {
     if (tags.includes('Delayed')) validation.sub_tag_delayed += 1;
     if (tags.includes('Ready for QA')) validation.sub_tag_ready_for_qa += 1;
     if (tags.includes('Ready for Release')) validation.sub_tag_ready_for_release += 1;
+    if (c.delivery_date_status === 'overdue') validation.delivery_overdue += 1;
+    if (c.delivery_date_status === 'due_today') validation.delivery_due_today += 1;
+    if (c.delivery_date_status === 'due_soon') validation.delivery_due_soon += 1;
+    if (c.delivery_date_status === 'missing_required') {
+      validation.expected_delivery_missing += 1;
+    }
+    if (c.reforecast_direction === 'later') {
+      validation.expected_delivery_reforecasted += 1;
+    }
 
     if (
       c.category === 'Needs Team Lead Clarification' ||
-      tags.includes('Wrong or Mismatched Progress Code')
+      tags.includes('Wrong or Mismatched Progress Code') ||
+      tags.includes('Expected Delivery Missing') ||
+      tags.includes('Reforecast Needs Rationale') ||
+      tags.includes('Review Queue Risk')
     ) {
       let whyTlNeeded = 'A Team Lead should resolve the technical or scope ambiguity before standup.';
       if (
@@ -1275,6 +1473,12 @@ export function normalizeStandupReviewResult(result, payload) {
         tags.includes('Missing Notes')
       ) {
         whyTlNeeded = 'A Team Lead should clarify the incomplete progress update before delivery status is accepted.';
+      } else if (tags.includes('Expected Delivery Missing')) {
+        whyTlNeeded = 'A Team Lead should ensure the required development-complete forecast is set in TFS.';
+      } else if (tags.includes('Reforecast Needs Rationale')) {
+        whyTlNeeded = 'A Team Lead should confirm why Expected Delivery moved later before the new forecast is accepted.';
+      } else if (tags.includes('Review Queue Risk')) {
+        whyTlNeeded = 'A Team Lead should confirm the Code Review owner and whether reviewer wait time affects the forecast.';
       } else if (tags.includes('Wrong or Mismatched Progress Code')) {
         whyTlNeeded = 'A Team Lead should confirm the correct workflow state and progress code.';
       }
@@ -1316,20 +1520,50 @@ export function normalizeStandupReviewResult(result, payload) {
       )
       .map((ticket) => String(ticket.ticket_id || '')),
   );
+  const developmentCompleteIds = new Set(
+    classifications
+      .filter((c) => c.delivery_date_status === 'development_complete')
+      .map((c) => c.ticket_id),
+  );
   const follow_up_questions = (Array.isArray(result.follow_up_questions)
     ? result.follow_up_questions
     : [])
     .filter((q) => {
       const id = String(q?.ticket_id || '');
-      return knownTicketIds.has(id) && !exemptWithoutTodayIds.has(id);
+      const questionText = `${q?.reason || ''} ${q?.question || ''}`.toLowerCase();
+      const isDeliveryQuestion =
+        /expected delivery|delivery date|reforecast|forecast/.test(questionText);
+      return knownTicketIds.has(id) &&
+        !exemptWithoutTodayIds.has(id) &&
+        !(developmentCompleteIds.has(id) && isDeliveryQuestion);
     })
-    .slice(0, 5)
     .map((q) => ({
       ticket_id: String(q.ticket_id || ''),
       developer: String(q.developer || ''),
       reason: String(q.reason || ''),
       question: String(q.question || ''),
     }));
+
+  for (const classification of classifications) {
+    if (
+      follow_up_questions.length >= 5 ||
+      classification.reforecast_direction !== 'later' ||
+      classification.delivery_date_status === 'development_complete' ||
+      classification.reforecast_explanation_status === 'Supported' ||
+      follow_up_questions.some(
+        (question) => question.ticket_id === classification.ticket_id,
+      )
+    ) {
+      continue;
+    }
+    follow_up_questions.push({
+      ticket_id: classification.ticket_id,
+      developer: classification.developer,
+      reason: 'Expected Delivery moved later without a supported same-day rationale.',
+      question: `What changed since the previous Expected Delivery of ${classification.previous_expected_delivery_date || 'not set'}, and why is ${classification.expected_delivery_date || 'not set'} now the best development-complete estimate?`,
+    });
+  }
+  follow_up_questions.splice(5);
 
   return {
     standup_summary: buildStandupSummary(classifications, validation),
@@ -1366,7 +1600,7 @@ function buildStandupReviewPayload(
       id,
       developerEmail,
     );
-    return {
+    const ticket = {
       ticket_id: id,
       title: sanitizeForPrompt(t.title),
       type: String(t.type || ''),
@@ -1380,6 +1614,16 @@ function buildStandupReviewPayload(
       ),
       review_date: standupDateOnly(reviewDate),
       previous_workday_date: previousWorkdayDate,
+      expected_delivery_date: standupDateOnly(
+        t.expectedDeliveryDate || t.expected_delivery_date,
+      ) || null,
+      previous_expected_delivery_date: standupDateOnly(
+        t.previousExpectedDeliveryDate ||
+          t.previous_expected_delivery_date,
+      ) || null,
+      expected_delivery_changed: Boolean(
+        t.expectedDeliveryChanged ?? t.expected_delivery_changed,
+      ),
       today_code: today ? String(today.code || '') : null,
       today_note: today
         ? sanitizeForPrompt(String(today.note || '').slice(0, 300))
@@ -1392,6 +1636,14 @@ function buildStandupReviewPayload(
         ? String(previous.updateDate || previous.date || '').slice(0, 10)
         : null,
       has_today_update: !!today,
+    };
+    const delivery = deriveStandupDeliveryContext(ticket);
+    return {
+      ...ticket,
+      reforecast_direction: delivery.reforecastDirection,
+      delivery_date_status: delivery.status,
+      working_days_to_expected_delivery:
+        delivery.workingDaysToExpectedDelivery,
     };
   });
 }
@@ -1460,7 +1712,9 @@ Sub-tags (optional, include only applicable ones): Delayed, Ready for QA, Ready 
 Vague Update, Wrong or Mismatched Progress Code, Possible Risk, Normal Progress, Awaiting Routine Review,
 Waiting for Access, Waiting for Data, Waiting for Decision, Waiting for Environment, Cross-Team Dependency,
 Release Risk, Schedule Risk, Delivery Risk, No Daily Update, Missing Progress Code, Missing Notes,
-Critical Severity, High Severity, Persistent Missing Update.
+Critical Severity, High Severity, Persistent Missing Update, Expected Delivery Missing, Delivery Due Soon,
+Delivery Due Today, Expected Delivery Overdue, Expected Delivery Reforecasted, Reforecast Needs Rationale,
+and Review Queue Risk.
 
 Validation rules:
 1. Use only provided data. Do not invent facts.
@@ -1505,6 +1759,18 @@ Priority and severity escalation rules (normalization is authoritative):
 - For P1-P4 tickets at any severity, an update submitted with a blank progress code or blank note becomes "Needs Team Lead Clarification" unless the current update contains explicit delivery impact.
 - Wrong code, state/code mismatch, or vague status goes to TL first unless a current update has explicit delivery impact.
 - Explicit delivery impact requires a current update and one of Release Risk, Schedule Risk, Delivery Risk, Cross-Team Dependency, Delayed, or a Waiting-for dependency tag; current 800_xx is also explicit evidence. Historical notes alone cannot trigger escalation.
+
+Expected Delivery rules (normalization is authoritative):
+- expected_delivery_date is the developer's mutable forecast for development completion, not a TFS resolved, closed, or finish date.
+- delivery_date_status and working_days_to_expected_delivery are precomputed by the server. Never recalculate or override them.
+- 500_xx and recognized handoff states are development-complete evidence. QA/release ownership must not be attributed to the developer.
+- In Development, Code Review, and Re-Opened require Expected Delivery. Missing required dates need Team Lead clarification unless a stronger existing rule applies.
+- Code Review reviewer wait is Team Lead/team-owned unless today's note identifies developer rework.
+- For reforecast_direction=later, assess only today's assigned-developer note. prev_note, PM/lead notes, and TFS System.Reason cannot justify the change.
+- Set reforecast_explanation_status to Supported only when today's note clearly explains the later date; otherwise use Missing or Ambiguous. Use Not Applicable for every direction other than later.
+- reforecast_reason_type must be one of Blocker, Scope Change, Investigation Finding, Unexpected Complexity, Dependency, Environment or Access, Other Supported Reason, or None.
+- reforecast_evidence must be a short exact excerpt from today_note. Return an empty string when no valid excerpt exists.
+- Reforecasting alone is not PM escalation. Current blockers, overdue persistence, or explicit delivery impact may still escalate.
 
 Output consistency rules:
 - classifications is the source of truth. exceptions, tl_review_items, pm_escalation_items, and validation must be derived from classifications.
@@ -1661,6 +1927,7 @@ function ensureExpectedDeliveryDateSchema() {
   if (!expectedDeliveryDateSchemaPromise) {
     expectedDeliveryDateSchemaPromise = pool
       .query(EXPECTED_DELIVERY_DATE_SCHEMA_SQL)
+      .then(() => pool.query(EXPECTED_DELIVERY_DATE_HISTORY_SCHEMA_SQL))
       .catch((e) => {
         expectedDeliveryDateSchemaPromise = null;
         throw e;
@@ -2878,6 +3145,24 @@ app.post('/api/sync/tickets', requireSyncKey, requireExpectedDeliveryDateSchema,
     // Upsert all tickets we just saw; set last_seen_at and clear deleted
     for (const t of tickets) {
       const expectedDeliveryDate = expectedDeliveryDateSyncValue(t);
+      let previousExpectedDeliveryDate = null;
+      let expectedDeliveryChangeDirection = null;
+      if (expectedDeliveryDate.provided) {
+        const previousDelivery = await client.query(
+          `select expected_delivery_date::text as expected_delivery_date
+             from tickets
+            where id = $1
+            limit 1`,
+          [String(t.id)],
+        );
+        previousExpectedDeliveryDate = previousDelivery.rowCount
+          ? previousDelivery.rows[0].expected_delivery_date
+          : null;
+        expectedDeliveryChangeDirection = expectedDeliveryDateChangeDirection(
+          previousExpectedDeliveryDate,
+          expectedDeliveryDate.value,
+        );
+      }
       if (WATCH_IDS.has(String(t.id))) {
         console.log('[sync/watch]', {
           id: String(t.id),
@@ -2980,6 +3265,19 @@ app.post('/api/sync/tickets', requireSyncKey, requireExpectedDeliveryDateSchema,
           expectedDeliveryDate.provided, // $22
         ],
       );
+
+      if (expectedDeliveryChangeDirection) {
+        await client.query(
+          EXPECTED_DELIVERY_DATE_HISTORY_INSERT_SQL,
+          [
+            String(t.id),
+            previousExpectedDeliveryDate,
+            expectedDeliveryDate.value,
+            expectedDeliveryChangeDirection,
+            t.changedDate || null,
+          ],
+        );
+      }
     }
 
     // ---- Presence sweep (use agent's authoritative presentIterationPath) ----
@@ -4186,10 +4484,24 @@ app.get(
 
       const forceRefresh = S(req.query.refresh || '') === '1';
 
+      const priorStandup = await pool.query(
+        `select max(created_at) as created_at
+           from ai_snapshot_runs
+          where dev_email = '_team_standup'
+            and period_start < $1::date`,
+        [date],
+      );
+      const priorStandupAt = priorStandup.rows[0]?.created_at || null;
+
       // Resolve one canonical developer account for each eligible ticket.
       const ticketsResult = await pool.query(
         `select t.id, t.type, t.title, t.state, t.severity, t.priority,
               t.state_change_date as "stateChangeDate",
+              t.expected_delivery_date::text as "expectedDeliveryDate",
+              delivery_change.previous_expected_delivery_date
+                as "previousExpectedDeliveryDate",
+              coalesce(delivery_change.change_count, 0) > 0
+                as "expectedDeliveryChanged",
               t.assigned_to as "assignedTo",
               developer_owner.email as "assignedDeveloperEmail",
               t.iteration_path as "iterationPath"
@@ -4211,12 +4523,25 @@ app.get(
               lower(u.email)
             limit 1
          ) developer_owner on true
+         left join lateral (
+           select
+             (array_agg(
+               h.previous_expected_delivery_date::text
+               order by h.observed_at, h.id
+             ))[1] as previous_expected_delivery_date,
+             count(*)::int as change_count
+           from ticket_expected_delivery_history h
+           where h.ticket_id = t.id
+             and $1::timestamptz is not null
+             and h.observed_at > $1::timestamptz
+         ) delivery_change on true
         where coalesce(t.deleted, false) = false
           and lower(t.state) <> 'done'
           and lower(t.type) in ('bug', 'product backlog item')
           and t.assigned_to is not null
           and t.assigned_to <> ''
         order by t.id::bigint`,
+        [priorStandupAt],
       );
 
       const reviewTicketIds = ticketsResult.rows.map((ticket) =>
@@ -7946,6 +8271,24 @@ const StandupReviewSchema = {
             sub_tags: { type: 'array', items: { type: 'string' } },
             reason: { type: 'string' },
             recommended_action: { type: 'string' },
+            reforecast_explanation_status: {
+              type: 'string',
+              enum: ['Supported', 'Missing', 'Ambiguous', 'Not Applicable'],
+            },
+            reforecast_reason_type: {
+              type: 'string',
+              enum: [
+                'Blocker',
+                'Scope Change',
+                'Investigation Finding',
+                'Unexpected Complexity',
+                'Dependency',
+                'Environment or Access',
+                'Other Supported Reason',
+                'None',
+              ],
+            },
+            reforecast_evidence: { type: 'string' },
           },
           required: [
             'ticket_id',
@@ -7954,6 +8297,9 @@ const StandupReviewSchema = {
             'category',
             'reason',
             'recommended_action',
+            'reforecast_explanation_status',
+            'reforecast_reason_type',
+            'reforecast_evidence',
           ],
         },
       },

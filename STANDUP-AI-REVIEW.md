@@ -1,222 +1,181 @@
 # Standup AI Review
 
 **Status:** Implemented
-**Prompt/cache version:** `standup_review_v9`
-**Audit date:** July 11, 2026
-**Primary implementation:** [API](api/server-pg.js) and [web UI](web/index.html)
+**Prompt/cache version:** standup_review_v10
+**Last updated:** July 31, 2026
+**Primary implementation:** [API](api/server-pg.js), [delivery policy](api/standup-review-delivery.js), and [web UI](web/index.html)
 
 ## Purpose
 
-Standup AI Review gives the PM a daily, advisory review of developer-owned Bugs and Product Backlog Items. It compares the current update with the latest prior update, assigns one primary category per ticket, identifies diagnostic exceptions, and drafts Team Lead or PM follow-up items.
+Standup AI Review gives administrators a daily advisory review of developer-owned Bugs and Product Backlog Items. It compares the assigned developer's current update with the latest prior update, assigns one primary category per ticket, evaluates the developer's Expected Delivery forecast, and derives Team Lead or PM follow-up.
 
-The AI does not make management decisions. Server-side normalization is authoritative for payload ticket coverage, workflow exemptions, progress-code movement, priority, Bug severity, exception lists, and validation counts. Shared reliability helpers provide the production weekday, hashing, batching, coverage, and authorization rules.
+Expected Delivery is the developer's mutable best estimate of when work will become development-complete. It is not a TFS resolved, closed, or finish date.
 
-## Entry Points and Access
+The AI interprets update language. Server-side normalization is authoritative for coverage, workflow ownership, progress movement, priority, Bug severity, date calculations, escalation, exception lists, and validation counts.
 
-- UI controls: **Pre-Meeting Updates > Standup AI Review** and the adjacent force-refresh icon.
-- Review endpoint: `GET /api/ai/standup-review`; append `?refresh=1` to bypass a valid cache.
-- History endpoint: `GET /api/ai/standup-review/history`.
-- UI and both endpoints permit only `pm` and `admin` roles. Leads and developers are rejected by the API even if they call it directly.
-- Review generation is available Monday-Friday. Weekend requests return `409 non_working_day`; history remains readable.
-- OpenAI must be configured or the review endpoint returns `501 ai_not_configured`.
+## Access and Entry Points
+
+- UI: **Pre-Meeting Updates > Standup AI Review** and its force-refresh control.
+- Review: **GET /api/ai/standup-review**; use **?refresh=1** to bypass a valid cache.
+- History: **GET /api/ai/standup-review/history**.
+- The UI and API permit only the **admin** role.
+- Review generation is available Monday-Friday. Weekend generation returns **409 non_working_day**; history remains readable.
+- Missing OpenAI configuration returns **501 ai_not_configured**.
 
 ## End-to-End Flow
 
-1. The API resolves the local review date and rejects weekend generation.
-2. It resolves each ticket's canonical `users.role = 'dev'` owner, then selects only that developer's current and latest prior progress rows.
-3. It builds the canonical review payload and computes a SHA-256 `input_hash`.
-4. Unless force refresh was requested, it reuses a recent v8 snapshot only when its date, prompt version, and `input_hash` match.
-5. It splits the complete payload into batches of 25 and processes at most two OpenAI calls concurrently. Any failed batch fails the whole run.
-6. Batch classifications and follow-up questions are merged; `normalizeStandupReviewResult()` then runs once against the complete payload.
-7. Normalization deterministically ensures one classification per eligible ticket, applies business rules, and rebuilds all derived lists, counts, and the summary.
-8. The response records `coverage.eligible`, `coverage.reviewed`, `coverage.omitted`, and `coverage.complete`, then stores the normalized snapshot in `ai_snapshot_runs`.
-9. The UI displays coverage, groups tickets by developer, and renders summaries, exceptions, questions, TL items, and PM items.
+1. The API resolves the local review date and preceding Monday-Friday workday.
+2. It resolves one registered **users.role = dev** owner for every eligible ticket.
+3. It selects only that assigned developer's current and latest prior progress rows.
+4. It loads the current Expected Delivery date and any date-change audit event observed since the preceding successful Standup review.
+5. It builds the canonical payload and computes a SHA-256 **input_hash**.
+6. A cached review is reused only when date, prompt version, and input hash match.
+7. The complete payload is processed in batches of 25 with at most two OpenAI calls in flight.
+8. AI classifications are merged, then **normalizeStandupReviewResult()** applies authoritative policy to the full payload.
+9. Normalization guarantees one classification per ticket and rebuilds exceptions, TL items, PM items, validation, follow-up questions, and summary.
+10. Coverage is verified before the normalized result is cached in **ai_snapshot_runs**.
 
 ## Ticket Scope
 
-A ticket is eligible when it is:
+A ticket is eligible when it is not soft-deleted, is not Done, is a Bug or Product Backlog Item, and is assigned to a registered application user whose role is exactly dev.
 
-- Not soft-deleted.
-- Not in `Done` state.
-- A `Bug` or `Product Backlog Item`.
-- Assigned to a registered application user whose role is exactly `dev`.
+All eligible tickets are reviewed through bounded batches; there is no silent ticket limit.
 
-Eligible tickets are ordered by numeric ticket ID. There is no silent ticket cap; all eligible tickets are included through bounded AI batches and the final response discloses coverage.
+## Canonical Input
 
-## Input and Comparison Rules
+Each ticket includes:
 
-For each reviewed ticket, the payload includes:
+- ID, title, type, TFS state, assignee, priority, and Bug severity.
+- TFS **state_change_date**.
+- Current and latest prior progress code, note, and date from the assigned developer only.
+- Review date and preceding weekday.
+- **expected_delivery_date**.
+- **previous_expected_delivery_date**.
+- **expected_delivery_changed**.
+- **reforecast_direction**: later, earlier, set, cleared, or unchanged.
+- **delivery_date_status**: not_required, missing_required, scheduled, due_soon, due_today, overdue, or development_complete.
+- **working_days_to_expected_delivery**.
 
-- Ticket ID, title, type, state, assignee, priority, and severity.
-- TFS `state_change_date`.
-- Canonical assigned-developer email.
-- Today's latest code and note authored by that developer.
-- Latest code, note, and date before today authored by that developer.
-- Local review date and immediately preceding Monday-Friday workday.
+All canonical fields participate in **input_hash**, so a date-only source change invalidates cached results.
 
-Comparison behavior:
+## Expected Delivery Sync and Audit
 
-- Exact unchanged `200_xx`/`300_xx` code plus no meaningful note change becomes `No Movement`.
-- Movement from `400_xx` or higher back to `300_xx` or lower is a mismatch.
-- State/code mismatches are routed to Team Lead review unless current delivery evidence supports PM escalation.
+The PowerShell agent sends TFS **SupplyPro.SPApplication.ExpectedDeliveryDate** as **expectedDeliveryDate**. The API stores the current value in **tickets.expected_delivery_date**.
+
+The API also creates **ticket_expected_delivery_history** with:
+
+- ticket_id
+- previous_expected_delivery_date
+- expected_delivery_date
+- change_direction
+- tfs_changed_date
+- observed_at
+
+An audit row is inserted only when the incoming property is present and differs from the stored value. Omitted properties from older agents do not clear the date. Explicit null or blank values record a clear. A **where not exists** guard and current-value comparison make sync retries idempotent.
+
+History begins when v10 is deployed. Existing dates are retained, but changes that occurred before deployment are not reconstructed.
+
+## Comparison and Workflow Rules
+
+- Exact unchanged **200_xx** or **300_xx** plus no meaningful note change becomes **No Movement**.
+- Movement from **400_xx** or higher back to **300_xx** or lower is a mismatch.
+- Active TFS states carrying **500_xx** are development-complete for date escalation, but receive Team Lead state-sync advice.
 - Monday compares with Friday. Company holidays are not modeled.
-- Review generation is blocked on weekends, so weekend dates cannot create missing-update or persistence escalation.
+- Weekend generation is blocked.
 
-## Update-Author Ownership
+No current developer update is required in New, Approved, Shelved, Branch Check-in, Resolved, Ready for QA, QA Testing, or Done.
 
-- TFS `assigned_to` is resolved to one canonical registered developer email.
-- Current and prior maps are keyed by both ticket ID and canonical developer email.
-- Only that developer's `progress_updates` rows can establish a current update, movement, blocker, or prior comparison.
-- PM-, admin-, and lead-authored progress rows remain stored in `progress_updates` but are excluded from Standup evidence.
-- Dedicated PM annotations remain in `pm_dev_notes`; dedicated lead annotations remain in `lead_dev_notes`. Neither annotation table is sent to the Standup AI.
-- If only a PM/admin/lead progress row exists for an active ticket, the workflow treats the developer update as absent.
+**500_xx** or a recognized handoff state is development-complete evidence. These tickets cannot receive developer-owned Expected Delivery escalation. Workflow-handoff states with a current blank-note **500_xx** remain On Track.
 
-## Workflow Ownership
+Code Review is shared unfinished work. An overdue Code Review waiting for a reviewer goes to Team Lead review with **Review Queue Risk**. Standard developer overdue rules apply when today's note identifies developer rework.
 
-Daily developer updates are not required for:
+## Expected Delivery Policy
 
-- `New`
-- `Approved`
-- `Shelved`
-- `Branch Check-in` / `Branch Checkin`
-- `Resolved`
-- `Ready for QA`
-- `QA Testing`
-- `Done`
+Expected Delivery is required in In Development, Code Review, and Re-Opened.
 
-When one of these states has no current update, normalization forces `On Track`. Workflow-handoff states with a current `500_xx` update also remain `On Track` even when the note is blank. QA states receive `Ready for QA`; release/handoff states receive the appropriate visibility tag. A current update can still create a blocker or escalation when it explicitly identifies delivery impact.
+1. Missing a required date adds **Expected Delivery Missing** and routes to Team Lead review unless a stronger blocker, no-update, or priority rule applies.
+2. Healthy due-soon or due-today work stays On Track with **Delivery Due Soon** or **Delivery Due Today**.
+3. Due-soon or due-today plus blocker, no daily update, or No Movement becomes PM escalation.
+4. Due-soon or due-today plus an incomplete update or mismatch remains TL-first unless current evidence explicitly shows delivery impact.
+5. First-working-day overdue with usable non-blocked progress goes to Team Lead review to refresh the forecast.
+6. Overdue plus blocker, no update, No Movement, explicit delivery impact, or persistence from the preceding weekday becomes PM escalation.
+7. Moving a date earlier is informational.
+8. Moving a date later adds **Expected Delivery Reforecasted**. A supported same-day explanation preserves the otherwise applicable category.
+9. A blank, vague, or unverifiable later-reforecast rationale adds **Reforecast Needs Rationale** and routes to Team Lead first.
+10. Reforecasting alone never causes PM escalation.
+11. Clearing a required date is treated as a missing required date.
 
-## Primary Categories
+Date-related diagnostics feed **exceptions.delayed_at_risk**. PM risk text includes the exact date and starts with **High -** for overdue/due-today or **Medium -** for due-soon.
 
-Every ticket receives exactly one primary lane:
+## AI Reforecast Interpretation
 
-| Category | Meaning |
-| --- | --- |
-| `On Track` | Clear progress or a normal workflow handoff with no actionable risk. |
-| `Blocked` | Work cannot continue because of a current dependency or `800_xx` delay. |
-| `Missing Update` | A required current update is absent or unusable under the normal rules. |
-| `Needs Team Lead Clarification` | Technical, scope, code/status, first-stage severity miss, or incomplete-update clarification is required. |
-| `Needs PM Escalation` | Priority, repeated severity miss, blocker, release, schedule, or coordination risk needs PM action. |
+Only the assigned developer's same-day **today_note** can support a later reforecast. Prior notes, PM/lead annotations, and TFS System.Reason are not evidence.
 
-Exception lists are diagnostic and can overlap. A ticket still has only one primary category.
+The AI returns:
 
-## Priority and Bug Severity
+- **reforecast_explanation_status**: Supported, Missing, Ambiguous, or Not Applicable.
+- **reforecast_reason_type**: Blocker, Scope Change, Investigation Finding, Unexpected Complexity, Dependency, Environment or Access, Other Supported Reason, or None.
+- **reforecast_evidence**: a short excerpt from today_note.
+
+The normalizer verifies that evidence occurs in the sanitized current note. Unsupported evidence is downgraded to Ambiguous. When a later reforecast lacks supported evidence, the response adds a ticket-specific follow-up question, subject to the global five-question cap.
+
+The AI cannot calculate date status, persistence, or escalation.
+
+## Existing Priority and Severity Rules
 
 Priority applies to Bugs and PBIs:
 
-- P1/P2 plus Blocked, no update, or No Movement becomes `Needs PM Escalation`.
-- P1/P2 submitted-but-incomplete updates go to Team Lead review first unless current delivery impact is explicit. P3/P4 follows normal rules unless another deterministic or explicit delivery signal applies.
+- P1/P2 plus Blocked, no update, or No Movement becomes PM escalation.
+- P1/P2 submitted-but-incomplete updates go to Team Lead first unless current evidence has explicit delivery impact.
 
 Severity applies only to Bugs:
 
-- Severity 1/Critical adds `Critical Severity` for visibility.
-- Severity 2/High adds `High Severity`.
-- Severity alone never creates TL or PM escalation.
+- Critical and High add visibility tags but never escalate by severity alone.
 - P3/P4 Critical/High plus Blocked or No Movement becomes PM escalation.
-- First required weekday missed by a P3/P4 Critical/High Bug goes to TL review and the missing-update exception list.
-- A second consecutive weekday miss becomes PM escalation with `Persistent Missing Update` and High delivery risk.
-- Missing `state_change_date` conservatively remains first-stage TL review.
-- PBIs ignore severity even if malformed source data supplies a value.
+- First missed required weekday goes to TL; the second consecutive weekday goes to PM.
+- PBIs ignore severity.
 
-Critical and High severity tags have distinct red and amber UI badges. An On Track Critical Bug is also mentioned in the deterministic standup summary.
+These existing rules run before Expected Delivery rules; stronger existing outcomes are preserved.
+
+## Public Output and UI
+
+Every normalized classification includes the date fields from the canonical payload plus the validated reforecast assessment. Existing list shapes remain unchanged.
+
+Validation also contains:
+
+- delivery_overdue
+- delivery_due_today
+- delivery_due_soon
+- expected_delivery_missing
+- expected_delivery_reforecasted
+
+The deterministic summary adds one delivery-forecast sentence when any delivery count is nonzero.
+
+The Standup table displays **Expected Delivery** and **Forecast Status**. It renders restrained badges for overdue, due today, due soon, missing, and reforecasted cases. Within each developer, rows sort by primary category, delivery urgency, then ticket ID. Validated reforecast rationale appears inline with the reason.
 
 ## Output Integrity
 
-`classifications` is the normalized source of truth. The server rebuilds:
+**classifications** is the normalized source of truth. The server derives exceptions, TL review items, PM escalation items, validation, and standup summary. Exception lists are diagnostic and may overlap. Each ticket still has exactly one primary category.
 
-- `exceptions`
-- `tl_review_items`
-- `pm_escalation_items`
-- `validation`
-- `standup_summary`
+## Cache, History, and Failure Behavior
 
-`validation` counts primary categories. Diagnostic exception counts may be higher because one ticket can appear in multiple exception lists.
+- Reviews cache for 30 minutes by review date, v10 prompt version, and canonical input hash.
+- Force refresh bypasses a matching cached review.
+- History currently lists only snapshots matching the active prompt version.
+- A prompt-version bump hides older snapshots from current history but does not delete source data.
+- Truncated, refused, malformed, batch-failed, or coverage-incomplete AI output is not cached.
+- Database/OpenAI failure returns an error and does not create a successful snapshot.
 
-Follow-up questions are model-drafted, limited to five, filtered to known ticket IDs, and removed for workflow-exempt tickets with no current update.
+## Tests
 
-## Cache, History, and Retention
+Run **npm test** from the **api/** directory.
 
-- Reviews are cached for 30 minutes by review date, prompt version, and canonical source `input_hash`.
-- A changed eligible ticket, canonical developer owner, TFS state, priority/severity value, assigned-developer current update, or assigned-developer prior update changes the payload hash and prevents stale-cache reuse.
-- Admin users can force a fresh review with the UI refresh control or `?refresh=1`.
-- Every uncached run inserts a normalized JSON snapshot into `ai_snapshot_runs`.
-- History only lists snapshots matching the current `STANDUP_REVIEW_PROMPT_VERSION`.
-- `STANDUP_REVIEW_RETENTION` defaults to 30 and is enforced separately for the current prompt version.
-- A prompt-version bump invalidates the active cache and hides older-version snapshots from the current history endpoint; it does not delete ticket or progress data.
+Coverage includes identity ownership, reliability helpers, handoff rules, priority/severity behavior, Expected Delivery audit direction, weekday calculations, required states, due/overdue escalation, Code Review ownership, reforecast evidence validation, derived response integrity, and UI wiring.
 
-## Failure Behavior
+## Known Limitations
 
-- OpenAI unavailable: `501 ai_not_configured`.
-- Any batch output truncated: the complete request fails with `response_truncated`; no partial review is cached.
-- Invalid/refused structured output: request fails with `bad_ai_response`.
-- Coverage ID/count mismatch after normalization: request fails with `standup_coverage_mismatch`; no snapshot is cached.
-- Database/OpenAI errors: endpoint returns an error and does not cache a successful review.
-- Cleanup failure: review still succeeds; cleanup logs a warning asynchronously.
-- The UI displays the returned error message and re-enables both review controls.
-
-## P0 Reliability Safeguards
-
-The v7 implementation resolves the four conditions that previously made a successful result unsafe to trust:
-
-- **Complete coverage:** the former first-50 cap is removed. All eligible tickets are chunked, globally normalized, and reported with explicit coverage metadata.
-- **Freshness-aware cache:** cached results are reused only when the canonical source hash matches. Admin users can force refresh.
-- **Consistent authorization:** UI and API both use admin-only access; PM and lead users cannot retrieve the team-wide review.
-- **Working-day boundary:** weekend generation is rejected before ticket classification begins.
-
-A result is operationally complete when `coverage.complete === true`, `coverage.reviewed === coverage.eligible`, and `coverage.omitted === 0`.
-
-## P1 Update-Ownership Safeguard
-
-The v8 implementation closes the update-attribution gap:
-
-- SQL resolves one canonical developer account for every eligible ticket.
-- Current and historical queries match both ticket ID and developer email.
-- Payload indexing repeats the same composite-key check as defense in depth.
-- PM, admin, and lead annotations remain separate and are not reclassified as developer updates.
-- Table-driven Node tests cover manager/lead exclusion, case-insensitive email matching, latest-row selection, and per-ticket isolation.
-
-## P2 Reliability and Maintainability
-
-The P2 implementation extracts operational invariants into `api/standup-review-reliability.js`, which is imported directly by the production route:
-
-- Monday-Friday review dates and preceding-weekday calculation.
-- SHA-256 source-payload hashing for cache invalidation.
-- Complete-payload batching with a validated positive batch size.
-- Fail-closed coverage validation for missing, duplicate, blank, or unknown ticket IDs.
-- Admin-only authorization shared by the Standup middleware and tests.
-- Table-driven Node tests for calendar boundaries, hash changes, 70-ticket batching, coverage failure modes, and role access.
-
-P2 did not change classification policy, the public response shape, or the prompt/cache version at the time; later handoff and incomplete-update policy changes moved the current version to `standup_review_v9`.
-
-## Remaining Practical Gaps
-
-### Medium: History disappears across prompt versions
-
-The history endpoint filters snapshots to v8. Policy/version changes therefore make older reviews appear absent even though their database rows remain.
-
-**Recommended correction:** list history across versions, include `prompt_version` in the response, and render older snapshots read-only with a version badge.
-
-### Medium: Primary and diagnostic missing counts can look contradictory
-
-A first-stage Critical/High miss has primary category `Needs Team Lead Clarification` and also appears in `exceptions.missing_updates`. `validation.missing_update` counts only the primary Missing Update lane, so the summary can say zero primary Missing Update tickets while the diagnostic group is non-empty.
-
-**Recommended correction:** label the UI count as `Missing primary lane`, or add a separate diagnostic missing count derived from missing-update tags.
-
-### Medium: Explicit delivery risk depends on exact AI tags
-
-For non-`800_xx` cases, direct PM escalation requires a current update, model category `Needs PM Escalation`, and one of a fixed set of exact sub-tags. A semantically correct but differently worded tag can be downgraded to TL clarification.
-
-**Recommended correction:** constrain `sub_tags` with schema enums or normalize model synonyms before applying deterministic risk rules.
-
-### Practical: Normalizer regression coverage remains incomplete
-
-The repository now tests ownership, weekday logic, hashing, batching, coverage, and role scope, but still lacks table-driven tests for the complete classification normalizer and derived response integrity.
-
-**Recommended correction:** extract or export the deterministic normalizer and test workflow exemptions, priority/severity precedence, exception derivation, TL/PM items, and validation totals.
-
-## Recommended Next Order
-
-1. Add table-driven deterministic-normalizer and response-integrity tests.
-2. Clarify diagnostic versus primary counts.
-3. Preserve cross-version history with visible version metadata.
-4. Schema-enforce or normalize explicit-risk tags.
+- Monday-Friday working days do not model company holidays.
+- Reforecast audit history starts at deployment; no historical backfill is attempted.
+- Same-day notes must contain enough detail to support a later reforecast.
+- Cross-version Standup history remains hidden by the current history endpoint.
+- Non-800_xx explicit delivery risk still depends on constrained AI risk tags.
