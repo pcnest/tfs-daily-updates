@@ -161,8 +161,8 @@ The Standup table displays **Expected Delivery** and **Forecast Status**. It ren
 
 - Reviews cache for 30 minutes by review date, v10 prompt version, and canonical input hash.
 - Force refresh bypasses a matching cached review.
-- History currently lists only snapshots matching the active prompt version.
-- A prompt-version bump hides older snapshots from current history but does not delete source data.
+- History is a cross-version, read-only archive. It shows the newest team snapshot for each review date and labels the prompt version used.
+- A prompt-version bump invalidates cache reuse but does not hide or delete older history. Older results are labeled as previous-policy snapshots.
 - Truncated, refused, malformed, batch-failed, or coverage-incomplete AI output is not cached.
 - Database/OpenAI failure returns an error and does not create a successful snapshot.
 
@@ -170,12 +170,11 @@ The Standup table displays **Expected Delivery** and **Forecast Status**. It ren
 
 Run **npm test** from the **api/** directory.
 
-Coverage includes identity ownership, reliability helpers, handoff rules, priority/severity behavior, Expected Delivery audit direction, weekday calculations, required states, due/overdue escalation, Code Review ownership, reforecast evidence validation, derived response integrity, and UI wiring.
+Coverage includes identity ownership, reliability helpers, handoff rules, priority/severity behavior, Expected Delivery audit direction, weekday calculations, required states, due/overdue escalation, Code Review ownership, reforecast evidence validation, cross-version history isolation, derived response integrity, and UI wiring.
 
 ## Known Limitations
 
 - Monday-Friday working days do not model company holidays.
 - Reforecast audit history starts at deployment; no historical backfill is attempted.
 - Same-day notes must contain enough detail to support a later reforecast.
-- Cross-version Standup history remains hidden by the current history endpoint.
 - Non-800_xx explicit delivery risk still depends on constrained AI risk tags.

@@ -3523,6 +3523,34 @@
       }
 
       // --- Standup AI Review History ----------------------------------------
+      function standupHistoryVersionMeta(promptVersion, isCurrentVersion) {
+        var raw = String(promptVersion || '').trim();
+        var match = raw.match(/standup_review_v(\d+)$/i);
+        return {
+          label: match ? 'v' + match[1] : 'Legacy',
+          policy: isCurrentVersion === true ? 'Current policy' : 'Previous policy',
+          raw: raw,
+        };
+      }
+
+      function renderStandupHistoryVersionBadge(js) {
+        if (!Object.prototype.hasOwnProperty.call(js || {}, 'prompt_version')) {
+          return '';
+        }
+        var meta = standupHistoryVersionMeta(
+          js.prompt_version,
+          js.is_current_version,
+        );
+        var style = js.is_current_version === true
+          ? 'background:#dcfce7;color:#166534;border:1px solid #bbf7d0;'
+          : 'background:#f3f4f6;color:#374151;border:1px solid #d1d5db;';
+        var title = meta.raw
+          ? 'Prompt version: ' + meta.raw
+          : 'Prompt version was not recorded';
+        return ' <span title="' + esc(title) + '" style="display:inline-block;font-size:11px;font-weight:600;border-radius:4px;padding:2px 6px;' + style + '">'
+          + esc(meta.label) + ' &middot; ' + esc(meta.policy) + '</span>';
+      }
+
       function loadStandupHistoryDates() {
         var sel = byId('standupHistoryDate');
         var st = byId('standupHistoryStatus');
@@ -3531,7 +3559,14 @@
         fetch((window.API || location.origin) + '/api/ai/standup-review/history', {
           headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('pocToken') || '') }
         })
-          .then(function (r) { return r.json(); })
+          .then(function (r) {
+            if (!r.ok) {
+              return r.json().then(function (e) {
+                throw new Error(e.error || ('HTTP ' + r.status));
+              });
+            }
+            return r.json();
+          })
           .then(function (js) {
             var dates = js.dates || [];
             if (!dates.length) {
@@ -3545,8 +3580,12 @@
               var dt = new Date(String(d.date || '') + 'T12:00:00Z');
               var dayLabel = isNaN(dt.getTime()) ? '' : ' (' + days[dt.getUTCDay()] + ')';
               var opt = document.createElement('option');
+              var version = standupHistoryVersionMeta(
+                d.prompt_version,
+                d.is_current_version,
+              );
               opt.value = d.date || '';
-              opt.textContent = (d.date || '') + dayLabel;
+              opt.textContent = (d.date || '') + dayLabel + ' - ' + version.label;
               sel.appendChild(opt);
             }
             if (st) st.textContent = '';
@@ -3635,7 +3674,7 @@
         // Header
         out.push('<div style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:1.25rem;">');
         out.push('<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:1rem;">');
-        out.push('<h4 style="margin:0;">Standup AI Review &mdash; ' + esc(js.date || '') + (js.cached ? ' <span style="font-size:11px;font-weight:400;color:var(--muted)">(cached result)</span>' : '') + '</h4>');
+        out.push('<h4 style="margin:0;">Standup AI Review &mdash; ' + esc(js.date || '') + renderStandupHistoryVersionBadge(js) + (js.cached ? ' <span style="font-size:11px;font-weight:400;color:var(--muted)">(cached result)</span>' : '') + '</h4>');
         out.push('<button class="secondary small" onclick="closeStandupReview(\'' + closeTarget + '\')">Close</button>');
         out.push('</div>');
         if (js.coverage) {

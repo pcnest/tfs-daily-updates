@@ -4698,14 +4698,20 @@ app.get(
           `select distinct on (period_start)
                 period_start::text as date,
                 period_label       as label,
+                prompt_version,
                 created_at
            from ai_snapshot_runs
           where dev_email = '_team_standup'
-            and prompt_version = $1
           order by period_start desc, created_at desc`,
-          [STANDUP_REVIEW_PROMPT_VERSION],
         );
-        return res.json({ dates: r.rows });
+        return res.json({
+          dates: r.rows.map((row) => ({
+            ...row,
+            prompt_version: row.prompt_version || null,
+            is_current_version:
+              row.prompt_version === STANDUP_REVIEW_PROMPT_VERSION,
+          })),
+        });
       }
 
       // Validate date format
@@ -4717,14 +4723,13 @@ app.get(
 
       // Return the most recent review for the requested date
       const r = await pool.query(
-        `select ai_output, created_at
+        `select ai_output, created_at, prompt_version
          from ai_snapshot_runs
         where dev_email = '_team_standup'
-          and prompt_version = $1
-          and period_start = $2::date
+          and period_start = $1::date
         order by created_at desc
         limit 1`,
-        [STANDUP_REVIEW_PROMPT_VERSION, dateParam],
+        [dateParam],
       );
 
       if (!r.rowCount) {
@@ -4741,10 +4746,13 @@ app.get(
       }
 
       return res.json({
+        ...stored,
         date: dateParam,
         cached: true,
         generated_at: r.rows[0].created_at,
-        ...stored,
+        prompt_version: r.rows[0].prompt_version || null,
+        is_current_version:
+          r.rows[0].prompt_version === STANDUP_REVIEW_PROMPT_VERSION,
       });
     } catch (e) {
       console.error('[ai/standup-review/history] error:', e.message);
