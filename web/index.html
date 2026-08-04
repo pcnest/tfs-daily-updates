@@ -1548,6 +1548,15 @@
         <div class="modal-body">
           <div class="row"><label for="tId">Ticket ID</label><input id="tId" inputmode="numeric" /></div>
           <div class="row">
+            <label>Previous update</label>
+            <div id="previousUpdateContext" aria-live="polite">
+              <div id="previousUpdateMeta" class="help"></div>
+              <div id="previousUpdateNote" style="margin-top:4px;white-space:pre-wrap;overflow-wrap:anywhere;">
+                Select a ticket to view its previous update.
+              </div>
+            </div>
+          </div>
+          <div class="row">
             <label for="code">Progress Code</label>
             <select id="code" hx-get="/api/ui/progress-codes/options" hx-trigger="load" hx-swap="innerHTML"></select>
           </div>
@@ -3118,6 +3127,34 @@
           });
       }
 
+      function renderPreviousUpdateContext(ticketId) {
+        var meta = byId('previousUpdateMeta');
+        var note = byId('previousUpdateNote');
+        if (!meta || !note) return;
+
+        var ticket = (window.__lastTickets || {})[String(ticketId || '')] || null;
+        var hasPrevious = !!(ticket && (
+          ticket.previousDate ||
+          ticket.previousUpdateAt ||
+          ticket.previousCode ||
+          ticket.previousNote
+        ));
+
+        if (!hasPrevious) {
+          meta.textContent = '';
+          note.textContent = 'No earlier update for this ticket.';
+          return;
+        }
+
+        var details = [];
+        if (ticket.previousDate) details.push(String(ticket.previousDate).slice(0, 10));
+        if (ticket.previousCode) details.push(String(ticket.previousCode));
+        meta.textContent = details.join(' · ');
+        note.textContent = ticket.previousNote
+          ? String(ticket.previousNote)
+          : 'No note was recorded for this update.';
+      }
+
       function openSPModal(id) {
         if (window.__role === 'pm' || window.__role === 'admin') return;
         if (window.__lockedToday) {
@@ -3136,6 +3173,7 @@
           window.__originalFlagged = rowFlagged;
         }
 
+        renderPreviousUpdateContext(String(id || byId('tId').value || ''));
         if (window.syncNoteRequirement) syncNoteRequirement();
         prepareDevAssistUI(String(id || byId('tId').value || ''));
         m.classList.add('open'); b.classList.add('open');

@@ -3783,6 +3783,12 @@ app.get('/api/tickets', requireAuth, async (req, res) => {
           ? `lower(email) = ${emailParam}`
           : `lower(split_part(email,'@',1)) = ${aliasParam}`;
 
+    // Keep the prior-update boundary aligned with the same local business date
+    // used when progress rows are submitted. This intentionally returns the
+    // latest earlier update rather than requiring an update on calendar yesterday.
+    params.push(await todayLocal(pool));
+    const previousBeforeParam = `$${i++}`;
+
     sql = `
       select
         t.id,
@@ -3801,7 +3807,11 @@ app.get('/api/tickets', requireAuth, async (req, res) => {
         fb.name as "flaggedBy",
         u.code as "lastCode",
         u.note as "lastNote",
-        u.at   as "lastUpdateAt"
+        u.at   as "lastUpdateAt",
+        previous_u.code as "previousCode",
+        previous_u.note as "previousNote",
+        previous_u.date::text as "previousDate",
+        previous_u.at as "previousUpdateAt"
       from tickets t
       left join ticket_flags tf on tf.ticket_id = t.id
       left join users fb on fb.id = tf.flagged_by
@@ -3812,6 +3822,15 @@ app.get('/api/tickets', requireAuth, async (req, res) => {
         order by at desc
         limit 1
       ) u on true
+      left join lateral (
+        select code, note, date, at
+        from progress_updates
+        where ticket_id = t.id
+          and (${lateralPred})
+          and date < ${previousBeforeParam}::date
+        order by date desc, at desc
+        limit 1
+      ) previous_u on true
       ${where}
       order by t.changed_date desc nulls last, t.id::bigint nulls last
     `;
