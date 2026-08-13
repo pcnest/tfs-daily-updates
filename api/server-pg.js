@@ -38,6 +38,12 @@ import {
   deriveStandupDeliveryContext,
   validateStandupReforecastAssessment,
 } from './standup-review-delivery.js';
+import {
+  STANDUP_NOTIFICATION_SCHEMA_SQL,
+  renderStandupNotificationEmail,
+  routeStandupNotifications,
+  standupNotificationContentHash,
+} from './standup-review-notifications.js';
 
 // Load environment
 dotenv.config();
@@ -49,6 +55,9 @@ const BONUS_ELIGIBILITY_PROMPT_VERSION = 'bonus_v2_value_impact';
 const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v10';
 const STANDUP_REVIEW_BATCH_SIZE = 25;
 const STANDUP_REVIEW_BATCH_CONCURRENCY = 2;
+const STANDUP_REVIEW_EMAILS_ENABLED = ['1', 'true', 'yes'].includes(
+  String(process.env.STANDUP_REVIEW_EMAILS_ENABLED || '').toLowerCase(),
+);
 const STANDUP_REVIEW_RETENTION = Math.max(
   0,
   parseInt(process.env.STANDUP_REVIEW_RETENTION || '30', 10) || 30,
@@ -1330,6 +1339,9 @@ export function normalizeStandupReviewResult(result, payload) {
       ticket_id: id,
       title: S(source.title) || String(ticket.title || ''),
       developer: String(ticket.assigned_to || ''),
+      developer_email: String(ticket.assigned_developer_email || '')
+        .trim()
+        .toLowerCase(),
       current_code: currentCode,
       update_summary: isWorkflowExempt
         ? S(source.update_summary) || String(ticket.today_note || '') || previousUpdateSummary
@@ -1484,7 +1496,9 @@ export function normalizeStandupReviewResult(result, payload) {
       }
       tl_review_items.push({
         ticket_id: c.ticket_id,
+        title: c.title,
         developer: c.developer,
+        developer_email: c.developer_email,
         issue: c.reason,
         why_tl_needed: whyTlNeeded,
         suggested_action: c.recommended_action ||
@@ -1501,7 +1515,9 @@ export function normalizeStandupReviewResult(result, payload) {
       };
       pm_escalation_items.push({
         ticket_id: c.ticket_id,
+        title: c.title,
         developer: c.developer,
+        developer_email: c.developer_email,
         issue: c.reason,
         evidence: c.update_summary || c.reason,
         delivery_risk: standupDeliveryRisk(c, ticket, deterministic),
@@ -1892,6 +1908,19 @@ const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
 });
+
+let standupNotificationSchemaPromise = null;
+function ensureStandupNotificationSchema() {
+  if (!standupNotificationSchemaPromise) {
+    standupNotificationSchemaPromise = pool
+      .query(STANDUP_NOTIFICATION_SCHEMA_SQL)
+      .catch((error) => {
+        standupNotificationSchemaPromise = null;
+        throw error;
+      });
+  }
+  return standupNotificationSchemaPromise;
+}
 
 // Log which DB host we are talking to (masking secrets) to rule out DSN drift
 try {
@@ -2597,11 +2626,12 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
   // Optional test override
   if (TEST_RECIPIENT) {
     console.warn(
-      '[mail] TEST_RECIPIENT in use; overriding To:',
+      '[mail] TEST_RECIPIENT in use; overriding all recipients:',
       TEST_RECIPIENT,
     );
     toList.length = 0;
     toList.push(TEST_RECIPIENT);
+    ccList.length = 0;
   }
   if (!toList.length) throw new Error('no_valid_recipients');
 
@@ -2727,6 +2757,171 @@ async function sendEmail({ to, cc, subject, html, attachments }) {
     console.error('[sendEmail] Failed to send email:', mailError);
     throw new Error(`Email send failed: ${mailError.message || mailError}`);
   }
+}
+
+function standupNotificationMailConfig() {
+  const from = SMTP_FROM || SMTP_USER;
+  if (BREVO_API_KEY) {
+    return from
+      ? { ok: true, mode: 'brevo-api' }
+      : { ok: false, error: 'standup_notification_mail_not_configured' };
+  }
+  if (MAIL_MODE === 'smtp' && SMTP_HOST && from) {
+    return { ok: true, mode: 'smtp' };
+  }
+  if (MAIL_MODE === 'file') return { ok: true, mode: 'file' };
+  return { ok: false, error: 'standup_notification_mail_not_configured' };
+}
+
+async function enrichStandupNotificationReview(review) {
+  const classifications = Array.isArray(review?.classifications)
+    ? review.classifications
+    : [];
+  const ticketIds = Array.from(
+    new Set(
+      classifications
+        .map((classification) => String(classification?.ticket_id || '').trim())
+        .filter(Boolean),
+    ),
+  );
+  const resolvedByTicket = new Map();
+  if (ticketIds.length) {
+    const resolved = await pool.query(
+      `select t.id,
+              developer_owner.email as developer_email
+         from tickets t
+         left join lateral (
+           select u.email
+             from users u
+            where u.role = 'dev'
+              and (
+                lower(t.assigned_to) = lower(u.email)
+                or lower(trim(trailing '>' from regexp_replace(
+                  t.assigned_to,
+                  '^.*\\\\',
+                  ''
+                ))) = lower(split_part(u.email, '@', 1))
+              )
+            order by
+              case when lower(t.assigned_to) = lower(u.email) then 0 else 1 end,
+              lower(u.email)
+            limit 1
+         ) developer_owner on true
+        where t.id = any($1::text[])`,
+      [ticketIds],
+    );
+    for (const row of resolved.rows) {
+      resolvedByTicket.set(
+        String(row.id),
+        String(row.developer_email || '').trim().toLowerCase(),
+      );
+    }
+  }
+
+  const enrichedClassifications = classifications.map((classification) => ({
+    ...classification,
+    developer_email:
+      String(classification?.developer_email || '').trim().toLowerCase() ||
+      resolvedByTicket.get(String(classification?.ticket_id || '')) ||
+      '',
+  }));
+  const byTicket = new Map(
+    enrichedClassifications.map((classification) => [
+      String(classification.ticket_id || ''),
+      classification,
+    ]),
+  );
+  const enrichQueue = (items) =>
+    (Array.isArray(items) ? items : []).map((item) => {
+      const classification = byTicket.get(String(item?.ticket_id || '')) || {};
+      return {
+        ...item,
+        title: String(item?.title || classification.title || ''),
+        developer_email:
+          String(item?.developer_email || '').trim().toLowerCase() ||
+          String(classification.developer_email || '').trim().toLowerCase(),
+      };
+    });
+
+  return {
+    ...review,
+    classifications: enrichedClassifications,
+    tl_review_items: enrichQueue(review?.tl_review_items),
+    pm_escalation_items: enrichQueue(review?.pm_escalation_items),
+  };
+}
+
+async function claimStandupNotificationDelivery({
+  date,
+  audience,
+  recipientEmail,
+  route,
+  inputHash,
+  contentHash,
+}) {
+  const params = [
+    date,
+    STANDUP_REVIEW_PROMPT_VERSION,
+    inputHash,
+    audience,
+    recipientEmail,
+    route,
+    contentHash,
+  ];
+  const inserted = await pool.query(
+    `insert into standup_review_notification_deliveries
+       (review_date, prompt_version, input_hash, audience,
+        recipient_email, route, content_hash, status, attempts,
+        created_at, updated_at)
+     values ($1::date, $2, $3, $4, $5, $6, $7, 'sending', 1, now(), now())
+     on conflict do nothing
+     returning id`,
+    params,
+  );
+  if (inserted.rowCount) {
+    return { claimed: true, id: inserted.rows[0].id };
+  }
+
+  const retried = await pool.query(
+    `update standup_review_notification_deliveries
+        set status = 'sending',
+            attempts = attempts + 1,
+            input_hash = $3,
+            route = $6,
+            last_error_code = null,
+            updated_at = now()
+      where review_date = $1::date
+        and prompt_version = $2
+        and audience = $4
+        and lower(recipient_email) = lower($5)
+        and content_hash = $7
+        and status = 'failed'
+      returning id`,
+    params,
+  );
+  if (retried.rowCount) {
+    return { claimed: true, id: retried.rows[0].id, retry: true };
+  }
+  return { claimed: false, id: null };
+}
+
+async function markStandupNotificationSent(id) {
+  await pool.query(
+    `update standup_review_notification_deliveries
+        set status = 'sent', sent_at = now(), updated_at = now(),
+            last_error_code = null
+      where id = $1`,
+    [id],
+  );
+}
+
+async function markStandupNotificationFailed(id, code) {
+  await pool.query(
+    `update standup_review_notification_deliveries
+        set status = 'failed', last_error_code = $2, updated_at = now()
+      where id = $1`,
+    [id, code],
+  );
 }
 
 function buildBaseUrl(req) {
@@ -4698,6 +4893,190 @@ app.get(
         code: e?.code || null,
         openai: e?.response?.data || e?.error || null,
       });
+    }
+  },
+);
+
+// --- AI: Explicit Standup Review email notifications (Admin only) -----------
+app.post(
+  '/api/ai/standup-review/notifications',
+  requireAuth,
+  requireAdminOnly,
+  async (req, res) => {
+    try {
+      if (!STANDUP_REVIEW_EMAILS_ENABLED) {
+        return res.status(503).json({
+          error: 'standup_review_notifications_disabled',
+          message: 'Standup Review email notifications are disabled.',
+        });
+      }
+      const mailConfig = standupNotificationMailConfig();
+      if (!mailConfig.ok) {
+        return res.status(503).json({
+          error: mailConfig.error,
+          message: 'Standup Review email delivery is not configured.',
+        });
+      }
+
+      const date = String(req.body?.date || '').trim();
+      const inputHash = String(req.body?.input_hash || '').trim().toLowerCase();
+      const audience = String(req.body?.audience || '').trim().toLowerCase();
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ error: 'invalid_date' });
+      }
+      if (!/^[a-f0-9]{64}$/.test(inputHash)) {
+        return res.status(400).json({ error: 'invalid_input_hash' });
+      }
+      if (!['lead', 'pm', 'dev'].includes(audience)) {
+        return res.status(400).json({ error: 'invalid_audience' });
+      }
+
+      const today = await todayLocal(pool);
+      if (date !== today || !standupIsWeekday(date)) {
+        return res.status(409).json({
+          error: 'stale_review',
+          message: 'Only the current weekday review can send notifications.',
+        });
+      }
+
+      const latest = await pool.query(
+        `select ai_output, created_at
+           from ai_snapshot_runs
+          where dev_email = '_team_standup'
+            and period_start = $1::date
+            and period_end = $1::date
+            and prompt_version = $2
+          order by created_at desc
+          limit 1`,
+        [date, STANDUP_REVIEW_PROMPT_VERSION],
+      );
+      if (!latest.rowCount) {
+        return res.status(404).json({ error: 'standup_review_not_found' });
+      }
+      const stored = parseJsonMaybe(latest.rows[0].ai_output);
+      if (
+        !stored ||
+        !Array.isArray(stored.classifications) ||
+        stored.coverage?.complete !== true
+      ) {
+        return res.status(500).json({ error: 'stored_review_invalid' });
+      }
+      if (String(stored.input_hash || '').toLowerCase() !== inputHash) {
+        return res.status(409).json({
+          error: 'stale_review',
+          message: 'Refresh the Standup Review before sending notifications.',
+        });
+      }
+
+      await ensureStandupNotificationSchema();
+      const review = await enrichStandupNotificationReview(stored);
+      const directory = await pool.query(
+        `select lower(email) as email, name, role, team, email_verified
+           from users
+          where role in ('lead', 'pm', 'dev')
+          order by role, lower(email)`,
+      );
+      const routed = routeStandupNotifications({
+        audience,
+        review,
+        users: directory.rows,
+      });
+      const counts = {
+        sent: 0,
+        already_sent: 0,
+        failed: 0,
+        no_items: routed.no_items ? 1 : 0,
+        unmatched: routed.unmatched.length,
+        fallback: new Set(
+          routed.deliveries
+            .filter((delivery) => delivery.route === 'pm_fallback')
+            .flatMap((delivery) =>
+              delivery.items.map((item) => String(item.ticket_id || '')),
+            ),
+        ).size,
+      };
+
+      const appUrl =
+        String(process.env.APP_URL || '').replace(/\/$/, '') ||
+        buildBaseUrl(req);
+      for (const delivery of routed.deliveries) {
+        const contentHash = standupNotificationContentHash({
+          audience,
+          date,
+          delivery,
+        });
+        const claim = await claimStandupNotificationDelivery({
+          date,
+          audience,
+          recipientEmail: delivery.recipient_email,
+          route: delivery.route,
+          inputHash,
+          contentHash,
+        });
+        if (!claim.claimed) {
+          counts.already_sent += 1;
+          continue;
+        }
+
+        const email = renderStandupNotificationEmail({
+          audience,
+          date,
+          delivery,
+          appUrl,
+        });
+        let delivered = false;
+        try {
+          await sendEmail({
+            to: [delivery.recipient_email],
+            cc: [],
+            subject: email.subject,
+            html: email.html,
+            attachments: [],
+          });
+          delivered = true;
+          await markStandupNotificationSent(claim.id);
+          counts.sent += 1;
+        } catch (mailError) {
+          console.error('[standup-review/notifications] delivery failed', {
+            audience,
+            recipient: delivery.recipient_email,
+            delivered,
+            message: mailError?.message,
+          });
+          if (!delivered) {
+            try {
+              await markStandupNotificationFailed(
+                claim.id,
+                'mail_delivery_failed',
+              );
+            } catch (ledgerError) {
+              console.error(
+                '[standup-review/notifications] failed to record delivery error',
+                ledgerError,
+              );
+            }
+          }
+          counts.failed += 1;
+        }
+      }
+
+      const status = counts.failed
+        ? counts.sent || counts.already_sent
+          ? 'partial'
+          : 'failed'
+        : counts.sent
+          ? 'sent'
+          : 'skipped';
+      return res.json({
+        status,
+        date,
+        audience,
+        item_count: routed.item_count,
+        recipient_count: routed.deliveries.length,
+        counts,
+      });
+    } catch (error) {
+      return serverError(res, error, 'standup-review/notifications');
     }
   },
 );
@@ -11124,6 +11503,15 @@ app.post('/api/gen/notes', requireAuth, async (req, res) => {
 app.use('/', express.static(path.join(process.cwd(), '..', 'web')));
 
 if (process.env.NODE_ENV !== 'test') {
+// --- boot: ensure Standup Review notification delivery ledger exists ---
+ensureStandupNotificationSchema()
+  .then(() => {
+    console.log('[boot] Standup Review notification ledger is ready');
+  })
+  .catch((error) => {
+    console.error('[boot] Standup Review notification ledger failed:', error);
+  });
+
 // --- boot: add TFS Expected Delivery Date to current ticket metadata ---
 ensureExpectedDeliveryDateSchema()
   .then(() => {
