@@ -44,6 +44,12 @@ import {
   routeStandupNotifications,
   standupNotificationContentHash,
 } from './standup-review-notifications.js';
+import {
+  STANDUP_ESCALATION_POLICY_VERSION,
+  STANDUP_ESCALATION_SCHEMA_SQL,
+  applyStandupEscalationOverlay,
+  buildStandupCorrectionState,
+} from './standup-review-escalation.js';
 
 // Load environment
 dotenv.config();
@@ -52,7 +58,7 @@ dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const BONUS_ELIGIBILITY_PROMPT_VERSION = 'bonus_v2_value_impact';
-const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v10';
+const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v11';
 const STANDUP_REVIEW_BATCH_SIZE = 25;
 const STANDUP_REVIEW_BATCH_CONCURRENCY = 2;
 const STANDUP_REVIEW_EMAILS_ENABLED = ['1', 'true', 'yes'].includes(
@@ -1922,6 +1928,19 @@ function ensureStandupNotificationSchema() {
   return standupNotificationSchemaPromise;
 }
 
+let standupEscalationSchemaPromise = null;
+function ensureStandupEscalationSchema() {
+  if (!standupEscalationSchemaPromise) {
+    standupEscalationSchemaPromise = pool
+      .query(STANDUP_ESCALATION_SCHEMA_SQL)
+      .catch((error) => {
+        standupEscalationSchemaPromise = null;
+        throw error;
+      });
+  }
+  return standupEscalationSchemaPromise;
+}
+
 // Log which DB host we are talking to (masking secrets) to rule out DSN drift
 try {
   const dbUrl = new URL(process.env.DATABASE_URL || '');
@@ -2847,8 +2866,152 @@ async function enrichStandupNotificationReview(review) {
     ...review,
     classifications: enrichedClassifications,
     tl_review_items: enrichQueue(review?.tl_review_items),
+    pm_watch_items: enrichQueue(review?.pm_watch_items),
     pm_escalation_items: enrichQueue(review?.pm_escalation_items),
   };
+}
+
+async function applyPersistedStandupEscalationPolicy(
+  client,
+  { review, date, inputHash },
+) {
+  await client.query(
+    `select pg_advisory_xact_lock(hashtext($1))`,
+    [`${STANDUP_ESCALATION_POLICY_VERSION}:${date}`],
+  );
+
+  const previousRun = await client.query(
+    `select review_date::text as review_date
+       from standup_review_policy_runs
+      where policy_version = $1
+        and review_date < $2::date
+      order by review_date desc
+      limit 1`,
+    [STANDUP_ESCALATION_POLICY_VERSION, date],
+  );
+  const previousDate = previousRun.rows[0]?.review_date || null;
+  const previousObservations = previousDate
+    ? (
+        await client.query(
+          `select review_date::text as review_date, ticket_id,
+                  developer_email, correction_key, active, streak_count,
+                  tier, streak_started_on::text as streak_started_on
+             from standup_review_correction_observations
+            where policy_version = $1
+              and review_date = $2::date
+              and active = true`,
+          [STANDUP_ESCALATION_POLICY_VERSION, previousDate],
+        )
+      ).rows
+    : [];
+  const todayObservations = (
+    await client.query(
+      `select review_date::text as review_date, ticket_id,
+              developer_email, correction_key, active, streak_count,
+              tier, streak_started_on::text as streak_started_on
+         from standup_review_correction_observations
+        where policy_version = $1
+          and review_date = $2::date`,
+      [STANDUP_ESCALATION_POLICY_VERSION, date],
+    )
+  ).rows;
+  const state = buildStandupCorrectionState({
+    classifications: review.classifications,
+    reviewDate: date,
+    previousObservations,
+    todayObservations,
+  });
+
+  await client.query(
+    `update standup_review_correction_observations
+        set active = false,
+            input_hash = $3,
+            last_observed_at = now(),
+            resolved_at = coalesce(resolved_at, now())
+      where policy_version = $1
+        and review_date = $2::date`,
+    [STANDUP_ESCALATION_POLICY_VERSION, date, inputHash],
+  );
+
+  for (const observation of state.resolved) {
+    await client.query(
+      `insert into standup_review_correction_observations
+         (policy_version, review_date, ticket_id, developer_email,
+          correction_key, active, streak_count, tier, streak_started_on,
+          input_hash, first_observed_at, last_observed_at, resolved_at)
+       values ($1, $2::date, $3, $4, $5, false, $6, $7, $8::date,
+               $9, now(), now(), now())
+       on conflict (policy_version, review_date, ticket_id, correction_key)
+       do update set active = false,
+                     input_hash = excluded.input_hash,
+                     last_observed_at = now(),
+                     resolved_at = coalesce(
+                       standup_review_correction_observations.resolved_at,
+                       now()
+                     )`,
+      [
+        STANDUP_ESCALATION_POLICY_VERSION,
+        date,
+        observation.ticket_id,
+        observation.developer_email,
+        observation.correction_key,
+        observation.streak_count,
+        observation.tier,
+        observation.streak_started_on,
+        inputHash,
+      ],
+    );
+  }
+
+  for (const observation of state.active) {
+    await client.query(
+      `insert into standup_review_correction_observations
+         (policy_version, review_date, ticket_id, developer_email,
+          correction_key, active, streak_count, tier, streak_started_on,
+          input_hash, first_observed_at, last_observed_at, resolved_at)
+       values ($1, $2::date, $3, $4, $5, true, $6, $7, $8::date,
+               $9, now(), now(), null)
+       on conflict (policy_version, review_date, ticket_id, correction_key)
+       do update set developer_email = excluded.developer_email,
+                     active = true,
+                     streak_count = excluded.streak_count,
+                     tier = excluded.tier,
+                     streak_started_on = excluded.streak_started_on,
+                     input_hash = excluded.input_hash,
+                     last_observed_at = now(),
+                     resolved_at = null`,
+      [
+        STANDUP_ESCALATION_POLICY_VERSION,
+        date,
+        observation.ticket_id,
+        observation.developer_email,
+        observation.correction_key,
+        observation.streak_count,
+        observation.tier,
+        observation.streak_started_on,
+        inputHash,
+      ],
+    );
+  }
+
+  await client.query(
+    `insert into standup_review_policy_runs
+       (policy_version, review_date, prompt_version, input_hash,
+        created_at, updated_at)
+     values ($1, $2::date, $3, $4, now(), now())
+     on conflict (policy_version, review_date)
+     do update set prompt_version = excluded.prompt_version,
+                   input_hash = excluded.input_hash,
+                   updated_at = now()`,
+    [
+      STANDUP_ESCALATION_POLICY_VERSION,
+      date,
+      STANDUP_REVIEW_PROMPT_VERSION,
+      inputHash,
+    ],
+  );
+
+  return applyStandupEscalationOverlay(review, state.active);
 }
 
 async function claimStandupNotificationDelivery({
@@ -4834,7 +4997,7 @@ app.get(
           status: 500,
         });
       }
-      const result = {
+      const baseResult = {
         ...normalized,
         input_hash: inputHash,
         coverage: {
@@ -4844,19 +5007,35 @@ app.get(
           complete: hasCompleteCoverage,
         },
       };
-      // Cache result in ai_snapshot_runs
-      await pool.query(
-        `insert into ai_snapshot_runs
-         (dev_email, period_start, period_end, period_label, prompt_version, ai_output)
-       values ($1, $2::date, $2::date, $3, $4, $5::jsonb)`,
-        [
-          '_team_standup',
+      await ensureStandupEscalationSchema();
+      const client = await pool.connect();
+      let result;
+      try {
+        await client.query('begin');
+        result = await applyPersistedStandupEscalationPolicy(client, {
+          review: baseResult,
           date,
-          `standup ${date}`,
-          STANDUP_REVIEW_PROMPT_VERSION,
-          JSON.stringify(result),
-        ],
-      );
+          inputHash,
+        });
+        await client.query(
+          `insert into ai_snapshot_runs
+           (dev_email, period_start, period_end, period_label, prompt_version, ai_output)
+         values ($1, $2::date, $2::date, $3, $4, $5::jsonb)`,
+          [
+            '_team_standup',
+            date,
+            `standup ${date}`,
+            STANDUP_REVIEW_PROMPT_VERSION,
+            JSON.stringify(result),
+          ],
+        );
+        await client.query('commit');
+      } catch (transactionError) {
+        await client.query('rollback');
+        throw transactionError;
+      } finally {
+        client.release();
+      }
 
       // Prune old standup rows beyond retention limit (fire-and-forget)
       if (STANDUP_REVIEW_RETENTION > 0) {
@@ -4987,6 +5166,7 @@ app.post(
         failed: 0,
         no_items: routed.no_items ? 1 : 0,
         unmatched: routed.unmatched.length,
+        watch_items: routed.watch_item_count || 0,
         fallback: new Set(
           routed.deliveries
             .filter((delivery) => delivery.route === 'pm_fallback')
@@ -5072,6 +5252,8 @@ app.post(
         date,
         audience,
         item_count: routed.item_count,
+        action_item_count: routed.action_item_count || 0,
+        watch_item_count: routed.watch_item_count || 0,
         recipient_count: routed.deliveries.length,
         counts,
       });
@@ -11510,6 +11692,14 @@ ensureStandupNotificationSchema()
   })
   .catch((error) => {
     console.error('[boot] Standup Review notification ledger failed:', error);
+  });
+
+ensureStandupEscalationSchema()
+  .then(() => {
+    console.log('[boot] Standup Review escalation policy tables are ready');
+  })
+  .catch((error) => {
+    console.error('[boot] Standup Review escalation policy tables failed:', error);
   });
 
 // --- boot: add TFS Expected Delivery Date to current ticket metadata ---

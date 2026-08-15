@@ -3684,13 +3684,18 @@
         var date = btn ? (btn.getAttribute('data-date') || '') : '';
         var inputHash = btn ? (btn.getAttribute('data-input-hash') || '') : '';
         var itemCount = Number(btn ? btn.getAttribute('data-item-count') : 0) || 0;
+        var actionItemCount = Number(btn ? btn.getAttribute('data-action-count') : 0) || 0;
+        var watchItemCount = Number(btn ? btn.getAttribute('data-watch-count') : 0) || 0;
         var labels = { lead: 'Team Lead', pm: 'PM', dev: 'Developer' };
         var status = byId('standupNotificationStatus');
         if (!date || !inputHash || !itemCount) {
           if (status) status.textContent = 'No notification items are available.';
           return;
         }
-        if (!window.confirm('Send ' + labels[audience] + ' notifications for ' + date + ' (' + itemCount + ' item' + (itemCount === 1 ? '' : 's') + ')?')) return;
+        var confirmationCount = audience === 'pm'
+          ? actionItemCount + ' action, ' + watchItemCount + ' watch'
+          : itemCount + ' item' + (itemCount === 1 ? '' : 's');
+        if (!window.confirm('Send ' + labels[audience] + ' notifications for ' + date + ' (' + confirmationCount + ')?')) return;
 
         var originalText = btn.textContent;
         btn.disabled = true;
@@ -3719,6 +3724,7 @@
               'unmatched ' + (counts.unmatched || 0),
             ];
             if (counts.fallback) parts.push('PM fallback items ' + counts.fallback);
+            if (payload.watch_item_count || counts.watch_items) parts.push('PM watch items ' + (payload.watch_item_count || counts.watch_items));
             if (counts.no_items) parts.push('no items');
             if (status) status.textContent = labels[audience] + ': ' + parts.join(', ') + '.';
             btn.disabled = false;
@@ -3783,6 +3789,23 @@
           return '<div style="margin-top:4px;font-size:11px;color:#713f12;">Reforecast rationale: '
             + esc(c.reforecast_explanation_status || 'Ambiguous') + '</div>';
         }
+        function renderStandupEscalation(c) {
+          var escalation = c && c.escalation ? c.escalation : null;
+          if (!escalation || !escalation.tier) return '&mdash;';
+          var tier = Number(escalation.tier) || 0;
+          var colors = tier >= 3
+            ? 'background:#fff7ed;color:#c2410c;border:1px solid #fed7aa;'
+            : tier === 2
+              ? 'background:#fef9c3;color:#713f12;border:1px solid #fde047;'
+              : 'background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;';
+          var label = tier >= 3 ? 'Tier 3 · PM' : tier === 2 ? 'Tier 2 · Lead' : 'Tier 1 · Developer';
+          var route = escalation.route === 'immediate_pm' || escalation.route === 'immediate_lead'
+            ? ' · immediate'
+            : escalation.consecutive_review_days
+              ? ' · day ' + escalation.consecutive_review_days
+              : '';
+          return '<span style="display:inline-block;white-space:nowrap;border-radius:4px;padding:2px 6px;font-size:11px;font-weight:600;' + colors + '">' + esc(label + route) + '</span>';
+        }
 
         // Header
         out.push('<div style="border:1px solid var(--border,#e5e7eb);border-radius:8px;padding:1.25rem;">');
@@ -3800,22 +3823,25 @@
         }
         if (allowNotifications) {
           var leadNotificationCount = (js.tl_review_items || []).length;
-          var pmNotificationCount = (js.pm_escalation_items || []).length;
+          var pmActionCount = (js.pm_escalation_items || []).length;
+          var pmWatchCount = (js.pm_watch_items || []).length;
+          var pmNotificationCount = pmActionCount + pmWatchCount;
           var devNotificationCount = standupDeveloperNotificationCount(js);
           var notificationHash = js.input_hash || '';
           var notificationDate = js.date || '';
-          function notificationButton(audience, label, count) {
+          function notificationButton(audience, label, count, actionCount, watchCount) {
             var disabled = !notificationHash || count < 1 ? ' disabled' : '';
             return '<button type="button" class="secondary small" data-date="' + esc(notificationDate)
               + '" data-input-hash="' + esc(notificationHash) + '" data-item-count="' + count
+              + '" data-action-count="' + (actionCount || 0) + '" data-watch-count="' + (watchCount || 0)
               + '" onclick="sendStandupReviewNotifications(\'' + audience + '\', this)"' + disabled + '>'
-              + label + ' (' + count + ')</button>';
+              + label + (audience === 'pm' ? ' (' + (actionCount || 0) + ' action, ' + (watchCount || 0) + ' watch)' : ' (' + count + ')') + '</button>';
           }
           out.push('<section style="margin:-2px 0 16px;padding:10px;background:var(--surface-soft,#f8fafc);border:1px solid var(--border,#e5e7eb);border-radius:6px;">');
           out.push('<div style="font-size:12px;font-weight:600;margin-bottom:7px;">Email Notifications</div>');
           out.push('<div style="display:flex;flex-wrap:wrap;gap:7px;align-items:center;">');
           out.push(notificationButton('lead', 'Email Team Leads', leadNotificationCount));
-          out.push(notificationButton('pm', 'Email PMs', pmNotificationCount));
+          out.push(notificationButton('pm', 'Email PMs', pmNotificationCount, pmActionCount, pmWatchCount));
           out.push(notificationButton('dev', 'Email Developers', devNotificationCount));
           out.push('<span id="standupNotificationStatus" class="status" role="status" aria-live="polite"></span>');
           out.push('</div></section>');
@@ -3850,6 +3876,10 @@
             ['Due Soon', v.delivery_due_soon],
             ['Forecast Missing', v.expected_delivery_missing],
             ['Later Reforecast', v.expected_delivery_reforecasted],
+            ['Tier 1 · Dev', v.tier_1_developer],
+            ['Tier 2 · Lead', v.tier_2_lead],
+            ['Tier 3 · PM', v.tier_3_pm],
+            ['PM Watch', v.pm_watch],
           ];
           for (var ci = 0; ci < counts.length; ci++) {
             out.push('<div style="background:var(--surface,#f9fafb);border:1px solid var(--border,#e5e7eb);border-radius:6px;padding:4px 12px;text-align:center;">');
@@ -3967,7 +3997,7 @@
             // Tickets table (no Developer column — redundant inside the card)
             out.push('<div style="overflow:auto;">');
             out.push('<table style="margin:0;"><thead><tr>');
-            out.push('<th>ID</th><th>Title</th><th>Code</th><th>Expected Delivery</th><th>Forecast Status</th><th>Update Summary</th><th>Category</th><th>Sub-tags</th><th>Reason</th><th>Recommended Action</th>');
+            out.push('<th>ID</th><th>Title</th><th>Code</th><th>Expected Delivery</th><th>Forecast Status</th><th>Update Summary</th><th>Category</th><th>Escalation</th><th>Sub-tags</th><th>Reason</th><th>Recommended Action</th>');
             out.push('</tr></thead><tbody>');
             for (var ti = 0; ti < devTickets.length; ti++) {
               var c = devTickets[ti];
@@ -3980,6 +4010,7 @@
               out.push('<td>' + renderForecastStatus(c) + '</td>');
               out.push('<td>' + esc(c.update_summary || '—') + '</td>');
               out.push('<td><span ' + badgeAttr + '>' + esc(c.category || '') + '</span></td>');
+              out.push('<td>' + renderStandupEscalation(c) + '</td>');
               out.push('<td>' + (c.sub_tags && c.sub_tags.length ? c.sub_tags.map(renderStandupSubTag).join(' ') : '—') + '</td>');
               out.push('<td>' + esc(c.reason || '') + renderReforecastDetail(c) + '</td>');
               out.push('<td>' + esc(c.recommended_action || '') + '</td>');
@@ -4039,16 +4070,30 @@
           out.push('<section style="margin-bottom:1.25rem;">');
           out.push('<h5 style="margin:0 0 8px;">Team Lead Review Items</h5>');
           out.push('<div class="table-wrap" style="overflow:auto;"><table><thead><tr>');
-          out.push('<th>ID</th><th>Developer</th><th>Issue</th><th>Why TL Needed</th><th>Suggested Action</th>');
+          out.push('<th>ID</th><th>Developer</th><th>Tier</th><th>Days</th><th>Issue</th><th>Why TL Needed</th><th>Suggested Action</th>');
           out.push('</tr></thead><tbody>');
           for (var ti = 0; ti < js.tl_review_items.length; ti++) {
             var tl = js.tl_review_items[ti];
-            out.push('<tr><td><code>' + esc(tl.ticket_id || '') + '</code></td><td>' + esc(tl.developer || '') + '</td><td>' + esc(tl.issue || '') + '</td><td>' + esc(tl.why_tl_needed || '') + '</td><td>' + esc(tl.suggested_action || '') + '</td></tr>');
+            out.push('<tr><td><code>' + esc(tl.ticket_id || '') + '</code></td><td>' + esc(tl.developer || '') + '</td><td>' + esc(tl.tier || '—') + '</td><td>' + esc(tl.consecutive_review_days || '—') + '</td><td>' + esc(tl.issue || '') + '</td><td>' + esc(tl.why_tl_needed || '') + '</td><td>' + esc(tl.suggested_action || '') + '</td></tr>');
           }
           out.push('</tbody></table></div></section>');
         }
 
-        // 7. PM Escalation Items
+        // 7. PM Watch Items
+        if (js.pm_watch_items && js.pm_watch_items.length) {
+          out.push('<section style="margin-bottom:1.25rem;">');
+          out.push('<h5 style="margin:0 0 4px;">PM Watch Items <span style="font-size:11px;font-weight:400;color:var(--muted);">monitoring only; Team Lead owns the current action</span></h5>');
+          out.push('<div class="table-wrap" style="overflow:auto;"><table><thead><tr>');
+          out.push('<th>ID</th><th>Developer</th><th>Days</th><th>Correction</th><th>Why on Watch</th><th>Current Lead Action</th>');
+          out.push('</tr></thead><tbody>');
+          for (var wi = 0; wi < js.pm_watch_items.length; wi++) {
+            var watch = js.pm_watch_items[wi];
+            out.push('<tr><td><code>' + esc(watch.ticket_id || '') + '</code></td><td>' + esc(watch.developer || '') + '</td><td>' + esc(watch.consecutive_review_days || 2) + '</td><td>' + esc(watch.issue || '') + '</td><td>' + esc(watch.monitoring_reason || '') + '</td><td>' + esc(watch.lead_action || '') + '</td></tr>');
+          }
+          out.push('</tbody></table></div></section>');
+        }
+
+        // 8. PM Escalation Items
         if (js.pm_escalation_items && js.pm_escalation_items.length) {
           out.push('<section style="margin-bottom:1.25rem;">');
           out.push('<h5 style="margin:0 0 8px;">PM Escalation Items</h5>');

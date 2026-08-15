@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { STANDUP_CORRECTION_ACTIONS } from './standup-review-escalation.js';
 
 export const STANDUP_NOTIFICATION_SCHEMA_SQL = `
 create table if not exists standup_review_notification_deliveries (
@@ -22,16 +23,6 @@ create unique index if not exists standup_review_notification_delivery_key
   on standup_review_notification_deliveries
   (review_date, prompt_version, audience, lower(recipient_email), content_hash);
 `;
-
-const DEVELOPER_CORRECTION_ACTIONS = [
-  ['No Daily Update', "Submit today's progress update with the current code, completed work, blocker status, and next step."],
-  ['Missing Progress Code', 'Select the progress code that matches the work currently being performed.'],
-  ['Missing Notes', 'Add a concise note describing progress, blockers, and the next step.'],
-  ['Vague Update', 'Clarify what changed, what remains, and the next concrete step.'],
-  ['Wrong or Mismatched Progress Code', 'Align the progress code with the current TFS workflow state, or ask your lead to confirm the correct state.'],
-  ['Expected Delivery Missing', 'Set the Expected Delivery date in TFS for development completion.'],
-  ['Reforecast Needs Rationale', 'Update today\'s note with the reason for the later forecast and its delivery impact.'],
-];
 
 function text(value) {
   return String(value ?? '').trim();
@@ -105,7 +96,7 @@ export function standupDeveloperCorrectionItems(classifications) {
         : []
       ).map(text),
     );
-    const corrections = DEVELOPER_CORRECTION_ACTIONS.filter(([tag]) =>
+    const corrections = STANDUP_CORRECTION_ACTIONS.filter(([tag]) =>
       tags.has(tag),
     );
     if (!corrections.length) continue;
@@ -142,7 +133,7 @@ function eligibleUsers(users, role) {
     }));
 }
 
-function groupDelivery(groups, user, route, item) {
+function groupDelivery(groups, user, route, item, collection = 'items') {
   const key = `${route}|${user.email}`;
   if (!groups.has(key)) {
     groups.set(key, {
@@ -151,9 +142,18 @@ function groupDelivery(groups, user, route, item) {
       route,
       team: user.team || '',
       items: [],
+      watch_items: [],
     });
   }
-  groups.get(key).items.push(item);
+  groups.get(key)[collection].push(item);
+}
+
+function finalizeDeliveries(groups) {
+  return Array.from(groups.values()).map((delivery) => ({
+    ...delivery,
+    items: uniqueItems(delivery.items),
+    watch_items: uniqueItems(delivery.watch_items),
+  }));
 }
 
 export function routeStandupNotifications({ audience, review, users }) {
@@ -163,6 +163,7 @@ export function routeStandupNotifications({ audience, review, users }) {
   const unmatched = [];
   const leads = eligibleUsers(users, 'lead');
   const pms = eligibleUsers(users, 'pm');
+  const pmEscalationRecipients = pms.filter((pm) => pm.team !== 'qa');
   const developers = eligibleUsers(users, 'dev');
   const userByEmail = new Map(
     (Array.isArray(users) ? users : []).map((user) => [
@@ -201,12 +202,11 @@ export function routeStandupNotifications({ audience, review, users }) {
     return {
       audience: normalizedAudience,
       item_count: leadItems.length,
-      deliveries: Array.from(groups.values()).map((delivery) => ({
-        ...delivery,
-        items: uniqueItems(delivery.items),
-      })),
+      deliveries: finalizeDeliveries(groups),
       unmatched,
       no_items: leadItems.length === 0,
+      action_item_count: leadItems.length,
+      watch_item_count: 0,
     };
   }
 
@@ -217,26 +217,35 @@ export function routeStandupNotifications({ audience, review, users }) {
         : []
       ).map((item) => enrichItem(item, classifications)),
     );
-    if (pmItems.length && !pms.length) {
+    const pmActionIds = new Set(pmItems.map((item) => text(item.ticket_id)));
+    const pmWatchItems = uniqueItems(
+      (Array.isArray(review?.pm_watch_items) ? review.pm_watch_items : []).map(
+        (item) => enrichItem(item, classifications),
+      ),
+    ).filter((item) => !pmActionIds.has(text(item.ticket_id)));
+    const totalPmItems = uniqueItems([...pmItems, ...pmWatchItems]);
+    if (totalPmItems.length && !pmEscalationRecipients.length) {
       unmatched.push(
-        ...pmItems.map((item) => ({
+        ...totalPmItems.map((item) => ({
           ticket_id: item.ticket_id,
           reason: 'no_verified_pm_recipient',
         })),
       );
     }
-    for (const pm of pms) {
+    for (const pm of pmEscalationRecipients) {
       for (const item of pmItems) groupDelivery(groups, pm, 'pm', item);
+      for (const item of pmWatchItems) {
+        groupDelivery(groups, pm, 'pm', item, 'watch_items');
+      }
     }
     return {
       audience: normalizedAudience,
-      item_count: pmItems.length,
-      deliveries: Array.from(groups.values()).map((delivery) => ({
-        ...delivery,
-        items: uniqueItems(delivery.items),
-      })),
+      item_count: totalPmItems.length,
+      action_item_count: pmItems.length,
+      watch_item_count: pmWatchItems.length,
+      deliveries: finalizeDeliveries(groups),
       unmatched,
-      no_items: pmItems.length === 0,
+      no_items: totalPmItems.length === 0,
     };
   }
 
@@ -261,12 +270,11 @@ export function routeStandupNotifications({ audience, review, users }) {
     return {
       audience: normalizedAudience,
       item_count: correctionItems.length,
-      deliveries: Array.from(groups.values()).map((delivery) => ({
-        ...delivery,
-        items: uniqueItems(delivery.items),
-      })),
+      deliveries: finalizeDeliveries(groups),
       unmatched,
       no_items: correctionItems.length === 0,
+      action_item_count: correctionItems.length,
+      watch_item_count: 0,
     };
   }
 
@@ -274,26 +282,32 @@ export function routeStandupNotifications({ audience, review, users }) {
 }
 
 function canonicalDelivery(delivery) {
+  const canonicalItem = (item) => ({
+    ticket_id: text(item.ticket_id),
+    title: text(item.title),
+    developer: text(item.developer),
+    developer_email: normalizeStandupNotificationEmail(
+      item.developer_email,
+    ),
+    issue: text(item.issue),
+    why_tl_needed: text(item.why_tl_needed),
+    suggested_action: text(item.suggested_action),
+    evidence: text(item.evidence),
+    delivery_risk: text(item.delivery_risk),
+    recommended_pm_action: text(item.recommended_pm_action),
+    monitoring_reason: text(item.monitoring_reason),
+    lead_action: text(item.lead_action),
+    action: text(item.action),
+    tier: Number(item.tier) || 0,
+    consecutive_review_days: Number(item.consecutive_review_days) || 0,
+  });
   return {
     route: text(delivery?.route),
     recipient_email: normalizeStandupNotificationEmail(
       delivery?.recipient_email,
     ),
-    items: uniqueItems(delivery?.items).map((item) => ({
-      ticket_id: text(item.ticket_id),
-      title: text(item.title),
-      developer: text(item.developer),
-      developer_email: normalizeStandupNotificationEmail(
-        item.developer_email,
-      ),
-      issue: text(item.issue),
-      why_tl_needed: text(item.why_tl_needed),
-      suggested_action: text(item.suggested_action),
-      evidence: text(item.evidence),
-      delivery_risk: text(item.delivery_risk),
-      recommended_pm_action: text(item.recommended_pm_action),
-      action: text(item.action),
-    })),
+    items: uniqueItems(delivery?.items).map(canonicalItem),
+    watch_items: uniqueItems(delivery?.watch_items).map(canonicalItem),
   };
 }
 
@@ -311,27 +325,67 @@ export function standupNotificationContentHash({ audience, date, delivery }) {
 }
 
 function emailTable(audience, items) {
+  const headerCellStyle =
+    'background:#dbeafe;color:#1e3a5f;border:1px solid #bfdbfe;padding:10px;text-align:left;font-weight:700;vertical-align:top;';
+  const bodyCellStyle =
+    'border:1px solid #dbe3ee;padding:10px;text-align:left;vertical-align:top;';
+  const headerCell = (label) =>
+    `<th style="${headerCellStyle}">${label}</th>`;
+  const bodyCell = (value) =>
+    `<td style="${bodyCellStyle}">${value}</td>`;
   const header =
     audience === 'lead'
-      ? '<th>Ticket</th><th>Developer</th><th>Issue</th><th>Why lead review is needed</th><th>Suggested action</th>'
+      ? [
+          'Ticket',
+          'Developer',
+          'Issue',
+          'Why lead review is needed',
+          'Suggested action',
+        ]
+          .map(headerCell)
+          .join('')
       : audience === 'pm'
-        ? '<th>Ticket</th><th>Developer</th><th>Issue</th><th>Evidence</th><th>Delivery risk</th><th>Recommended PM action</th>'
-        : '<th>Ticket</th><th>Correction needed</th><th>What to do</th>';
+        ? [
+            'Ticket',
+            'Developer',
+            'Issue',
+            'Evidence',
+            'Delivery risk',
+            'Recommended PM action',
+          ]
+            .map(headerCell)
+            .join('')
+        : audience === 'pm_watch'
+          ? [
+              'Ticket',
+              'Developer',
+              'Correction being monitored',
+              'Why it is on watch',
+              'Current lead action',
+            ]
+              .map(headerCell)
+              .join('')
+        : ['Ticket', 'Correction needed', 'What to do']
+            .map(headerCell)
+            .join('');
   const rows = uniqueItems(items)
     .map((item) => {
       const ticket = `<strong>#${escapeHtml(item.ticket_id)}</strong>${
         item.title ? `<br><span>${escapeHtml(item.title)}</span>` : ''
       }`;
       if (audience === 'lead') {
-        return `<tr><td>${ticket}</td><td>${escapeHtml(item.developer)}</td><td>${escapeHtml(item.issue)}</td><td>${escapeHtml(item.why_tl_needed)}</td><td>${escapeHtml(item.suggested_action)}</td></tr>`;
+        return `<tr>${bodyCell(ticket)}${bodyCell(escapeHtml(item.developer))}${bodyCell(escapeHtml(item.issue))}${bodyCell(escapeHtml(item.why_tl_needed))}${bodyCell(escapeHtml(item.suggested_action))}</tr>`;
       }
       if (audience === 'pm') {
-        return `<tr><td>${ticket}</td><td>${escapeHtml(item.developer)}</td><td>${escapeHtml(item.issue)}</td><td>${escapeHtml(item.evidence)}</td><td>${escapeHtml(item.delivery_risk)}</td><td>${escapeHtml(item.recommended_pm_action)}</td></tr>`;
+        return `<tr>${bodyCell(ticket)}${bodyCell(escapeHtml(item.developer))}${bodyCell(escapeHtml(item.issue))}${bodyCell(escapeHtml(item.evidence))}${bodyCell(escapeHtml(item.delivery_risk))}${bodyCell(escapeHtml(item.recommended_pm_action))}</tr>`;
       }
-      return `<tr><td>${ticket}</td><td>${escapeHtml(item.issue)}</td><td>${escapeHtml(item.action)}</td></tr>`;
+      if (audience === 'pm_watch') {
+        return `<tr>${bodyCell(ticket)}${bodyCell(escapeHtml(item.developer))}${bodyCell(escapeHtml(item.issue))}${bodyCell(escapeHtml(item.monitoring_reason))}${bodyCell(escapeHtml(item.lead_action))}</tr>`;
+      }
+      return `<tr>${bodyCell(ticket)}${bodyCell(escapeHtml(item.issue))}${bodyCell(escapeHtml(item.action))}</tr>`;
     })
     .join('');
-  return `<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
+  return `<table style="width:100%;border-collapse:collapse;border:1px solid #dbe3ee;font-size:13px"><thead><tr>${header}</tr></thead><tbody>${rows}</tbody></table>`;
 }
 
 export function renderStandupNotificationEmail({
@@ -342,6 +396,7 @@ export function renderStandupNotificationEmail({
 }) {
   const normalizedAudience = text(audience).toLowerCase();
   const items = uniqueItems(delivery?.items);
+  const watchItems = uniqueItems(delivery?.watch_items);
   const recipientName = text(delivery?.recipient_name);
   const safeDate = escapeHtml(date);
   const route = text(delivery?.route);
@@ -349,7 +404,7 @@ export function renderStandupNotificationEmail({
     normalizedAudience === 'lead'
       ? `[Standup Review] Team Lead action needed - ${date} (${items.length})`
       : normalizedAudience === 'pm'
-        ? `[Standup Review] PM escalation - ${date} (${items.length})`
+        ? `[Standup Review] PM review - ${date} (${items.length} action, ${watchItems.length} watch)`
         : `[Standup Review] Please correct your update - ${date} (${items.length})`;
   const intro =
     normalizedAudience === 'lead'
@@ -357,12 +412,17 @@ export function renderStandupNotificationEmail({
         ? 'These Team Lead review items had no verified lead assigned to the developer team and were routed to PM as a fallback.'
         : 'These items need Team Lead review before standup.'
       : normalizedAudience === 'pm'
-        ? 'These items need PM review for delivery, priority, release, or coordination risk.'
+        ? items.length
+          ? 'The Action required section contains formal PM escalations. Watch-only items remain owned by Team Leads and do not require PM action unless their risk changes or they persist.'
+          : 'These items are for PM monitoring only. They remain assigned to Team Leads and are not formal PM escalations.'
         : 'Please correct the update details below before standup. This message contains only your own update-quality actions.';
   const safeUrl = text(appUrl);
   const link = safeUrl
     ? `<p><a href="${escapeHtml(safeUrl)}" style="display:inline-block;padding:8px 12px;background:#2563eb;color:#fff;text-decoration:none;border-radius:5px">Open TFS Daily Updates</a></p>`
     : '';
-  const html = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.45"><p>Hi ${escapeHtml(recipientName || 'there')},</p><h2 style="font-size:18px;margin-bottom:4px">Standup AI Review - ${safeDate}</h2><p>${escapeHtml(intro)}</p>${emailTable(normalizedAudience, items)}${link}<p style="font-size:12px;color:#6b7280">This review is AI-generated and advisory. Verify against TFS and direct observations before acting.</p></body></html>`;
+  const tables = normalizedAudience === 'pm'
+    ? `${items.length ? `<h3 style="font-size:15px;margin:18px 0 7px">Action required (${items.length})</h3>${emailTable('pm', items)}` : ''}${watchItems.length ? `<h3 style="font-size:15px;margin:18px 0 7px">Watch only (${watchItems.length})</h3><p style="font-size:12px;color:#6b7280">These items are being handled at Team Lead level and are shown for monitoring only.</p>${emailTable('pm_watch', watchItems)}` : ''}`
+    : emailTable(normalizedAudience, items);
+  const html = `<!doctype html><html><body style="font-family:Arial,sans-serif;color:#1f2937;line-height:1.45"><p>Hi ${escapeHtml(recipientName || 'there')},</p><h2 style="font-size:18px;margin-bottom:4px">Standup AI Review - ${safeDate}</h2><p>${escapeHtml(intro)}</p>${tables}${link}<p style="font-size:12px;color:#6b7280">This review is AI-generated and advisory. Verify against TFS and direct observations before acting.</p></body></html>`;
   return { subject, html };
 }
