@@ -14,14 +14,21 @@ create table if not exists standup_review_notification_deliveries (
   status          text not null default 'sending',
   attempts        integer not null default 1,
   last_error_code text,
+  claim_expires_at timestamptz,
   created_at      timestamptz not null default now(),
   updated_at      timestamptz not null default now(),
   sent_at         timestamptz
 );
 
+alter table standup_review_notification_deliveries
+  add column if not exists claim_expires_at timestamptz;
+
 create unique index if not exists standup_review_notification_delivery_key
   on standup_review_notification_deliveries
   (review_date, prompt_version, audience, lower(recipient_email), content_hash);
+
+create index if not exists standup_review_notification_claim_lookup
+  on standup_review_notification_deliveries (status, claim_expires_at);
 `;
 
 function text(value) {
