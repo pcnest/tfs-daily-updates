@@ -42,6 +42,7 @@ import {
   STANDUP_NOTIFICATION_SCHEMA_SQL,
   renderStandupNotificationEmail,
   routeStandupNotifications,
+  standupNotificationCounts,
   standupNotificationContentHash,
 } from './standup-review-notifications.js';
 import {
@@ -69,9 +70,21 @@ const STANDUP_NOTIFICATION_LEASE_MINUTES = Math.max(
 const STANDUP_REVIEW_EMAILS_ENABLED = ['1', 'true', 'yes'].includes(
   String(process.env.STANDUP_REVIEW_EMAILS_ENABLED || '').toLowerCase(),
 );
+const standupRetentionValue = Number.parseInt(
+  process.env.STANDUP_REVIEW_RETENTION || '30',
+  10,
+);
 const STANDUP_REVIEW_RETENTION = Math.max(
   0,
-  parseInt(process.env.STANDUP_REVIEW_RETENTION || '30', 10) || 30,
+  Number.isFinite(standupRetentionValue) ? standupRetentionValue : 30,
+);
+const standupHistoryLimitValue = Number.parseInt(
+  process.env.STANDUP_REVIEW_HISTORY_LIMIT || '90',
+  10,
+);
+const STANDUP_REVIEW_HISTORY_LIMIT = Math.max(
+  1,
+  Number.isFinite(standupHistoryLimitValue) ? standupHistoryLimitValue : 90,
 );
 let openai = null;
 if (OPENAI_API_KEY) {
@@ -3071,66 +3084,72 @@ async function applyPersistedStandupEscalationPolicy(
     [STANDUP_ESCALATION_POLICY_VERSION, date, inputHash],
   );
 
-  for (const observation of state.resolved) {
-    await client.query(
-      `insert into standup_review_correction_observations
-         (policy_version, review_date, ticket_id, developer_email,
-          correction_key, active, streak_count, tier, streak_started_on,
-          input_hash, first_observed_at, last_observed_at, resolved_at)
-       values ($1, $2::date, $3, $4, $5, false, $6, $7, $8::date,
-               $9, now(), now(), now())
-       on conflict (policy_version, review_date, ticket_id, correction_key)
-       do update set active = false,
-                     input_hash = excluded.input_hash,
-                     last_observed_at = now(),
-                     resolved_at = coalesce(
-                       standup_review_correction_observations.resolved_at,
-                       now()
-                     )`,
-      [
-        STANDUP_ESCALATION_POLICY_VERSION,
-        date,
-        observation.ticket_id,
-        observation.developer_email,
-        observation.correction_key,
-        observation.streak_count,
-        observation.tier,
-        observation.streak_started_on,
-        inputHash,
-      ],
-    );
-  }
+  await client.query(
+    `insert into standup_review_correction_observations
+       (policy_version, review_date, ticket_id, developer_email,
+        correction_key, active, streak_count, tier, streak_started_on,
+        input_hash, first_observed_at, last_observed_at, resolved_at)
+     select $1, $2::date, observation.ticket_id,
+            observation.developer_email, observation.correction_key,
+            false, observation.streak_count, observation.tier,
+            observation.streak_started_on, $3, now(), now(), now()
+       from jsonb_to_recordset($4::jsonb) as observation(
+         ticket_id text,
+         developer_email text,
+         correction_key text,
+         streak_count integer,
+         tier integer,
+         streak_started_on date
+       )
+     on conflict (policy_version, review_date, ticket_id, correction_key)
+     do update set active = false,
+                   input_hash = excluded.input_hash,
+                   last_observed_at = now(),
+                   resolved_at = coalesce(
+                     standup_review_correction_observations.resolved_at,
+                     now()
+                   )`,
+    [
+      STANDUP_ESCALATION_POLICY_VERSION,
+      date,
+      inputHash,
+      JSON.stringify(state.resolved),
+    ],
+  );
 
-  for (const observation of state.active) {
-    await client.query(
-      `insert into standup_review_correction_observations
-         (policy_version, review_date, ticket_id, developer_email,
-          correction_key, active, streak_count, tier, streak_started_on,
-          input_hash, first_observed_at, last_observed_at, resolved_at)
-       values ($1, $2::date, $3, $4, $5, true, $6, $7, $8::date,
-               $9, now(), now(), null)
-       on conflict (policy_version, review_date, ticket_id, correction_key)
-       do update set developer_email = excluded.developer_email,
-                     active = true,
-                     streak_count = excluded.streak_count,
-                     tier = excluded.tier,
-                     streak_started_on = excluded.streak_started_on,
-                     input_hash = excluded.input_hash,
-                     last_observed_at = now(),
-                     resolved_at = null`,
-      [
-        STANDUP_ESCALATION_POLICY_VERSION,
-        date,
-        observation.ticket_id,
-        observation.developer_email,
-        observation.correction_key,
-        observation.streak_count,
-        observation.tier,
-        observation.streak_started_on,
-        inputHash,
-      ],
-    );
-  }
+  await client.query(
+    `insert into standup_review_correction_observations
+       (policy_version, review_date, ticket_id, developer_email,
+        correction_key, active, streak_count, tier, streak_started_on,
+        input_hash, first_observed_at, last_observed_at, resolved_at)
+     select $1, $2::date, observation.ticket_id,
+            observation.developer_email, observation.correction_key,
+            true, observation.streak_count, observation.tier,
+            observation.streak_started_on, $3, now(), now(), null
+       from jsonb_to_recordset($4::jsonb) as observation(
+         ticket_id text,
+         developer_email text,
+         correction_key text,
+         streak_count integer,
+         tier integer,
+         streak_started_on date
+       )
+     on conflict (policy_version, review_date, ticket_id, correction_key)
+     do update set developer_email = excluded.developer_email,
+                   active = true,
+                   streak_count = excluded.streak_count,
+                   tier = excluded.tier,
+                   streak_started_on = excluded.streak_started_on,
+                   input_hash = excluded.input_hash,
+                   last_observed_at = now(),
+                   resolved_at = null`,
+    [
+      STANDUP_ESCALATION_POLICY_VERSION,
+      date,
+      inputHash,
+      JSON.stringify(state.active),
+    ],
+  );
 
   await client.query(
     `insert into standup_review_policy_runs
@@ -3181,19 +3200,37 @@ async function findCachedStandupReview(
   return stored && Array.isArray(stored.classifications) ? stored : null;
 }
 
+function withStandupRuntimeMetadata(review) {
+  return {
+    ...review,
+    notification_counts: standupNotificationCounts(review),
+  };
+}
+
 function pruneStandupReviewSnapshots() {
   if (STANDUP_REVIEW_RETENTION <= 0) return;
   pool
     .query(
-      `with to_delete as (
-       select id from ai_snapshot_runs
+      `with ranked as (
+       select id,
+              dense_rank() over (
+                order by period_start desc
+              ) as review_date_rank,
+              row_number() over (
+                partition by period_start
+                order by created_at desc, id desc
+              ) as snapshot_rank
+         from ai_snapshot_runs
         where dev_email = '_team_standup'
-          and prompt_version = $1
-        order by created_at desc
-        offset $2
      )
-     delete from ai_snapshot_runs where id in (select id from to_delete)`,
-      [STANDUP_REVIEW_PROMPT_VERSION, STANDUP_REVIEW_RETENTION],
+     delete from ai_snapshot_runs
+      where id in (
+        select id
+          from ranked
+         where review_date_rank > $1
+            or snapshot_rank > 1
+      )`,
+      [STANDUP_REVIEW_RETENTION],
     )
     .catch((error) =>
       console.warn('[standup-review] cleanup failed:', error.message),
@@ -5168,7 +5205,11 @@ app.get(
           inputHash,
         });
         if (cached) {
-          return res.json({ cached: true, date, ...cached });
+          return res.json({
+            cached: true,
+            date,
+            ...withStandupRuntimeMetadata(cached),
+          });
         }
       }
 
@@ -5179,7 +5220,11 @@ app.get(
         forceRefresh,
         requestStartedAt,
       });
-      return res.json({ cached: generated.cached, date, ...generated.result });
+      return res.json({
+        cached: generated.cached,
+        date,
+        ...withStandupRuntimeMetadata(generated.result),
+      });
     } catch (e) {
       const http = e?.status || e?.response?.status || 500;
       console.error('[ai/standup-review] error:', {
@@ -5428,15 +5473,20 @@ app.get(
                 created_at
            from ai_snapshot_runs
           where dev_email = '_team_standup'
-          order by period_start desc, created_at desc`,
+          order by period_start desc, created_at desc
+          limit $1`,
+          [STANDUP_REVIEW_HISTORY_LIMIT + 1],
         );
+        const hasMore = r.rows.length > STANDUP_REVIEW_HISTORY_LIMIT;
         return res.json({
-          dates: r.rows.map((row) => ({
+          dates: r.rows.slice(0, STANDUP_REVIEW_HISTORY_LIMIT).map((row) => ({
             ...row,
             prompt_version: row.prompt_version || null,
             is_current_version:
               row.prompt_version === STANDUP_REVIEW_PROMPT_VERSION,
           })),
+          has_more: hasMore,
+          limit: STANDUP_REVIEW_HISTORY_LIMIT,
         });
       }
 
@@ -11733,6 +11783,21 @@ pool
   .then(() =>
     pool.query(
       `create index if not exists ai_snapshot_runs_dev_period on ai_snapshot_runs (dev_email, period_end)`,
+    ),
+  )
+  .then(() =>
+    pool.query(
+      `create index if not exists ai_snapshot_runs_standup_cache
+         on ai_snapshot_runs
+         (period_start, prompt_version, (ai_output->>'input_hash'), created_at desc)
+       where dev_email = '_team_standup'`,
+    ),
+  )
+  .then(() =>
+    pool.query(
+      `create index if not exists ai_snapshot_runs_standup_history
+         on ai_snapshot_runs (period_start desc, created_at desc)
+       where dev_email = '_team_standup'`,
     ),
   )
   .then(() => {

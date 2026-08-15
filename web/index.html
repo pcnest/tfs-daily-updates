@@ -3626,7 +3626,11 @@
               opt.textContent = (d.date || '') + dayLabel + ' - ' + version.label;
               sel.appendChild(opt);
             }
-            if (st) st.textContent = '';
+            if (st) {
+              st.textContent = js.has_more
+                ? 'Showing the latest ' + dates.length + ' review dates.'
+                : '';
+            }
           })
           .catch(function (e) {
             sel.innerHTML = '<option value="">— Failed to load —</option>';
@@ -3659,25 +3663,6 @@
           .catch(function (e) {
             if (st) st.textContent = 'Error: ' + (e.message || 'unknown');
           });
-      }
-
-      function standupDeveloperNotificationCount(js) {
-        var correctionTags = {
-          'No Daily Update': true,
-          'Missing Progress Code': true,
-          'Missing Notes': true,
-          'Vague Update': true,
-          'Wrong or Mismatched Progress Code': true,
-          'Expected Delivery Missing': true,
-          'Reforecast Needs Rationale': true,
-        };
-        var classifications = (js && js.classifications) || [];
-        var count = 0;
-        for (var i = 0; i < classifications.length; i++) {
-          var tags = classifications[i].sub_tags || [];
-          if (tags.some(function (tag) { return correctionTags[tag] === true; })) count += 1;
-        }
-        return count;
       }
 
       function sendStandupReviewNotifications(audience, btn) {
@@ -3823,11 +3808,12 @@
             + (coverageComplete ? ' (complete)' : ' (incomplete)') + '</div>');
         }
         if (allowNotifications) {
-          var leadNotificationCount = (js.tl_review_items || []).length;
-          var pmActionCount = (js.pm_escalation_items || []).length;
-          var pmWatchCount = (js.pm_watch_items || []).length;
-          var pmNotificationCount = pmActionCount + pmWatchCount;
-          var devNotificationCount = standupDeveloperNotificationCount(js);
+          var notificationCounts = js.notification_counts || {};
+          var leadNotificationCount = Number(notificationCounts.lead) || 0;
+          var pmActionCount = Number(notificationCounts.pm_action) || 0;
+          var pmWatchCount = Number(notificationCounts.pm_watch) || 0;
+          var pmNotificationCount = Number(notificationCounts.pm) || 0;
+          var devNotificationCount = Number(notificationCounts.developer) || 0;
           var notificationHash = js.input_hash || '';
           var notificationDate = js.date || '';
           function notificationButton(audience, label, count, actionCount, watchCount) {

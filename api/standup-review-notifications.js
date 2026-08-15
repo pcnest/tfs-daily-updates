@@ -125,6 +125,25 @@ export function countStandupDeveloperCorrections(classifications) {
   return standupDeveloperCorrectionItems(classifications).length;
 }
 
+export function standupNotificationCounts(review) {
+  const lead = Array.isArray(review?.tl_review_items)
+    ? review.tl_review_items.length
+    : 0;
+  const pmAction = Array.isArray(review?.pm_escalation_items)
+    ? review.pm_escalation_items.length
+    : 0;
+  const pmWatch = Array.isArray(review?.pm_watch_items)
+    ? review.pm_watch_items.length
+    : 0;
+  return {
+    lead,
+    pm: pmAction + pmWatch,
+    developer: countStandupDeveloperCorrections(review?.classifications),
+    pm_action: pmAction,
+    pm_watch: pmWatch,
+  };
+}
+
 function eligibleUsers(users, role) {
   return (Array.isArray(users) ? users : [])
     .filter(

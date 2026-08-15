@@ -2,9 +2,9 @@
 
 **Status:** Implemented
 
-**Policy/cache version:** `standup_review_v11`
+**Policy/cache version:** `standup_review_v12`
 
-**Last implementation review:** August 12, 2026
+**Last implementation review:** August 15, 2026
 
 **Audience:** PMs, Team Leads, administrators, developers, QA, and maintainers
 
@@ -117,16 +117,16 @@ Successful generation atomically records the daily escalation-policy run, correc
 ## 6. End-to-End Workflow
 
 1. **Resolve date.** The API uses the database clock and `APP_TZ`. Saturday/Sunday returns HTTP `409 non_working_day`. Previous workday skips weekends, not company holidays.
-2. **Find the prior review boundary.** The newest earlier `_team_standup` snapshot defines the Expected Delivery change window. With no earlier snapshot, no reforecast is inferred.
+2. **Read one consistent input snapshot.** The prior boundary, eligible tickets, delivery history, and progress evidence are read in a short read-only `REPEATABLE READ` transaction. The newest earlier `_team_standup` snapshot defines the Expected Delivery change window. With no earlier snapshot, no reforecast is inferred.
 3. **Select tickets and canonical owners.** Eligibility is defined in section 7. Exact email assignment wins; `domain\alias` can match an email local part.
 4. **Load developer evidence.** For each ticket, load the assigned developer's latest row today and latest row before today. PM/admin/lead/other-developer rows cannot satisfy or replace it. The prior row need not be from yesterday.
 5. **Load forecast context.** Load current Expected Delivery and audit events observed since the prior review. The earliest prior value in that window is compared with the current value.
 6. **Build payload.** Sanitize titles/notes, limit notes to 300 characters, and calculate delivery context.
-7. **Hash and check cache.** SHA-256 covers the ordered complete payload. Reuse requires the same date, v11, hash, and a snapshot younger than 30 minutes; `refresh=1` bypasses reuse.
-8. **Call OpenAI.** Split all tickets into batches of 25, with at most two calls in flight. The configured model (default `gpt-4o-mini`) receives the progress/state taxonomies and structured-output contract.
+7. **Hash and check cache.** SHA-256 covers the ordered complete payload. Reuse requires the same date, v12, hash, and a snapshot younger than 30 minutes; `refresh=1` bypasses ordinary reuse.
+8. **Coalesce and call OpenAI.** Identical in-flight work shares one process promise and one cross-instance PostgreSQL advisory lock. Split all tickets into batches of 25, with at most two calls in flight. The configured model (default `gpt-4o-mini`) receives a minimized semantic-signal contract; the server derives summaries, queues, exceptions, and counts.
 9. **Normalize.** Merge AI results, then iterate the full payload. Canonical identity/date fields replace AI values; server rules set overrides and derive every secondary list and count.
 10. **Verify coverage.** Eligible and reviewed IDs must be non-empty, unique, equal in count, and equal as sets.
-11. **Store and render.** Cache the normalized result and render it in the UI.
+11. **Store and render.** Cache the normalized result, bulk-upsert escalation observations, attach server-derived notification counts, and render it in the UI.
 
 If the AI omits one ticket but returns a usable classifications array, normalization creates a conservative fallback, normally Team Lead clarification with an incomplete-output reason. A post-normalization coverage mismatch fails rather than storing a partial report.
 
@@ -287,7 +287,7 @@ The browser renders the normalized response in this order.
 
 ### 12.1 Header and coverage
 
-The header shows review date, cached status, and coverage. History also shows `v11 · Current policy`, an older version as Previous policy, or Legacy.
+The header shows review date, cached status, and coverage. History also shows `v12 · Current policy`, an older version as Previous policy, or Legacy.
 
 A cached report means date, policy version, and complete canonical input matched a result from the last 30 minutes. It is not necessarily stale. Historical versions must be interpreted under their own policy.
 
@@ -414,11 +414,13 @@ Every report states: “This review is AI-generated and advisory. Verify against
 
 The current review, but not history, provides three administrator-only actions. Generating, loading, caching, or force-refreshing a review never sends email.
 
+Button item counts are derived by the server from the same correction and escalation policy used for routing. The browser does not maintain a duplicate correction-tag list.
+
 - **Email Team Leads** sends each verified lead only the Team Lead review items for developers with the same nonblank `users.team`. Items with a blank team or no verified matching lead are sent to verified PM users as a fallback in the same operation.
 - **Email PMs** sends one digest with separate **Action required** and **Watch only** sections individually to every verified PM except PM users assigned to the `qa` team. Watch items do not imply PM ownership. Team Lead fallback items are not included in this action.
 - **Email Developers** sends each affected verified developer only their own correction items: missing daily update/code/notes, vague update, code-state mismatch, missing Expected Delivery, or unsupported reforecast rationale. It excludes category labels and lead/PM-only commentary.
 
-Each button submits the displayed `date` and `input_hash`. The API accepts only today's latest current-policy snapshot. Identical recipient content is recorded and sent once; changed content can be sent again, and failed delivery rows can be retried. One recipient's failure does not invalidate the review or stop other recipients.
+Each button submits the displayed `date` and `input_hash`. The API accepts only today's latest current-policy snapshot and recomputes the canonical live input hash before sending; changed ticket or progress data requires a refresh. Identical recipient content is recorded and sent once. Failed rows and expired `sending` leases can be retried. A delivery that succeeded but could not be finalized in the ledger is recorded as `unknown_delivery` when possible and is not retried automatically. One recipient's failure does not invalidate the review or stop other recipients.
 
 The delivery ledger records logical recipients even when `TEST_RECIPIENT` redirects mail. Messages use individual `To` recipients without role-wide CC lists.
 
@@ -443,6 +445,13 @@ The delivery ledger records logical recipients even when `TEST_RECIPIENT` redire
   "pm_watch_items": [],
   "pm_escalation_items": [],
   "validation": {},
+  "notification_counts": {
+    "lead": 0,
+    "pm": 0,
+    "developer": 0,
+    "pm_action": 0,
+    "pm_watch": 0
+  },
   "input_hash": "sha256...",
   "coverage": {
     "eligible": 0,
@@ -453,7 +462,7 @@ The delivery ledger records logical recipients even when `TEST_RECIPIENT` redire
 }
 ```
 
-History detail adds `generated_at`, `prompt_version`, and `is_current_version`, and returns `cached: true`. The raw AI response is not stored separately; the normalized result is stored.
+The current-review response adds runtime `notification_counts`; those counts are not persisted in snapshots. History detail adds `generated_at`, `prompt_version`, and `is_current_version`, and returns `cached: true`. The raw AI response is not stored separately; the normalized result is stored.
 
 ## 14. How to Use the Report
 
@@ -480,20 +489,21 @@ Common mistakes:
 
 ### Current cache
 
-- Valid 30 minutes for the same date, v11, and exact input hash.
+- Valid 30 minutes for the same date, v12, and exact input hash.
 - Force refresh bypasses lookup and stores a new successful snapshot.
 - A corrupt matching cache row is ignored and generation proceeds.
 
 ### History
 
 - Index returns the newest snapshot per date across all prompt versions.
+- Index returns at most `STANDUP_REVIEW_HISTORY_LIMIT` dates, default 90, and reports `has_more` when older dates were omitted.
 - Detail returns the newest snapshot for the requested date.
 - A version bump prevents old cache reuse but does not hide old history.
 - Older snapshots without delivery fields render with safe fallbacks.
 
 ### Retention
 
-Successful generation triggers cleanup that keeps the newest `STANDUP_REVIEW_RETENTION` rows for the current prompt version. Default is 30 **snapshots**, not days; force refreshes consume rows. Cleanup is fire-and-forget and does not fail the report. Previous prompt versions are not removed by this query.
+Successful generation triggers cleanup that keeps one newest snapshot for each of the newest `STANDUP_REVIEW_RETENTION` distinct review dates across prompt versions. The default is 30 dates. Force refreshes replace the retained snapshot for that date instead of consuming another retention slot. Setting retention to `0` disables cleanup. Cleanup is fire-and-forget and does not fail the report.
 
 ## 16. Failure Points
 
@@ -511,13 +521,14 @@ Successful generation triggers cleanup that keeps the newest `STANDUP_REVIEW_RET
 | Retention cleanup fails | Warning only; current report succeeds. |
 | Notifications disabled or mail unconfigured | HTTP 503 from the explicit notification endpoint; the review remains available. |
 | Displayed review is not today's latest current-policy snapshot | HTTP 409 `stale_review`; refresh before sending. |
+| Live ticket/progress data changed after generation | HTTP 409 `stale_review`; refresh before sending. |
 | Some recipient deliveries fail | Successful recipients remain sent; the endpoint reports a partial result and failed rows can be retried. |
 
 The UI writes errors beside the controls but does not explicitly clear an already rendered current card after a later refresh failure. Check the status text and displayed date.
 
 ## 17. Data Handling and Trust Boundaries
 
-The AI receives ticket ID, sanitized title, type/state, assignment display value, canonical developer email, priority, Bug severity, state date, current/prior code-note-date evidence, review dates, and Expected Delivery context.
+The AI receives ticket ID, sanitized title, type/state, priority, Bug severity, state date, current/prior code-note-date evidence, and Expected Delivery context. Canonical developer identity and repeated per-ticket review dates remain server-side.
 
 Implemented controls:
 
@@ -551,10 +562,12 @@ The agent reads TFS `SupplyPro.SPApplication.ExpectedDeliveryDate`, normalizes i
 | `OPENAI_API_KEY` | Required to generate. |
 | `OPENAI_MODEL` | Defaults to `gpt-4o-mini`. |
 | `APP_TZ` | Local review date; defaults to UTC. |
-| `STANDUP_REVIEW_RETENTION` | Current-version snapshot count; defaults to 30. |
+| `STANDUP_REVIEW_RETENTION` | Distinct review dates retained, one latest snapshot per date; defaults to 30. Set `0` to disable cleanup. |
+| `STANDUP_REVIEW_HISTORY_LIMIT` | Maximum dates returned by the history index; defaults to 90. |
 | `STANDUP_REVIEW_EMAILS_ENABLED` | Explicit notification master switch; defaults to false. |
+| `STANDUP_NOTIFICATION_LEASE_MINUTES` | Time before an abandoned `sending` notification claim can be reclaimed; defaults to 15 minutes. |
 | `TEST_RECIPIENT` | Redirects every To/CC destination during mail testing; the ledger still records the logical recipient. |
-| Prompt version | Code constant `standup_review_v11`. |
+| Prompt version | Code constant `standup_review_v12`. |
 | Escalation policy | Code constant `standup_escalation_v1`; independent from prompt-only revisions. |
 | Batch size / concurrency | Code constants 25 / 2. |
 | Cache lifetime | Code constant 30 minutes. |
