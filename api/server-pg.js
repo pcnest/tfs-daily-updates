@@ -63,7 +63,7 @@ dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const BONUS_ELIGIBILITY_PROMPT_VERSION = 'bonus_v2_value_impact';
-const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v13';
+const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v14';
 const STANDUP_REVIEW_BATCH_SIZE = 25;
 const STANDUP_REVIEW_BATCH_CONCURRENCY = 2;
 const STANDUP_NOTIFICATION_LEASE_MINUTES = Math.max(
@@ -886,13 +886,6 @@ function standupIsBackwardMovement(ticket) {
     ['100', '200', '300'].includes(today);
 }
 
-function standupIsAllowedStatusToProgressTransition(ticket) {
-  const today = standupCodeFamily(ticket.today_code);
-  const prev = standupCodeFamily(ticket.prev_code);
-  return ['600', '700', '800'].includes(prev) &&
-    ['100', '200', '300'].includes(today);
-}
-
 function standupNeedsStateAdvancement(ticket, currentCode) {
   const state = standupStateKey(ticket.state);
   const family = standupCodeFamily(currentCode);
@@ -1051,11 +1044,6 @@ export function normalizeStandupReviewResult(result, payload) {
         : isBackwardMovement
           ? 'backward_movement'
           : '';
-    const suppressAiProgressCodeMismatch =
-      standupIsAllowedStatusToProgressTransition(ticket) ||
-      (standupStateKey(ticket.state) === 're-opened' &&
-        standupCodeFamily(ticket.today_code) === '500' &&
-        !!S(ticket.today_note));
     const deterministic = {
       isNoDailyUpdate: !ticket.has_today_update && requiresDailyUpdate,
       isMissingCode:
@@ -1091,9 +1079,9 @@ export function normalizeStandupReviewResult(result, payload) {
       'Wrong or Mismatched Progress Code',
     );
 
-    if (suppressAiProgressCodeMismatch) {
-      tags = tags.filter((tag) => tag !== 'Wrong or Mismatched Progress Code');
-    }
+    // This correction is server-authoritative. Discard the model's version
+    // and re-add it below only when a deterministic progress-code rule matches.
+    tags = tags.filter((tag) => tag !== 'Wrong or Mismatched Progress Code');
 
     if (isWorkflowExempt) {
       const allowedWorkflowTags = new Set([
@@ -1168,13 +1156,12 @@ export function normalizeStandupReviewResult(result, payload) {
       'Ready for Release',
       'Awaiting Routine Review',
     ]);
-    const suppressedMismatchWasOnlyActionableEvidence =
-      suppressAiProgressCodeMismatch &&
+    const aiMismatchWasOnlyActionableEvidence =
       hadAiProgressCodeMismatch &&
       !progressCodeIssueType &&
       !tags.some((tag) => !benignTags.has(tag));
     if (
-      suppressedMismatchWasOnlyActionableEvidence &&
+      aiMismatchWasOnlyActionableEvidence &&
       category === 'Needs Team Lead Clarification'
     ) {
       category = 'On Track';
@@ -1347,11 +1334,16 @@ export function normalizeStandupReviewResult(result, payload) {
       deterministicReason = 'Progress code does not align with the prior update or current TFS state.';
     }
 
+    const sourceReason = aiMismatchWasOnlyActionableEvidence
+      ? ''
+      : S(source.reason);
     const reason = workflowDefault?.reason ||
       deliveryReason ||
       deterministicReason ||
-      S(source.reason) ||
-      'AI output was incomplete and needs review.';
+      sourceReason ||
+      (category === 'On Track'
+        ? 'No deterministic progress-code mismatch was identified.'
+        : 'AI output was incomplete and needs review.');
     let deliveryAction = '';
     if (
       delivery.status === 'overdue' &&
@@ -1397,10 +1389,13 @@ export function normalizeStandupReviewResult(result, payload) {
     ) {
       deterministicAction = 'Team Lead should confirm the missing progress code or status detail before standup.';
     }
+    const sourceRecommendedAction = aiMismatchWasOnlyActionableEvidence
+      ? ''
+      : S(source.recommended_action);
     const recommendedAction =
       (isWorkflowExempt
         ? 'No developer follow-up is required unless QA or the workflow owner reports a new risk.'
-        : deliveryAction || deterministicAction || S(source.recommended_action)) ||
+        : deliveryAction || deterministicAction || sourceRecommendedAction) ||
       (category === 'Needs PM Escalation'
         ? 'PM should confirm risk, owner, and next action before standup.'
         : category === 'Needs Team Lead Clarification'

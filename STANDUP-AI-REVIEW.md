@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 
-**Policy/cache version:** `standup_review_v13`
+**Policy/cache version:** `standup_review_v14`
 
 **Last implementation review:** August 18, 2026
 
@@ -291,7 +291,7 @@ The browser renders the normalized response in this order.
 
 ### 12.1 Header and coverage
 
-The header shows review date, cached status, and coverage. History also shows `v13 · Current policy`, an older version as Previous policy, or Legacy.
+The header shows review date, cached status, and coverage. History also shows `v14 · Current policy`, an older version as Previous policy, or Legacy.
 
 A cached report means date, policy version, and complete canonical input matched a result from the last 30 minutes. It is not necessarily stale. Historical versions must be interpreted under their own policy.
 
@@ -369,7 +369,7 @@ Sub-tags overlap and do not replace the category.
 | Impact | Critical Severity, High Severity, Persistent Missing Update |
 | Forecast | Expected Delivery Missing/Overdue/Reforecasted, Delivery Due Soon/Today, Reforecast Needs Rationale |
 
-The server adds deterministic tags and retains prompted AI semantic tags. For workflow-exempt tickets, AI tags are first limited to Ready for QA, Ready for Release, Awaiting Routine Review, and Normal Progress. Authoritative severity/delivery tags can then be added. `Normal Progress` is removed when the final outcome conflicts with it.
+The server adds deterministic tags and retains prompted AI semantic tags, except `Wrong or Mismatched Progress Code`: that tag is always removed from AI output and re-added only when the server's deterministic progress-code assessment matches. For workflow-exempt tickets, AI tags are first limited to Ready for QA, Ready for Release, Awaiting Routine Review, and Normal Progress. Authoritative severity/delivery tags can then be added. `Normal Progress` is removed when the final outcome conflicts with it.
 
 ### 12.6 Exceptions
 
@@ -573,7 +573,7 @@ The agent reads TFS `SupplyPro.SPApplication.ExpectedDeliveryDate`, normalizes i
 | `STANDUP_REVIEW_EMAILS_ENABLED` | Explicit notification master switch; defaults to false. |
 | `STANDUP_NOTIFICATION_LEASE_MINUTES` | Time before an abandoned `sending` notification claim can be reclaimed; defaults to 15 minutes. |
 | `TEST_RECIPIENT` | Redirects every To/CC destination during mail testing; the ledger still records the logical recipient. |
-| Prompt version | Code constant `standup_review_v13`. |
+| Prompt version | Code constant `standup_review_v14`. |
 | Escalation policy | Code constant `standup_escalation_v1`; independent from prompt-only revisions. |
 | Batch size / concurrency | Code constants 25 / 2. |
 | Cache lifetime | Code constant 30 minutes. |
