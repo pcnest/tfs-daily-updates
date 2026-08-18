@@ -2,9 +2,9 @@
 
 **Status:** Implemented
 
-**Policy/cache version:** `standup_review_v12`
+**Policy/cache version:** `standup_review_v13`
 
-**Last implementation review:** August 15, 2026
+**Last implementation review:** August 18, 2026
 
 **Audience:** PMs, Team Leads, administrators, developers, QA, and maintainers
 
@@ -171,6 +171,8 @@ All fields participate in the input hash. Sanitization performs limited pattern-
 | `700_xx` | Investigation | Root-cause or solution exploration. |
 | `800_xx` | Delay | Explicit current risk; adds `Delayed`. |
 
+The `600_xx`, `700_xx`, and `800_xx` families describe exception or status conditions, not later positions in a linear workflow. Moving from one of those families to `100_xx`, `200_xx`, or `300_xx` is not backward movement by itself.
+
 No current developer update is required in New, Approved, Shelved, Branch Check-in/Branch Checkin, Resolved, Ready for QA, QA Testing, or Done. Done is also excluded from live selection.
 
 Exempt tickets without today's update become On Track. Resolved/Ready for QA/QA Testing add `Ready for QA`; Branch Check-in/Done add `Ready for Release`; Shelved adds `Awaiting Routine Review`. A current blank-note `500_xx` in a handoff state also remains On Track unless the current update explicitly shows delivery impact.
@@ -183,7 +185,9 @@ Diagnostics in states that require updates:
 | Row exists, blank code | `Missing Progress Code`; begins as Tier 1 developer correction unless an immediate-risk rule applies. |
 | Row exists, blank note | `Missing Notes`; begins as Tier 1 developer correction unless an immediate-risk rule applies. |
 | Same exact `200_xx` or `300_xx` and no meaningful note change | `No Movement`. |
-| Prior family 400+ moves to 300 or lower | `Wrong or Mismatched Progress Code`. |
+| Prior `400_xx` or `500_xx` moves to `100_xx`, `200_xx`, or `300_xx` | `Wrong or Mismatched Progress Code`. |
+| Re-Opened with `500_xx` and a blank/whitespace-only current assigned-developer note | `Wrong or Mismatched Progress Code`; any nonblank same-day note satisfies the supporting-note exception. |
+| In Development or Code Review with `500_xx` | Stable correction key `Wrong or Mismatched Progress Code`, displayed as `TFS State May Need Advancement`. |
 | Code conflicts with TFS state | `Wrong or Mismatched Progress Code`. |
 
 Persistent no-update requires that the current state existed on/before the preceding weekday and that the assigned developer also lacked an update that weekday. Monday uses Friday.
@@ -287,7 +291,7 @@ The browser renders the normalized response in this order.
 
 ### 12.1 Header and coverage
 
-The header shows review date, cached status, and coverage. History also shows `v12 · Current policy`, an older version as Previous policy, or Legacy.
+The header shows review date, cached status, and coverage. History also shows `v13 · Current policy`, an older version as Previous policy, or Legacy.
 
 A cached report means date, policy version, and complete canonical input matched a result from the last 30 minutes. It is not necessarily stale. Historical versions must be interpreted under their own policy.
 
@@ -462,6 +466,8 @@ The delivery ledger records logical recipients even when `TEST_RECIPIENT` redire
 }
 ```
 
+Each classification may include additive `progress_code_issue_type` metadata. The value `tfs_state_may_need_advancement` selects the state-advancement display wording while preserving the `Wrong or Mismatched Progress Code` sub-tag and persistence identity. Escalation correction entries may include an additive `label`; older snapshots without either field fall back to the correction key.
+
 The current-review response adds runtime `notification_counts`; those counts are not persisted in snapshots. History detail adds `generated_at`, `prompt_version`, and `is_current_version`, and returns `cached: true`. The raw AI response is not stored separately; the normalized result is stored.
 
 ## 14. How to Use the Report
@@ -567,7 +573,7 @@ The agent reads TFS `SupplyPro.SPApplication.ExpectedDeliveryDate`, normalizes i
 | `STANDUP_REVIEW_EMAILS_ENABLED` | Explicit notification master switch; defaults to false. |
 | `STANDUP_NOTIFICATION_LEASE_MINUTES` | Time before an abandoned `sending` notification claim can be reclaimed; defaults to 15 minutes. |
 | `TEST_RECIPIENT` | Redirects every To/CC destination during mail testing; the ledger still records the logical recipient. |
-| Prompt version | Code constant `standup_review_v12`. |
+| Prompt version | Code constant `standup_review_v13`. |
 | Escalation policy | Code constant `standup_escalation_v1`; independent from prompt-only revisions. |
 | Batch size / concurrency | Code constants 25 / 2. |
 | Cache lifetime | Code constant 30 minutes. |

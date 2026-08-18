@@ -1,5 +1,8 @@
 import crypto from 'node:crypto';
-import { STANDUP_CORRECTION_ACTIONS } from './standup-review-escalation.js';
+import {
+  STANDUP_CORRECTION_ACTIONS,
+  standupCorrectionDisplay,
+} from './standup-review-escalation.js';
 
 export const STANDUP_NOTIFICATION_SCHEMA_SQL = `
 create table if not exists standup_review_notification_deliveries (
@@ -103,9 +106,9 @@ export function standupDeveloperCorrectionItems(classifications) {
         : []
       ).map(text),
     );
-    const corrections = STANDUP_CORRECTION_ACTIONS.filter(([tag]) =>
-      tags.has(tag),
-    );
+    const corrections = STANDUP_CORRECTION_ACTIONS
+      .filter(([tag]) => tags.has(tag))
+      .map(([tag]) => standupCorrectionDisplay(tag, classification));
     if (!corrections.length) continue;
     items.push({
       ticket_id: text(classification.ticket_id),
@@ -114,8 +117,8 @@ export function standupDeveloperCorrectionItems(classifications) {
       developer_email: normalizeStandupNotificationEmail(
         classification.developer_email,
       ),
-      issue: corrections.map(([tag]) => tag).join('; '),
-      action: corrections.map(([, action]) => action).join(' '),
+      issue: corrections.map((correction) => correction.label).join('; '),
+      action: corrections.map((correction) => correction.action).join(' '),
     });
   }
   return uniqueItems(items);

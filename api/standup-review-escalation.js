@@ -1,5 +1,12 @@
 export const STANDUP_ESCALATION_POLICY_VERSION = 'standup_escalation_v1';
 
+export const STANDUP_STATE_ADVANCEMENT_ISSUE_TYPE =
+  'tfs_state_may_need_advancement';
+export const STANDUP_STATE_ADVANCEMENT_LABEL =
+  'TFS State May Need Advancement';
+export const STANDUP_STATE_ADVANCEMENT_ACTION =
+  'Confirm the completion or handoff and advance the TFS state; if work is still active, correct the progress code.';
+
 export const STANDUP_CORRECTION_ACTIONS = Object.freeze([
   ['No Daily Update', "Submit today's progress update with the current code, completed work, blocker status, and next step."],
   ['Missing Progress Code', 'Select the progress code that matches the work currently being performed.'],
@@ -65,6 +72,25 @@ function email(value) {
 
 function unique(values) {
   return Array.from(new Set(values));
+}
+
+export function standupCorrectionDisplay(correctionKey, classification = {}) {
+  const key = text(correctionKey);
+  const defaultAction = STANDUP_CORRECTION_ACTIONS.find(
+    ([candidate]) => candidate === key,
+  )?.[1] || '';
+  if (
+    key === 'Wrong or Mismatched Progress Code' &&
+    text(classification?.progress_code_issue_type) ===
+      STANDUP_STATE_ADVANCEMENT_ISSUE_TYPE
+  ) {
+    return {
+      key,
+      label: STANDUP_STATE_ADVANCEMENT_LABEL,
+      action: STANDUP_STATE_ADVANCEMENT_ACTION,
+    };
+  }
+  return { key, label: key, action: defaultAction };
 }
 
 function tierForStreak(streak) {
@@ -165,7 +191,7 @@ function byTicket(items) {
 
 function correctionDescription(corrections) {
   return corrections
-    .map((correction) => `${correction.key} (day ${correction.consecutive_review_days})`)
+    .map((correction) => `${correction.label || correction.key} (day ${correction.consecutive_review_days})`)
     .join('; ');
 }
 
@@ -215,6 +241,10 @@ export function applyStandupEscalationOverlay(review, observations = []) {
     : []).map((classification) => {
     const ticketId = text(classification.ticket_id);
     const corrections = (observationMap.get(ticketId) || [])
+      .map((correction) => ({
+        ...correction,
+        label: standupCorrectionDisplay(correction.key, classification).label,
+      }))
       .sort((a, b) => a.key.localeCompare(b.key));
     const correctionKeys = corrections.map((item) => item.key);
     const correctionTier = highestCorrectionTier(corrections);

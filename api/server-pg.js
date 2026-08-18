@@ -48,6 +48,9 @@ import {
 import {
   STANDUP_ESCALATION_POLICY_VERSION,
   STANDUP_ESCALATION_SCHEMA_SQL,
+  STANDUP_STATE_ADVANCEMENT_ACTION,
+  STANDUP_STATE_ADVANCEMENT_ISSUE_TYPE,
+  STANDUP_STATE_ADVANCEMENT_LABEL,
   applyStandupEscalationOverlay,
   buildStandupCorrectionState,
 } from './standup-review-escalation.js';
@@ -60,7 +63,7 @@ dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const BONUS_ELIGIBILITY_PROMPT_VERSION = 'bonus_v2_value_impact';
-const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v12';
+const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v13';
 const STANDUP_REVIEW_BATCH_SIZE = 25;
 const STANDUP_REVIEW_BATCH_CONCURRENCY = 2;
 const STANDUP_NOTIFICATION_LEASE_MINUTES = Math.max(
@@ -719,11 +722,6 @@ function standupCodeFamily(code) {
   return m ? m[1] : '';
 }
 
-function standupCodeFamilyNumber(code) {
-  const family = standupCodeFamily(code);
-  return family ? Number(family) : null;
-}
-
 function standupNormText(value) {
   return String(value || '')
     .toLowerCase()
@@ -882,24 +880,30 @@ function standupIsNoMovement(ticket) {
 }
 
 function standupIsBackwardMovement(ticket) {
-  const today = standupCodeFamilyNumber(ticket.today_code);
-  const prev = standupCodeFamilyNumber(ticket.prev_code);
-  if (today == null || prev == null) return false;
-  return prev >= 400 && today <= 300;
+  const today = standupCodeFamily(ticket.today_code);
+  const prev = standupCodeFamily(ticket.prev_code);
+  return ['400', '500'].includes(prev) &&
+    ['100', '200', '300'].includes(today);
+}
+
+function standupIsAllowedStatusToProgressTransition(ticket) {
+  const today = standupCodeFamily(ticket.today_code);
+  const prev = standupCodeFamily(ticket.prev_code);
+  return ['600', '700', '800'].includes(prev) &&
+    ['100', '200', '300'].includes(today);
+}
+
+function standupNeedsStateAdvancement(ticket, currentCode) {
+  const state = standupStateKey(ticket.state);
+  const family = standupCodeFamily(currentCode);
+  return ['in development', 'code review'].includes(state) && family === '500';
 }
 
 function standupHasStateCodeMismatch(ticket, currentCode) {
   const state = standupStateKey(ticket.state);
   const family = standupCodeFamily(currentCode);
-  const codeNum = standupCodeFamilyNumber(currentCode);
   if (!family) return false;
-  if (state === 'code review' && codeNum != null && codeNum <= 200) return true;
-  if (
-    ['in development', 'code review', 're-opened'].includes(state) &&
-    family === '500'
-  ) {
-    return true;
-  }
+  if (state === 'code review' && ['100', '200'].includes(family)) return true;
   if (['done', 'shelved'].includes(state) && ['200', '300'].includes(family)) {
     return true;
   }
@@ -1027,6 +1031,31 @@ export function normalizeStandupReviewResult(result, payload) {
     const isExemptWithoutToday = !requiresDailyUpdate && !ticket.has_today_update;
     const isWorkflowExempt = isExemptWithoutToday || isWorkflowHandoff500;
     const ignoreIncompleteUpdate = isWorkflowHandoff500;
+    const isBackwardMovement = standupIsBackwardMovement(ticket);
+    const isStateAdvancementNeeded = standupNeedsStateAdvancement(
+      ticket,
+      ticket.today_code,
+    );
+    const isStateCodeMismatch = standupHasStateCodeMismatch(
+      ticket,
+      ticket.today_code,
+    );
+    const isReopenedCompletionWithoutNote =
+      standupStateKey(ticket.state) === 're-opened' &&
+      standupCodeFamily(ticket.today_code) === '500' &&
+      !S(ticket.today_note);
+    const progressCodeIssueType = isStateAdvancementNeeded
+      ? STANDUP_STATE_ADVANCEMENT_ISSUE_TYPE
+      : isStateCodeMismatch
+        ? 'state_code_mismatch'
+        : isBackwardMovement
+          ? 'backward_movement'
+          : '';
+    const suppressAiProgressCodeMismatch =
+      standupIsAllowedStatusToProgressTransition(ticket) ||
+      (standupStateKey(ticket.state) === 're-opened' &&
+        standupCodeFamily(ticket.today_code) === '500' &&
+        !!S(ticket.today_note));
     const deterministic = {
       isNoDailyUpdate: !ticket.has_today_update && requiresDailyUpdate,
       isMissingCode:
@@ -1037,11 +1066,10 @@ export function normalizeStandupReviewResult(result, payload) {
       isActionableNoUpdate: false,
       isPersistentNoUpdate: false,
       isNoMovement: standupIsNoMovement(ticket),
-      isBackwardMovement: standupIsBackwardMovement(ticket),
-      isStateCodeMismatch: standupHasStateCodeMismatch(
-        ticket,
-        ticket.today_code,
-      ),
+      isBackwardMovement,
+      isStateAdvancementNeeded,
+      isStateCodeMismatch,
+      isReopenedCompletionWithoutNote,
       hasExplicitCurrentDeliveryRisk,
       isMissingUpdate: false,
     };
@@ -1059,6 +1087,13 @@ export function normalizeStandupReviewResult(result, payload) {
     let tags = Array.isArray(source.sub_tags)
       ? source.sub_tags.map(String).filter(Boolean)
       : [];
+    const hadAiProgressCodeMismatch = tags.includes(
+      'Wrong or Mismatched Progress Code',
+    );
+
+    if (suppressAiProgressCodeMismatch) {
+      tags = tags.filter((tag) => tag !== 'Wrong or Mismatched Progress Code');
+    }
 
     if (isWorkflowExempt) {
       const allowedWorkflowTags = new Set([
@@ -1080,7 +1115,11 @@ export function normalizeStandupReviewResult(result, payload) {
       addStandupTag(tags, 'Persistent Missing Update');
     }
     if (deterministic.isNoMovement) addStandupTag(tags, 'No Movement');
-    if (deterministic.isBackwardMovement || deterministic.isStateCodeMismatch) {
+    if (
+      deterministic.isBackwardMovement ||
+      deterministic.isStateAdvancementNeeded ||
+      deterministic.isStateCodeMismatch
+    ) {
       addStandupTag(tags, 'Wrong or Mismatched Progress Code');
     }
     if (standupCodeFamily(ticket.today_code) === '800') {
@@ -1121,6 +1160,26 @@ export function normalizeStandupReviewResult(result, payload) {
       category = 'Needs Team Lead Clarification';
     }
 
+    const benignTags = new Set([
+      'Normal Progress',
+      'Critical Severity',
+      'High Severity',
+      'Ready for QA',
+      'Ready for Release',
+      'Awaiting Routine Review',
+    ]);
+    const suppressedMismatchWasOnlyActionableEvidence =
+      suppressAiProgressCodeMismatch &&
+      hadAiProgressCodeMismatch &&
+      !progressCodeIssueType &&
+      !tags.some((tag) => !benignTags.has(tag));
+    if (
+      suppressedMismatchWasOnlyActionableEvidence &&
+      category === 'Needs Team Lead Clarification'
+    ) {
+      category = 'On Track';
+    }
+
     if (isWorkflowExempt) {
       category = 'On Track';
       const workflowDefault = standupExemptWorkflowDefault(ticket);
@@ -1138,6 +1197,7 @@ export function normalizeStandupReviewResult(result, payload) {
       } else if (
         (deterministic.isNoMovement ||
           deterministic.isBackwardMovement ||
+          deterministic.isStateAdvancementNeeded ||
           deterministic.isStateCodeMismatch) &&
         category === 'On Track'
       ) {
@@ -1257,7 +1317,11 @@ export function normalizeStandupReviewResult(result, payload) {
     }
 
     let deterministicReason = '';
-    if (deterministic.isPersistentNoUpdate && isHighImpactBug) {
+    if (deterministic.isStateAdvancementNeeded) {
+      deterministicReason = `${STANDUP_STATE_ADVANCEMENT_LABEL}: the 500_xx progress code indicates development completion or handoff, but the ticket remains in ${String(ticket.state || 'an active state')}.`;
+    } else if (deterministic.isReopenedCompletionWithoutNote) {
+      deterministicReason = 'Progress code does not align with the current Re-Opened TFS state without a supporting same-day note.';
+    } else if (deterministic.isPersistentNoUpdate && isHighImpactBug) {
       deterministicReason = `${severity === 'critical' ? 'Critical' : 'High'} severity Bug has no update for two consecutive working days.`;
     } else if (
       isHighImpactBug &&
@@ -1316,7 +1380,11 @@ export function normalizeStandupReviewResult(result, payload) {
     }
 
     let deterministicAction = '';
-    if (deterministic.isPersistentNoUpdate && isHighImpactBug) {
+    if (deterministic.isStateAdvancementNeeded) {
+      deterministicAction = STANDUP_STATE_ADVANCEMENT_ACTION;
+    } else if (deterministic.isReopenedCompletionWithoutNote) {
+      deterministicAction = 'Team Lead should confirm the correct workflow state and progress code before accepting the ticket as complete.';
+    } else if (deterministic.isPersistentNoUpdate && isHighImpactBug) {
       deterministicAction = 'PM should confirm the owner, current status, and delivery impact before standup.';
     } else if (
       category === 'Needs Team Lead Clarification' &&
@@ -1373,6 +1441,7 @@ export function normalizeStandupReviewResult(result, payload) {
         : S(source.update_summary) || String(ticket.today_note || ''),
       category,
       sub_tags: tags,
+      progress_code_issue_type: progressCodeIssueType || null,
       reason,
       recommended_action: recommendedAction,
       expected_delivery_date: delivery.expectedDeliveryDate,
@@ -1860,6 +1929,7 @@ Progress code taxonomy (team standard — use this to interpret today_code and p
 - 600_xx = Challenges: unexpected hurdle encountered but still moving forward
 - 700_xx = Investigation: root-cause analysis, reproducing bugs, exploring solutions
 - 800_xx = Delays: stalled, waiting on an external person, team, system, or dependency
+- 600_xx, 700_xx, and 800_xx are exception/status families, not later linear workflow stages. Moving from one of them to 100_xx, 200_xx, or 300_xx is not backward movement by itself.
 
 Key 500_xx rules:
 - A 500_xx code means the developer considers the ticket DONE or in handoff. Do NOT mark as Missing Update solely because no new prose was added.
@@ -1881,10 +1951,10 @@ Work item state taxonomy (use the state field to cross-check progress codes and 
 - Done: QA passed, all criteria met, complete for release. No developer update expected; do NOT flag as Missing Update.
 
 State/code mismatch rules (flag with sub-tag "Wrong or Mismatched Progress Code" when applicable):
-- state=In Development but code=500_xx: developer may have finished but not updated TFS state — note it, do not penalize.
+- state=In Development or Code Review but code=500_xx: keep the correction key "Wrong or Mismatched Progress Code", but explain it as "TFS State May Need Advancement" because the completion/handoff code may require the TFS state to advance.
 - state=Code Review but code=200_xx or lower: possible update lag; flag for Team Lead clarification.
 - state=Done or Shelved but code=200_xx or 300_xx: clear mismatch; flag for PM or Team Lead.
-- state=Re-Opened but code=500_xx without supporting notes: needs clarification before accepting as done.
+- state=Re-Opened but code=500_xx: flag only when today's assigned-developer note is blank after trimming. Any nonblank same-day assigned-developer note satisfies the supporting-note exception.
 
 Categories (assign exactly one per ticket):
 - "On Track": clear update, no blocker/escalation risk, meaningful movement, next step clear
@@ -1915,7 +1985,8 @@ Prior-update comparison rules:
 - prev_code/prev_note/prev_date are the most recent update before today, not necessarily yesterday.
 - Compare today_code/today_note against prev_code/prev_note for every ticket that has a current developer update.
 - Same 200_xx or 300_xx code with no meaningful note change means sub-tag "No Movement".
-- Backward movement such as 400_xx to 200_xx means sub-tag "Wrong or Mismatched Progress Code" and category "Needs Team Lead Clarification" unless PM escalation applies.
+- Backward movement means only a prior 400_xx or 500_xx family moving to 100_xx, 200_xx, or 300_xx. It gets sub-tag "Wrong or Mismatched Progress Code" and category "Needs Team Lead Clarification" unless PM escalation applies.
+- Never treat 600_xx, 700_xx, or 800_xx moving to 100_xx, 200_xx, or 300_xx as backward movement by itself. A separate current state/code conflict may still require clarification.
 - has_today_update=false means sub-tag "No Daily Update" only when the current TFS state requires a developer update.
 
 Update-author ownership rules:
