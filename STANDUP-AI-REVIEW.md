@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 
-**Policy/cache version:** `standup_review_v14`
+**Policy/cache version:** `standup_review_v15`
 
 **Last implementation review:** August 18, 2026
 
@@ -122,7 +122,7 @@ Successful generation atomically records the daily escalation-policy run, correc
 4. **Load developer evidence.** For each ticket, load the assigned developer's latest row today and latest row before today. PM/admin/lead/other-developer rows cannot satisfy or replace it. The prior row need not be from yesterday.
 5. **Load forecast context.** Load current Expected Delivery and audit events observed since the prior review. The earliest prior value in that window is compared with the current value.
 6. **Build payload.** Sanitize titles/notes, limit notes to 300 characters, and calculate delivery context.
-7. **Hash and check cache.** SHA-256 covers the ordered complete payload. Reuse requires the same date, v12, hash, and a snapshot younger than 30 minutes; `refresh=1` bypasses ordinary reuse.
+7. **Hash and check cache.** SHA-256 covers the ordered complete payload. Reuse requires the same date, v15, hash, and a snapshot younger than 30 minutes; `refresh=1` bypasses ordinary reuse.
 8. **Coalesce and call OpenAI.** Identical in-flight work shares one process promise and one cross-instance PostgreSQL advisory lock. Split all tickets into batches of 25, with at most two calls in flight. The configured model (default `gpt-4o-mini`) receives a minimized semantic-signal contract; the server derives summaries, queues, exceptions, and counts.
 9. **Normalize.** Merge AI results, then iterate the full payload. Canonical identity/date fields replace AI values; server rules set overrides and derive every secondary list and count.
 10. **Verify coverage.** Eligible and reviewed IDs must be non-empty, unique, equal in count, and equal as sets.
@@ -134,7 +134,7 @@ If the AI omits one ticket but returns a usable classifications array, normaliza
 
 A ticket is eligible only when:
 
-- It is not soft-deleted and its state is not Done.
+- It is not soft-deleted and its state is neither Done nor Removed.
 - Type is Bug or Product Backlog Item.
 - Assignment is nonblank and resolves to a registered `users.role = dev` account.
 
@@ -173,7 +173,7 @@ All fields participate in the input hash. Sanitization performs limited pattern-
 
 The `600_xx`, `700_xx`, and `800_xx` families describe exception or status conditions, not later positions in a linear workflow. Moving from one of those families to `100_xx`, `200_xx`, or `300_xx` is not backward movement by itself.
 
-No current developer update is required in New, Approved, Shelved, Branch Check-in/Branch Checkin, Resolved, Ready for QA, QA Testing, or Done. Done is also excluded from live selection.
+No current developer update is required in New, Approved, Shelved, Branch Check-in/Branch Checkin, Resolved, Ready for QA, QA Testing, or Done. Done and Removed are excluded from live selection.
 
 Exempt tickets without today's update become On Track. Resolved/Ready for QA/QA Testing add `Ready for QA`; Branch Check-in/Done add `Ready for Release`; Shelved adds `Awaiting Routine Review`. A current blank-note `500_xx` in a handoff state also remains On Track unless the current update explicitly shows delivery impact.
 
@@ -291,7 +291,7 @@ The browser renders the normalized response in this order.
 
 ### 12.1 Header and coverage
 
-The header shows review date, cached status, and coverage. History also shows `v14 · Current policy`, an older version as Previous policy, or Legacy.
+The header shows review date, cached status, and coverage. History also shows `v15 · Current policy`, an older version as Previous policy, or Legacy.
 
 A cached report means date, policy version, and complete canonical input matched a result from the last 30 minutes. It is not necessarily stale. Historical versions must be interpreted under their own policy.
 
@@ -495,7 +495,7 @@ Common mistakes:
 
 ### Current cache
 
-- Valid 30 minutes for the same date, v12, and exact input hash.
+- Valid 30 minutes for the same date, v15, and exact input hash.
 - Force refresh bypasses lookup and stores a new successful snapshot.
 - A corrupt matching cache row is ignored and generation proceeds.
 
@@ -573,7 +573,7 @@ The agent reads TFS `SupplyPro.SPApplication.ExpectedDeliveryDate`, normalizes i
 | `STANDUP_REVIEW_EMAILS_ENABLED` | Explicit notification master switch; defaults to false. |
 | `STANDUP_NOTIFICATION_LEASE_MINUTES` | Time before an abandoned `sending` notification claim can be reclaimed; defaults to 15 minutes. |
 | `TEST_RECIPIENT` | Redirects every To/CC destination during mail testing; the ledger still records the logical recipient. |
-| Prompt version | Code constant `standup_review_v14`. |
+| Prompt version | Code constant `standup_review_v15`. |
 | Escalation policy | Code constant `standup_escalation_v1`; independent from prompt-only revisions. |
 | Batch size / concurrency | Code constants 25 / 2. |
 | Cache lifetime | Code constant 30 minutes. |
@@ -610,7 +610,7 @@ Suggested integration smoke checks:
 - Generation is manual, not scheduled.
 - Email notification is manual and limited to the current review; there is no scheduled reminder or automatic resend.
 - Scope has no iteration, area, or team filter.
-- Only Bugs and PBIs are reviewed; Done is excluded.
+- Only Bugs and PBIs are reviewed; Done and Removed are excluded.
 - Unresolvable developer assignments are omitted.
 - Notes are limited to 300 characters for AI use.
 - Reforecast history depends on sync observation and starts at deployment.
