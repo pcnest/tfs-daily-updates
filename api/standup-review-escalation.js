@@ -87,7 +87,8 @@ export function standupCorrectionDisplay(correctionKey, classification = {}) {
     return {
       key,
       label: STANDUP_STATE_ADVANCEMENT_LABEL,
-      action: STANDUP_STATE_ADVANCEMENT_ACTION,
+      action: text(classification?.state_advancement_action) ||
+        STANDUP_STATE_ADVANCEMENT_ACTION,
     };
   }
   return { key, label: key, action: defaultAction };

@@ -3,9 +3,7 @@ import {
   standupPreviousWeekday,
 } from './standup-review-reliability.js';
 
-const HANDOFF_STATES = new Set([
-  'shelved',
-  'branch check-in',
+const DEVELOPMENT_COMPLETE_STATES = new Set([
   'resolved',
   'ready for qa',
   'qa testing',
@@ -15,7 +13,17 @@ const HANDOFF_STATES = new Set([
 const EXPECTED_DELIVERY_REQUIRED_STATES = new Set([
   'in development',
   'code review',
+  'branch checkin',
   're-opened',
+]);
+
+const SANDBOX_VALIDATION_STATUSES = new Set([
+  'Pending',
+  'In Progress',
+  'Rework Required',
+  'Passed',
+  'Unknown',
+  'Not Applicable',
 ]);
 
 const REFORECAST_REASON_TYPES = new Set([
@@ -35,18 +43,10 @@ function normalizeText(value) {
 
 export function standupDeliveryStateKey(value) {
   const text = normalizeText(value).replace(/[\u2010-\u2015]/g, '-');
-  if (['branch checkin', 'branch check-in', 'branch check in'].includes(text)) {
-    return 'branch check-in';
-  }
   if (['reopened', 're-opened', 're opened'].includes(text)) {
     return 're-opened';
   }
   return text;
-}
-
-function codeFamily(code) {
-  const match = String(code || '').match(/^(\d{3})_/);
-  return match ? match[1] : '';
 }
 
 export function standupWorkingDaysUntil(reviewValue, targetValue) {
@@ -102,8 +102,7 @@ export function deriveStandupDeliveryContext(ticket = {}) {
     previousExpectedDeliveryDate,
     expectedDeliveryDate,
   });
-  const developmentComplete =
-    codeFamily(currentCode) === '500' || HANDOFF_STATES.has(state);
+  const developmentComplete = DEVELOPMENT_COMPLETE_STATES.has(state);
   const expectedDeliveryRequired =
     EXPECTED_DELIVERY_REQUIRED_STATES.has(state);
   const workingDaysToExpectedDelivery = expectedDeliveryDate
@@ -160,6 +159,50 @@ export function deriveStandupDeliveryContext(ticket = {}) {
     isCodeReview: state === 'code review',
     developerRework,
   };
+}
+
+function sandboxEvidenceIndicatesPass(value) {
+  const evidence = normalizeText(value);
+  if (!evidence || !/\b(?:sandbox|sbx)\b/.test(evidence)) return false;
+  if (
+    /\b(?:not|hasn't|has not|didn't|did not|failed|failing|failure|blocked|issue|rework)\b/.test(
+      evidence,
+    )
+  ) {
+    return false;
+  }
+  return /\b(?:pass(?:ed|es)?|validated|validation complete|successful(?:ly)?|green)\b/.test(
+    evidence,
+  );
+}
+
+export function validateStandupSandboxAssessment(source = {}, ticket = {}) {
+  if (standupDeliveryStateKey(ticket.state) !== 'branch checkin') {
+    return { status: 'Not Applicable', evidence: '' };
+  }
+
+  const todayNote = String(ticket.today_note || '').trim();
+  if (!todayNote) return { status: 'Unknown', evidence: '' };
+
+  const requestedStatus = String(
+    source.sandbox_validation_status || 'Unknown',
+  );
+  if (!SANDBOX_VALIDATION_STATUSES.has(requestedStatus)) {
+    return { status: 'Unknown', evidence: '' };
+  }
+  if (requestedStatus === 'Unknown' || requestedStatus === 'Not Applicable') {
+    return { status: 'Unknown', evidence: '' };
+  }
+
+  const evidence = String(source.sandbox_validation_evidence || '').trim();
+  const validEvidence = Boolean(evidence) &&
+    normalizeText(todayNote).includes(normalizeText(evidence));
+  if (!validEvidence) return { status: 'Unknown', evidence: '' };
+  if (requestedStatus === 'Passed' && !sandboxEvidenceIndicatesPass(evidence)) {
+    return { status: 'Unknown', evidence: '' };
+  }
+
+  return { status: requestedStatus, evidence };
 }
 
 export function validateStandupReforecastAssessment(source = {}, ticket = {}) {

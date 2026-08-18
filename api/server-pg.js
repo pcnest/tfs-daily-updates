@@ -18,6 +18,7 @@ import {
   hasCompleteStandupCoverage,
   isStandupReviewRoleAllowed,
   standupDateOnly,
+  standupDateInTimeZone,
   standupIsWeekday,
   standupPreviousWeekday,
   standupReviewInputHash,
@@ -37,6 +38,7 @@ import {
 import {
   deriveStandupDeliveryContext,
   validateStandupReforecastAssessment,
+  validateStandupSandboxAssessment,
 } from './standup-review-delivery.js';
 import {
   STANDUP_NOTIFICATION_SCHEMA_SQL,
@@ -63,7 +65,7 @@ dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const BONUS_ELIGIBILITY_PROMPT_VERSION = 'bonus_v2_value_impact';
-const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v15';
+const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v18';
 const STANDUP_REVIEW_BATCH_SIZE = 25;
 const STANDUP_REVIEW_BATCH_CONCURRENCY = 2;
 const STANDUP_NOTIFICATION_LEASE_MINUTES = Math.max(
@@ -731,9 +733,6 @@ function standupNormText(value) {
 
 function standupStateKey(value) {
   const text = standupNormText(value).replace(/[\u2010-\u2015]/g, '-');
-  if (['branch checkin', 'branch check-in', 'branch check in'].includes(text)) {
-    return 'branch check-in';
-  }
   if (['reopened', 're-opened', 're opened'].includes(text)) {
     return 're-opened';
   }
@@ -743,12 +742,18 @@ function standupStateKey(value) {
 function standupIsWorkflowHandoff(ticket) {
   return [
     'shelved',
-    'branch check-in',
     'resolved',
     'ready for qa',
     'qa testing',
     'done',
   ].includes(standupStateKey(ticket.state));
+}
+
+function standupIsBranchCheckinTransitionDay(ticket) {
+  if (standupStateKey(ticket.state) !== 'branch checkin') return false;
+  const reviewDate = standupDateOnly(ticket.review_date);
+  const stateChangeDate = standupDateOnly(ticket.state_change_date);
+  return Boolean(reviewDate) && stateChangeDate === reviewDate;
 }
 
 function addStandupTag(tags, tag) {
@@ -807,12 +812,14 @@ function standupIsPersistentNoUpdate(ticket) {
 
 function standupRequiresDailyUpdate(ticket) {
   const state = standupStateKey(ticket.state);
+  if (state === 'branch checkin') {
+    return !standupIsBranchCheckinTransitionDay(ticket);
+  }
   if (
     [
       'new',
       'approved',
       'shelved',
-      'branch check-in',
       'resolved',
       'ready for qa',
       'qa testing',
@@ -832,10 +839,10 @@ function standupExemptWorkflowDefault(ticket) {
       reason: 'Developer work is complete and the ticket is in the QA workflow.',
     };
   }
-  if (state === 'branch check-in') {
+  if (state === 'branch checkin') {
     return {
-      tag: 'Ready for Release',
-      reason: 'Developer work is complete and the ticket is in the release workflow.',
+      tag: 'Sandbox Validation',
+      reason: 'The changes are checked in and awaiting or undergoing Sandbox validation; additional developer work may still be required.',
     };
   }
   if (state === 'shelved') {
@@ -844,16 +851,22 @@ function standupExemptWorkflowDefault(ticket) {
       reason: 'No developer update is required while the ticket remains Shelved.',
     };
   }
-  if (['new', 'approved'].includes(state)) {
+  if (state === 'new') {
     return {
-      tag: '',
-      reason: 'No developer update is required before active development begins.',
+      tag: 'New',
+      reason: 'The ticket is New and active development has not started.',
+    };
+  }
+  if (state === 'approved') {
+    return {
+      tag: 'Pending Development',
+      reason: 'The ticket is Approved and pending development.',
     };
   }
   if (state === 'done') {
     return {
-      tag: 'Ready for Release',
-      reason: 'The ticket is complete and no developer update is required.',
+      tag: 'Done',
+      reason: 'The ticket is Done in TFS; no QA or production release status is inferred.',
     };
   }
   return {
@@ -890,6 +903,13 @@ function standupNeedsStateAdvancement(ticket, currentCode) {
   const state = standupStateKey(ticket.state);
   const family = standupCodeFamily(currentCode);
   return ['in development', 'code review'].includes(state) && family === '500';
+}
+
+function standupStateAdvancementTarget(ticket) {
+  const type = standupNormText(ticket.type);
+  if (type === 'bug') return 'Resolved';
+  if (type === 'product backlog item') return 'Ready for QA';
+  return '';
 }
 
 function standupHasStateCodeMismatch(ticket, currentCode) {
@@ -1013,22 +1033,58 @@ export function normalizeStandupReviewResult(result, payload) {
       ...ticket,
       reforecast_direction: delivery.reforecastDirection,
     });
+    const sandboxAssessment = validateStandupSandboxAssessment(source, ticket);
     const hasExplicitCurrentDeliveryRisk = standupHasExplicitCurrentDeliveryRisk(
       source,
       ticket,
     );
+    const isBranchCheckin = standupStateKey(ticket.state) === 'branch checkin';
+    const isBranchCheckinTransitionDay =
+      standupIsBranchCheckinTransitionDay(ticket);
     const isWorkflowHandoff500 =
       standupIsWorkflowHandoff(ticket) &&
       standupCodeFamily(ticket.today_code) === '500' &&
       !hasExplicitCurrentDeliveryRisk;
+    const isBranchCheckinTransition500 =
+      isBranchCheckin &&
+      isBranchCheckinTransitionDay &&
+      standupCodeFamily(ticket.today_code) === '500' &&
+      !hasExplicitCurrentDeliveryRisk;
+    const isBranchCheckinRoutine500 =
+      isBranchCheckin &&
+      standupCodeFamily(ticket.today_code) === '500' &&
+      Boolean(S(ticket.today_note)) &&
+      ['Pending', 'In Progress', 'Unknown'].includes(
+        sandboxAssessment.status,
+      ) &&
+      !hasExplicitCurrentDeliveryRisk;
     const isExemptWithoutToday = !requiresDailyUpdate && !ticket.has_today_update;
-    const isWorkflowExempt = isExemptWithoutToday || isWorkflowHandoff500;
-    const ignoreIncompleteUpdate = isWorkflowHandoff500;
+    const isBranchCheckinNoUpdateGrace =
+      isBranchCheckin && isBranchCheckinTransitionDay &&
+      !ticket.has_today_update;
+    const isWorkflowExempt = (isExemptWithoutToday && !isBranchCheckin) ||
+      isWorkflowHandoff500;
+    const isBranchCheckinUpdateExempt = isBranchCheckinNoUpdateGrace ||
+      isBranchCheckinTransition500 ||
+      isBranchCheckinRoutine500;
+    const isUpdateExempt = isWorkflowExempt || isBranchCheckinUpdateExempt;
+    const ignoreIncompleteUpdate = isWorkflowHandoff500 ||
+      isBranchCheckinTransition500;
     const isBackwardMovement = standupIsBackwardMovement(ticket);
-    const isStateAdvancementNeeded = standupNeedsStateAdvancement(
+    const isActiveStateAdvancementNeeded = standupNeedsStateAdvancement(
       ticket,
       ticket.today_code,
     );
+    const isSandboxStateAdvancementNeeded =
+      isBranchCheckin && sandboxAssessment.status === 'Passed';
+    const isStateAdvancementNeeded = isActiveStateAdvancementNeeded ||
+      isSandboxStateAdvancementNeeded;
+    const stateAdvancementTarget = isSandboxStateAdvancementNeeded
+      ? standupStateAdvancementTarget(ticket)
+      : '';
+    const stateAdvancementAction = stateAdvancementTarget
+      ? `Advance the ${standupNormText(ticket.type) === 'bug' ? 'Bug' : 'PBI'} from Branch Checkin to ${stateAdvancementTarget}.`
+      : '';
     const isStateCodeMismatch = standupHasStateCodeMismatch(
       ticket,
       ticket.today_code,
@@ -1063,8 +1119,7 @@ export function normalizeStandupReviewResult(result, payload) {
     };
     deterministic.isIncompleteUpdate =
       deterministic.isMissingCode || deterministic.isMissingNotes;
-    deterministic.isActionableNoUpdate =
-      deterministic.isNoDailyUpdate && currentFamily !== '500';
+    deterministic.isActionableNoUpdate = deterministic.isNoDailyUpdate;
     deterministic.isMissingUpdate =
       deterministic.isActionableNoUpdate || deterministic.isIncompleteUpdate;
     deterministic.isPersistentNoUpdate = standupIsPersistentNoUpdate({
@@ -1082,18 +1137,18 @@ export function normalizeStandupReviewResult(result, payload) {
     // This correction is server-authoritative. Discard the model's version
     // and re-add it below only when a deterministic progress-code rule matches.
     tags = tags.filter((tag) => tag !== 'Wrong or Mismatched Progress Code');
+    if (isBranchCheckin) {
+      tags = tags.filter((tag) => tag !== 'Ready for Release');
+    }
 
-    if (isWorkflowExempt) {
-      const allowedWorkflowTags = new Set([
-        'Ready for QA',
-        'Ready for Release',
-        'Awaiting Routine Review',
-        'Normal Progress',
-      ]);
-      tags = tags.filter((tag) => allowedWorkflowTags.has(tag));
+    if (isUpdateExempt) {
+      // Workflow-state tags are server-authoritative. Preserve only the benign
+      // AI progress signal, then add the exact state tag below.
+      tags = tags.filter((tag) => tag === 'Normal Progress');
     }
 
     addStandupTag(tags, severityTag);
+    if (isBranchCheckin) addStandupTag(tags, 'Sandbox Validation');
     if (deterministic.isActionableNoUpdate) {
       addStandupTag(tags, 'No Daily Update');
     }
@@ -1154,7 +1209,11 @@ export function normalizeStandupReviewResult(result, payload) {
       'High Severity',
       'Ready for QA',
       'Ready for Release',
+      'Sandbox Validation',
       'Awaiting Routine Review',
+      'New',
+      'Pending Development',
+      'Done',
     ]);
     const aiMismatchWasOnlyActionableEvidence =
       hadAiProgressCodeMismatch &&
@@ -1172,6 +1231,7 @@ export function normalizeStandupReviewResult(result, payload) {
       const workflowDefault = standupExemptWorkflowDefault(ticket);
       addStandupTag(tags, workflowDefault.tag);
     } else {
+      if (isBranchCheckinUpdateExempt) category = 'On Track';
       if (deterministic.isActionableNoUpdate) {
         category = 'Missing Update';
       } else if (deterministic.isIncompleteUpdate) {
@@ -1275,7 +1335,7 @@ export function normalizeStandupReviewResult(result, payload) {
       }
     }
 
-    const workflowDefault = isWorkflowExempt
+    const workflowDefault = isUpdateExempt
       ? standupExemptWorkflowDefault(ticket)
       : null;
     let deliveryReason = '';
@@ -1304,7 +1364,9 @@ export function normalizeStandupReviewResult(result, payload) {
     }
 
     let deterministicReason = '';
-    if (deterministic.isStateAdvancementNeeded) {
+    if (isSandboxStateAdvancementNeeded) {
+      deterministicReason = `${STANDUP_STATE_ADVANCEMENT_LABEL}: today's update reports that Sandbox validation passed, but the ticket remains in Branch Checkin.`;
+    } else if (deterministic.isStateAdvancementNeeded) {
       deterministicReason = `${STANDUP_STATE_ADVANCEMENT_LABEL}: the 500_xx progress code indicates development completion or handoff, but the ticket remains in ${String(ticket.state || 'an active state')}.`;
     } else if (deterministic.isReopenedCompletionWithoutNote) {
       deterministicReason = 'Progress code does not align with the current Re-Opened TFS state without a supporting same-day note.';
@@ -1337,9 +1399,16 @@ export function normalizeStandupReviewResult(result, payload) {
     const sourceReason = aiMismatchWasOnlyActionableEvidence
       ? ''
       : S(source.reason);
-    const reason = workflowDefault?.reason ||
+    const progressCodeReason = (
+      deterministic.isBackwardMovement ||
+      deterministic.isStateAdvancementNeeded ||
+      deterministic.isStateCodeMismatch
+    ) ? deterministicReason : '';
+    const reason = (isWorkflowExempt ? workflowDefault?.reason : '') ||
+      progressCodeReason ||
       deliveryReason ||
       deterministicReason ||
+      workflowDefault?.reason ||
       sourceReason ||
       (category === 'On Track'
         ? 'No deterministic progress-code mismatch was identified.'
@@ -1373,7 +1442,8 @@ export function normalizeStandupReviewResult(result, payload) {
 
     let deterministicAction = '';
     if (deterministic.isStateAdvancementNeeded) {
-      deterministicAction = STANDUP_STATE_ADVANCEMENT_ACTION;
+      deterministicAction = stateAdvancementAction ||
+        STANDUP_STATE_ADVANCEMENT_ACTION;
     } else if (deterministic.isReopenedCompletionWithoutNote) {
       deterministicAction = 'Team Lead should confirm the correct workflow state and progress code before accepting the ticket as complete.';
     } else if (deterministic.isPersistentNoUpdate && isHighImpactBug) {
@@ -1392,10 +1462,19 @@ export function normalizeStandupReviewResult(result, payload) {
     const sourceRecommendedAction = aiMismatchWasOnlyActionableEvidence
       ? ''
       : S(source.recommended_action);
+    const progressCodeAction = (
+      deterministic.isBackwardMovement ||
+      deterministic.isStateAdvancementNeeded ||
+      deterministic.isStateCodeMismatch
+    ) ? deterministicAction : '';
     const recommendedAction =
       (isWorkflowExempt
         ? 'No developer follow-up is required unless QA or the workflow owner reports a new risk.'
-        : deliveryAction || deterministicAction || sourceRecommendedAction) ||
+        : progressCodeAction || deliveryAction || deterministicAction ||
+          (isBranchCheckinUpdateExempt ? '' : sourceRecommendedAction)) ||
+      (isBranchCheckinUpdateExempt
+        ? 'No developer follow-up is required unless Sandbox validation or the delivery forecast reports a new risk.'
+        : '') ||
       (category === 'Needs PM Escalation'
         ? 'PM should confirm risk, owner, and next action before standup.'
         : category === 'Needs Team Lead Clarification'
@@ -1431,12 +1510,14 @@ export function normalizeStandupReviewResult(result, payload) {
         .trim()
         .toLowerCase(),
       current_code: currentCode,
-      update_summary: isWorkflowExempt
+      update_summary: isUpdateExempt
         ? S(source.update_summary) || String(ticket.today_note || '') || previousUpdateSummary
         : S(source.update_summary) || String(ticket.today_note || ''),
       category,
       sub_tags: tags,
       progress_code_issue_type: progressCodeIssueType || null,
+      state_advancement_target: stateAdvancementTarget || null,
+      state_advancement_action: stateAdvancementAction || null,
       reason,
       recommended_action: recommendedAction,
       expected_delivery_date: delivery.expectedDeliveryDate,
@@ -1449,6 +1530,8 @@ export function normalizeStandupReviewResult(result, payload) {
       reforecast_explanation_status: reforecastAssessment.status,
       reforecast_reason_type: reforecastAssessment.reasonType,
       reforecast_evidence: reforecastAssessment.evidence,
+      sandbox_validation_status: sandboxAssessment.status,
+      sandbox_validation_evidence: sandboxAssessment.evidence,
     });
   }
 
@@ -1472,6 +1555,7 @@ export function normalizeStandupReviewResult(result, payload) {
     sub_tag_delayed: 0,
     sub_tag_ready_for_qa: 0,
     sub_tag_ready_for_release: 0,
+    sub_tag_sandbox_validation: 0,
     delivery_overdue: 0,
     delivery_due_today: 0,
     delivery_due_soon: 0,
@@ -1546,6 +1630,9 @@ export function normalizeStandupReviewResult(result, payload) {
     if (tags.includes('Delayed')) validation.sub_tag_delayed += 1;
     if (tags.includes('Ready for QA')) validation.sub_tag_ready_for_qa += 1;
     if (tags.includes('Ready for Release')) validation.sub_tag_ready_for_release += 1;
+    if (tags.includes('Sandbox Validation')) {
+      validation.sub_tag_sandbox_validation += 1;
+    }
     if (c.delivery_date_status === 'overdue') validation.delivery_overdue += 1;
     if (c.delivery_date_status === 'due_today') validation.delivery_due_today += 1;
     if (c.delivery_date_status === 'due_soon') validation.delivery_due_soon += 1;
@@ -1716,8 +1803,9 @@ function buildStandupReviewPayload(
       assigned_developer_email: developerEmail,
       priority: t.priority ?? null,
       severity: String(t.severity || ''),
-      state_change_date: standupDateOnly(
+      state_change_date: standupDateInTimeZone(
         t.stateChangeDate || t.state_change_date,
+        APP_TZ,
       ),
       review_date: standupDateOnly(reviewDate),
       previous_workday_date: previousWorkdayDate,
@@ -1915,8 +2003,8 @@ Progress code taxonomy (team standard — use this to interpret today_code and p
 - 200_xx = In Progress: active development, ongoing implementation
 - 300_xx = Testing/Debugging: self-testing, unit tests, collaborating with QA
 - 400_xx = Code/Peer Review: code submitted for review, addressing feedback, pending final approval
-- 500_xx = Task Completion / Done / Handoff — the developer considers work FINISHED for this ticket:
-    500_01: completed and pushed to branch/environment
+- 500_xx = Task Completion / Handoff. It records a completion or handoff milestone, but does not by itself prove Sandbox validation or development completion:
+    500_01: changes checked in and pending or undergoing Sandbox validation
     500_02: documented changes, ready for deployment
     500_03: handing off to next team or member
     500_04: tasks done, pending final documentation
@@ -1927,9 +2015,10 @@ Progress code taxonomy (team standard — use this to interpret today_code and p
 - 600_xx, 700_xx, and 800_xx are exception/status families, not later linear workflow stages. Moving from one of them to 100_xx, 200_xx, or 300_xx is not backward movement by itself.
 
 Key 500_xx rules:
-- A 500_xx code means the developer considers the ticket DONE or in handoff. Do NOT mark as Missing Update solely because no new prose was added.
-- 500_xx tickets should default to "On Track" with sub-tag "Ready for QA", "Ready for Release", or "Awaiting Routine Review" based on the sub-code and notes.
-- Only escalate a 500_xx ticket if the TFS state is still Active/In Development with no sign of acceptance progress. QA Testing, Ready for QA, Resolved, Branch Check-in/Branch Checkin, Shelved, and Done are evidence of workflow handoff or closure and must not be escalated solely because a 500_xx update has blank notes or the prior update is old.
+- A 500_xx code records completion or handoff intent. It is not, by itself, proof that development is complete.
+- In Branch Checkin, 500_01 means the changes are pending or undergoing Sandbox validation. Use the server-derived tag "Sandbox Validation", never "Ready for Release".
+- A transition-day Branch Checkin ticket may have no update or a blank-note 500_01. On later workdays it requires a current note describing Sandbox status.
+- Resolved, Ready for QA, QA Testing, and Done are development-complete states. Shelved remains update-exempt but does not prove development completion.
 
 Work item state taxonomy (use the state field to cross-check progress codes and detect mismatches):
 - New: Created but not yet reviewed, prioritized, or approved — not yet in active development; no developer update expected.
@@ -1938,15 +2027,16 @@ Work item state taxonomy (use the state field to cross-check progress codes and 
 - In Development: Active coding, implementation, and self-testing in progress. Expect 200_xx or 300_xx.
 - Code Review: Development complete, submitted for peer or Team Lead review. Expect 400_xx.
 - Shelved: Development and review complete but intentionally held for a future release. No active developer work expected; do NOT flag as Missing Update.
-- Branch Check-in / Branch Checkin: Changes checked into the release branch; development and code review complete. Expect 500_xx.
+- Branch Checkin: Changes passed Code Review and were checked in for Sandbox validation. Developer rework may still be required. Expect 500_01 plus a current Sandbox-status note after the transition date.
 - Resolved (Bug): Bug fix complete, ready for QA verification. Expect 500_xx.
 - Ready for QA (PBI): Feature complete, meets acceptance criteria, awaiting QA validation. Expect 500_xx.
 - QA Testing: QA actively validating. Developer's work is done; a 500_xx or no update is appropriate. Do NOT flag as Missing Update.
 - Re-Opened (Bug only): QA verification failed or issue recurred; returned to developer. Expect 600_xx, 700_xx, or 200_xx.
-- Done: QA passed, all criteria met, complete for release. No developer update expected; do NOT flag as Missing Update.
+- Done: Work is complete in TFS. Do not infer that the ticket was released to QA or production. No developer update expected; do NOT flag as Missing Update.
 
 State/code mismatch rules (flag with sub-tag "Wrong or Mismatched Progress Code" when applicable):
 - state=In Development or Code Review but code=500_xx: keep the correction key "Wrong or Mismatched Progress Code", but explain it as "TFS State May Need Advancement" because the completion/handoff code may require the TFS state to advance.
+- state=Branch Checkin and today's assigned-developer note explicitly reports that Sandbox passed: keep the same correction key, display "TFS State May Need Advancement", and recommend Resolved for a Bug or Ready for QA for a PBI.
 - state=Code Review but code=200_xx or lower: possible update lag; flag for Team Lead clarification.
 - state=Done or Shelved but code=200_xx or 300_xx: clear mismatch; flag for PM or Team Lead.
 - state=Re-Opened but code=500_xx: flag only when today's assigned-developer note is blank after trimming. Any nonblank same-day assigned-developer note satisfies the supporting-note exception.
@@ -1958,8 +2048,9 @@ Categories (assign exactly one per ticket):
 - "Needs Team Lead Clarification": update exists but issue is technical/scope-related, code/notes mismatch, too vague for PM
 - "Needs PM Escalation": affects delivery, priority, release timing, cross-team coordination, or management visibility
 
-Sub-tags (optional, include only applicable ones): Delayed, Ready for QA, Ready for Release, No Movement,
-Vague Update, Wrong or Mismatched Progress Code, Possible Risk, Normal Progress, Awaiting Routine Review,
+Sub-tags (optional, include only applicable ones): Delayed, Ready for QA, Sandbox Validation, Done, New,
+Pending Development, No Movement, Vague Update, Wrong or Mismatched Progress Code, Possible Risk,
+Normal Progress, Awaiting Routine Review,
 Waiting for Access, Waiting for Data, Waiting for Decision, Waiting for Environment, Cross-Team Dependency,
 Release Risk, Schedule Risk, Delivery Risk, No Daily Update, Missing Progress Code, Missing Notes,
 Critical Severity, High Severity, Persistent Missing Update, Expected Delivery Missing, Delivery Due Soon,
@@ -1989,15 +2080,17 @@ Update-author ownership rules:
 - PM, admin, and Team Lead progress rows and dedicated annotations are not developer progress evidence and must not affect classification.
 
 Workflow ownership rules:
-- New, Approved, Shelved, Branch Check-in/Branch Checkin, Resolved, Ready for QA, QA Testing, and Done do not require a daily developer update.
+- New, Approved, Shelved, Resolved, Ready for QA, QA Testing, and Done do not require a daily developer update.
+- Branch Checkin is exempt only on the calendar date it entered that state. Beginning the next workday, it requires a current assigned-developer Sandbox-status note.
 - If one of those states has no update today, classify it "On Track" and do not add Missing Update, No Daily Update, No Movement, Possible Risk, or PM escalation solely because the latest developer update is old.
+- Use the server-derived state tag New for New, Pending Development for Approved, Awaiting Routine Review for Shelved, Sandbox Validation for Branch Checkin, Ready for QA for Resolved/Ready for QA/QA Testing, and Done for Done.
 - QA Testing means QA owns the active validation step. Use sub-tag "Ready for QA" and do not ask the developer for an update unless current evidence says the ticket was returned to development.
-- A current 500_xx update in a workflow-handoff state remains "On Track" even when notes are blank; use Ready for QA, Ready for Release, or Awaiting Routine Review. It may still be Blocked or Needs PM Escalation only when the current update explicitly identifies a blocker, release risk, schedule impact, or cross-team dependency. Do not infer those risks from update age alone.
+- A current 500_xx update in an exempt downstream workflow state remains "On Track" even when notes are blank. Branch Checkin gets that blank-note exemption only on its transition date. Explicit current blockers, rework, release risk, schedule impact, or cross-team dependencies remain actionable.
 
 Priority and severity escalation rules (normalization is authoritative):
 - Severity policy applies only when type=Bug. PBIs ignore severity even if a value is present.
 - Bug severity 1/Critical always gets sub-tag "Critical Severity"; severity 2/High always gets "High Severity". Severity alone never creates TL or PM escalation.
-- Workflow-exempt states remain On Track without a current developer update, and workflow-handoff states with current 500_xx remain On Track unless current delivery impact is explicit, including Critical/High Bugs.
+- Workflow-exempt downstream states remain On Track without a current developer update or with a current 500_xx unless current delivery impact is explicit, including Critical/High Bugs. Branch Checkin follows its transition-date grace and later daily-note rules.
 - P1/P2 tickets with Blocked, no update, or No Movement become "Needs PM Escalation" regardless of severity. P1/P2 submitted-but-incomplete updates go to "Needs Team Lead Clarification" first unless current delivery impact is explicit.
 - For P3/P4 Critical/High Bugs: Blocked or No Movement becomes "Needs PM Escalation".
 - For P3/P4 Critical/High Bugs with no update: first missed weekday becomes "Needs Team Lead Clarification"; a miss that also occurred on the immediately preceding Monday-Friday workday becomes "Needs PM Escalation" with sub-tag "Persistent Missing Update".
@@ -2008,14 +2101,21 @@ Priority and severity escalation rules (normalization is authoritative):
 Expected Delivery rules (normalization is authoritative):
 - expected_delivery_date is the developer's mutable forecast for development completion, not a TFS resolved, closed, or finish date.
 - delivery_date_status and working_days_to_expected_delivery are precomputed by the server. Never recalculate or override them.
-- 500_xx and recognized handoff states are development-complete evidence. QA/release ownership must not be attributed to the developer.
-- In Development, Code Review, and Re-Opened require Expected Delivery. Missing required dates need Team Lead clarification unless a stronger existing rule applies.
+- Development completion is state-based: Resolved, Ready for QA, QA Testing, and Done. A 500_xx code, Branch Checkin, or Shelved does not independently prove development completion.
+- In Development, Code Review, Branch Checkin, and Re-Opened require Expected Delivery. Missing required dates need Team Lead clarification unless a stronger existing rule applies.
 - Code Review reviewer wait is Team Lead/team-owned unless today's note identifies developer rework.
 - For reforecast_direction=later, assess only today's assigned-developer note. prev_note, PM/lead notes, and TFS System.Reason cannot justify the change.
 - Set reforecast_explanation_status to Supported only when today's note clearly explains the later date; otherwise use Missing or Ambiguous. Use Not Applicable for every direction other than later.
 - reforecast_reason_type must be one of Blocker, Scope Change, Investigation Finding, Unexpected Complexity, Dependency, Environment or Access, Other Supported Reason, or None.
 - reforecast_evidence must be a short exact excerpt from today_note. Return an empty string when no valid excerpt exists.
 - Reforecasting alone is not PM escalation. Current blockers, overdue persistence, or explicit delivery impact may still escalate.
+
+Sandbox validation rules:
+- Set sandbox_validation_status to Not Applicable unless state is Branch Checkin.
+- For Branch Checkin use Pending, In Progress, Rework Required, Passed, or Unknown based only on today's assigned-developer note.
+- Set Passed only when today's note explicitly says Sandbox/SBX validation passed or completed successfully.
+- sandbox_validation_evidence must be a short exact excerpt from today_note that includes Sandbox/SBX and the result. Return an empty string when there is no valid excerpt.
+- Never infer Passed from 500_01 alone or from prev_note.
 
 Output consistency rules:
 - Return only classifications and follow_up_questions. The server derives the summary, exceptions, queues, counts, and escalation policy.
@@ -9137,6 +9237,18 @@ const StandupReviewSchema = {
               ],
             },
             reforecast_evidence: { type: 'string' },
+            sandbox_validation_status: {
+              type: 'string',
+              enum: [
+                'Pending',
+                'In Progress',
+                'Rework Required',
+                'Passed',
+                'Unknown',
+                'Not Applicable',
+              ],
+            },
+            sandbox_validation_evidence: { type: 'string' },
           },
           required: [
             'ticket_id',
@@ -9148,6 +9260,8 @@ const StandupReviewSchema = {
             'reforecast_explanation_status',
             'reforecast_reason_type',
             'reforecast_evidence',
+            'sandbox_validation_status',
+            'sandbox_validation_evidence',
           ],
         },
       },

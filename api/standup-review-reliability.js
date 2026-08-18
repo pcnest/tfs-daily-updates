@@ -19,6 +19,29 @@ export function standupDateOnly(value) {
     : '';
 }
 
+export function standupDateInTimeZone(value, timeZone = 'UTC') {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return standupDateOnly(text);
+
+  const parsed = value instanceof Date ? value.getTime() : Date.parse(text);
+  if (!Number.isFinite(parsed)) return '';
+
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).formatToParts(new Date(parsed));
+    const byType = new Map(parts.map((part) => [part.type, part.value]));
+    const date = `${byType.get('year') || ''}-${byType.get('month') || ''}-${byType.get('day') || ''}`;
+    return standupDateOnly(date);
+  } catch {
+    return '';
+  }
+}
+
 export function standupIsWeekday(dateValue) {
   const date = standupDateOnly(dateValue);
   if (!date) return false;

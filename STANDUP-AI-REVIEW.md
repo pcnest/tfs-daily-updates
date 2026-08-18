@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 
-**Policy/cache version:** `standup_review_v15`
+**Policy/cache version:** `standup_review_v18`
 
 **Last implementation review:** August 18, 2026
 
@@ -122,7 +122,7 @@ Successful generation atomically records the daily escalation-policy run, correc
 4. **Load developer evidence.** For each ticket, load the assigned developer's latest row today and latest row before today. PM/admin/lead/other-developer rows cannot satisfy or replace it. The prior row need not be from yesterday.
 5. **Load forecast context.** Load current Expected Delivery and audit events observed since the prior review. The earliest prior value in that window is compared with the current value.
 6. **Build payload.** Sanitize titles/notes, limit notes to 300 characters, and calculate delivery context.
-7. **Hash and check cache.** SHA-256 covers the ordered complete payload. Reuse requires the same date, v15, hash, and a snapshot younger than 30 minutes; `refresh=1` bypasses ordinary reuse.
+7. **Hash and check cache.** SHA-256 covers the ordered complete payload. Reuse requires the same date, v18, hash, and a snapshot younger than 30 minutes; `refresh=1` bypasses ordinary reuse.
 8. **Coalesce and call OpenAI.** Identical in-flight work shares one process promise and one cross-instance PostgreSQL advisory lock. Split all tickets into batches of 25, with at most two calls in flight. The configured model (default `gpt-4o-mini`) receives a minimized semantic-signal contract; the server derives summaries, queues, exceptions, and counts.
 9. **Normalize.** Merge AI results, then iterate the full payload. Canonical identity/date fields replace AI values; server rules set overrides and derive every secondary list and count.
 10. **Verify coverage.** Eligible and reviewed IDs must be non-empty, unique, equal in count, and equal as sets.
@@ -166,16 +166,16 @@ All fields participate in the input hash. Sanitization performs limited pattern-
 | `200_xx` | In progress | Exact repeat without meaningful note change can be No Movement. |
 | `300_xx` | Testing/debugging | Exact repeat without meaningful note change can be No Movement. |
 | `400_xx` | Code/peer review | Submitted, addressing feedback, or awaiting approval. |
-| `500_xx` | Complete/handoff | Development-complete evidence; date escalation is suppressed. |
+| `500_xx` | Completion/handoff milestone | `500_01` means checked in and pending or undergoing Sandbox validation; the code alone does not prove development completion. |
 | `600_xx` | Challenge | Text determines whether blocked/at risk. |
 | `700_xx` | Investigation | Root-cause or solution exploration. |
 | `800_xx` | Delay | Explicit current risk; adds `Delayed`. |
 
 The `600_xx`, `700_xx`, and `800_xx` families describe exception or status conditions, not later positions in a linear workflow. Moving from one of those families to `100_xx`, `200_xx`, or `300_xx` is not backward movement by itself.
 
-No current developer update is required in New, Approved, Shelved, Branch Check-in/Branch Checkin, Resolved, Ready for QA, QA Testing, or Done. Done and Removed are excluded from live selection.
+No current developer update is required in New, Approved, Shelved, Resolved, Ready for QA, QA Testing, or Done. `Branch Checkin` is the exact TFS state value and is exempt only on the local calendar date it entered that state. Beginning the next workday, the assigned developer must provide a current Sandbox-status note. Done and Removed are excluded from live selection.
 
-Exempt tickets without today's update become On Track. Resolved/Ready for QA/QA Testing add `Ready for QA`; Branch Check-in/Done add `Ready for Release`; Shelved adds `Awaiting Routine Review`. A current blank-note `500_xx` in a handoff state also remains On Track unless the current update explicitly shows delivery impact.
+Exempt tickets without today's update become On Track with a server-derived state tag: New adds `New`; Approved adds `Pending Development`; Shelved adds `Awaiting Routine Review`; Resolved/Ready for QA/QA Testing add `Ready for QA`; and Done adds `Done`. The Done tag describes only the TFS state and does not imply release to QA or production. Branch Checkin always adds `Sandbox Validation`; no update or a blank-note `500_01` is tolerated only on its transition date. Explicit blockers, rework, or delivery impact remain actionable.
 
 Diagnostics in states that require updates:
 
@@ -188,6 +188,7 @@ Diagnostics in states that require updates:
 | Prior `400_xx` or `500_xx` moves to `100_xx`, `200_xx`, or `300_xx` | `Wrong or Mismatched Progress Code`. |
 | Re-Opened with `500_xx` and a blank/whitespace-only current assigned-developer note | `Wrong or Mismatched Progress Code`; any nonblank same-day note satisfies the supporting-note exception. |
 | In Development or Code Review with `500_xx` | Stable correction key `Wrong or Mismatched Progress Code`, displayed as `TFS State May Need Advancement`. |
+| Branch Checkin note explicitly reports Sandbox passed | Same stable correction key and display label; action targets `Resolved` for a Bug or `Ready for QA` for a PBI. |
 | Code conflicts with TFS state | `Wrong or Mismatched Progress Code`. |
 
 Persistent no-update requires that the current state existed on/before the preceding weekday and that the assigned developer also lacked an update that weekday. Monday uses Friday.
@@ -206,17 +207,17 @@ Persistent no-update requires that the current state existed on/before the prece
 
 Expected Delivery is the developer's mutable estimate of **development completion**. It is not a Resolved, Closed, release, QA-complete, or deployment date.
 
-It is required in In Development, Code Review, and Re-Opened. In other incomplete states it is optional, but an existing date is still evaluated. `500_xx` or a recognized handoff state is development-complete evidence.
+It is required in In Development, Code Review, Branch Checkin, and Re-Opened. In other incomplete states it is optional, but an existing date is still evaluated. Development completion is state-based: Resolved, Ready for QA, QA Testing, or Done. A `500_xx` code, Branch Checkin, or Shelved does not independently prove completion.
 
 | Status | Interpretation |
 | --- | --- |
 | `not_required` | Blank and not required in this state. |
-| `missing_required` | Blank in In Development, Code Review, or Re-Opened. |
+| `missing_required` | Blank in In Development, Code Review, Branch Checkin, or Re-Opened. |
 | `scheduled` | More than two working days away. |
 | `due_soon` | After today and within two Monday-Friday days. |
 | `due_today` | Equals review date. |
 | `overdue` | Before review date while development is incomplete. |
-| `development_complete` | Effective code is 500 or state is a recognized handoff. |
+| `development_complete` | Current TFS state is Resolved, Ready for QA, QA Testing, or Done. |
 
 Weekend target dates use the actual date for due-today/overdue comparison; working-day distance excludes weekends.
 
@@ -229,7 +230,7 @@ Policy application:
 5. First-working-day overdue with usable progress goes to Team Lead for a refreshed forecast.
 6. Overdue plus Blocked, no update, No Movement, explicit impact, or persistence goes to PM.
 7. Overdue Code Review waiting on a reviewer is a Team Lead queue issue unless today's note identifies developer rework.
-8. Active-state `500_xx` is complete for date policy but may need Team Lead state synchronization.
+8. Active-state or Branch Checkin `500_xx` remains incomplete for date policy until TFS reaches a development-complete state.
 
 ### Reforecast policy
 
@@ -291,7 +292,7 @@ The browser renders the normalized response in this order.
 
 ### 12.1 Header and coverage
 
-The header shows review date, cached status, and coverage. History also shows `v15 · Current policy`, an older version as Previous policy, or Legacy.
+The header shows review date, cached status, and coverage. History also shows `v18 · Current policy`, an older version as Previous policy, or Legacy.
 
 A cached report means date, policy version, and complete canonical input matched a result from the last 30 minutes. It is not necessarily stale. Historical versions must be interpreted under their own policy.
 
@@ -354,7 +355,7 @@ Tickets are grouped by developer. Developers with the highest-attention category
 | Reason | Highest-precedence server reason, otherwise AI explanation; validated reforecast detail appears beneath it. |
 | Recommended Action | Highest-precedence deterministic action, otherwise AI/category fallback. |
 
-The API classification also carries canonical `developer_email`, `previous_expected_delivery_date`, `delivery_date_status`, `working_days_to_expected_delivery`, `reforecast_direction`, `reforecast_explanation_status`, `reforecast_reason_type`, and `reforecast_evidence`.
+The API classification also carries canonical `developer_email`, `previous_expected_delivery_date`, `delivery_date_status`, `working_days_to_expected_delivery`, `reforecast_direction`, `reforecast_explanation_status`, `reforecast_reason_type`, `reforecast_evidence`, `sandbox_validation_status`, `sandbox_validation_evidence`, and optional state-advancement target/action metadata.
 
 ### 12.5 Sub-tags
 
@@ -363,13 +364,13 @@ Sub-tags overlap and do not replace the category.
 | Group | Tags |
 | --- | --- |
 | Update quality | No Daily Update, Missing Progress Code, Missing Notes, Vague Update, No Movement |
-| Workflow | Wrong or Mismatched Progress Code, Ready for QA, Ready for Release, Awaiting Routine Review, Review Queue Risk |
+| Workflow | Wrong or Mismatched Progress Code, New, Pending Development, Sandbox Validation, Ready for QA, Awaiting Routine Review, Done, Review Queue Risk |
 | Progress/risk | Normal Progress, Delayed, Possible Risk, Release Risk, Schedule Risk, Delivery Risk |
 | Dependency | Waiting for Access/Data/Decision/Environment, Cross-Team Dependency |
 | Impact | Critical Severity, High Severity, Persistent Missing Update |
 | Forecast | Expected Delivery Missing/Overdue/Reforecasted, Delivery Due Soon/Today, Reforecast Needs Rationale |
 
-The server adds deterministic tags and retains prompted AI semantic tags, except `Wrong or Mismatched Progress Code`: that tag is always removed from AI output and re-added only when the server's deterministic progress-code assessment matches. For workflow-exempt tickets, AI tags are first limited to Ready for QA, Ready for Release, Awaiting Routine Review, and Normal Progress. Authoritative severity/delivery tags can then be added. `Normal Progress` is removed when the final outcome conflicts with it.
+The server adds deterministic tags and retains prompted AI semantic tags, except `Wrong or Mismatched Progress Code`: that tag is always removed from AI output and re-added only when the server's deterministic progress-code assessment matches. For workflow-exempt tickets, AI tags are first limited to `Normal Progress`; the server then adds the authoritative state tag. Authoritative severity/delivery tags can also be added. `Normal Progress` is removed when the final outcome conflicts with it.
 
 ### 12.6 Exceptions
 
@@ -495,7 +496,7 @@ Common mistakes:
 
 ### Current cache
 
-- Valid 30 minutes for the same date, v15, and exact input hash.
+- Valid 30 minutes for the same date, v18, and exact input hash.
 - Force refresh bypasses lookup and stores a new successful snapshot.
 - A corrupt matching cache row is ignored and generation proceeds.
 
@@ -573,7 +574,7 @@ The agent reads TFS `SupplyPro.SPApplication.ExpectedDeliveryDate`, normalizes i
 | `STANDUP_REVIEW_EMAILS_ENABLED` | Explicit notification master switch; defaults to false. |
 | `STANDUP_NOTIFICATION_LEASE_MINUTES` | Time before an abandoned `sending` notification claim can be reclaimed; defaults to 15 minutes. |
 | `TEST_RECIPIENT` | Redirects every To/CC destination during mail testing; the ledger still records the logical recipient. |
-| Prompt version | Code constant `standup_review_v15`. |
+| Prompt version | Code constant `standup_review_v18`. |
 | Escalation policy | Code constant `standup_escalation_v1`; independent from prompt-only revisions. |
 | Batch size / concurrency | Code constants 25 / 2. |
 | Cache lifetime | Code constant 30 minutes. |
