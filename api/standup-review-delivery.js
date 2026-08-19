@@ -86,7 +86,7 @@ export function standupReforecastDirection({
 
 export function deriveStandupDeliveryContext(ticket = {}) {
   const state = standupDeliveryStateKey(ticket.state);
-  const currentCode = ticket.today_code || ticket.prev_code || '';
+  const paused = state === 'on-hold';
   const expectedDeliveryDate = standupDateOnly(
     ticket.expected_delivery_date || ticket.expectedDeliveryDate,
   );
@@ -97,21 +97,25 @@ export function deriveStandupDeliveryContext(ticket = {}) {
   const expectedDeliveryChanged = Boolean(
     ticket.expected_delivery_changed ?? ticket.expectedDeliveryChanged,
   );
-  const reforecastDirection = standupReforecastDirection({
-    changed: expectedDeliveryChanged,
-    previousExpectedDeliveryDate,
-    expectedDeliveryDate,
-  });
+  const reforecastDirection = paused
+    ? 'unchanged'
+    : standupReforecastDirection({
+      changed: expectedDeliveryChanged,
+      previousExpectedDeliveryDate,
+      expectedDeliveryDate,
+    });
   const developmentComplete = DEVELOPMENT_COMPLETE_STATES.has(state);
   const expectedDeliveryRequired =
     EXPECTED_DELIVERY_REQUIRED_STATES.has(state);
-  const workingDaysToExpectedDelivery = expectedDeliveryDate
+  const workingDaysToExpectedDelivery = expectedDeliveryDate && !paused
     ? standupWorkingDaysUntil(ticket.review_date, expectedDeliveryDate)
     : null;
 
   const reviewDate = standupDateOnly(ticket.review_date);
   let status = 'not_required';
-  if (developmentComplete) {
+  if (paused) {
+    status = 'paused';
+  } else if (developmentComplete) {
     status = 'development_complete';
   } else if (!expectedDeliveryDate) {
     status = expectedDeliveryRequired ? 'missing_required' : 'not_required';
@@ -155,6 +159,7 @@ export function deriveStandupDeliveryContext(ticket = {}) {
     status,
     workingDaysToExpectedDelivery,
     developmentComplete,
+    paused,
     persistentOverdue,
     isCodeReview: state === 'code review',
     developerRework,

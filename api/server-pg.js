@@ -65,7 +65,7 @@ dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const BONUS_ELIGIBILITY_PROMPT_VERSION = 'bonus_v2_value_impact';
-const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v19';
+const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v20';
 const STANDUP_REVIEW_BATCH_SIZE = 25;
 const STANDUP_REVIEW_BATCH_CONCURRENCY = 2;
 const STANDUP_NOTIFICATION_LEASE_MINUTES = Math.max(
@@ -774,8 +774,19 @@ function standupSeverityTag(ticket) {
 
 function standupHasExplicitCurrentDeliveryRisk(source, ticket) {
   if (!ticket.has_today_update) return false;
-  if (standupCodeFamily(ticket.today_code) === '800') return true;
   const tags = Array.isArray(source.sub_tags) ? source.sub_tags : [];
+  if (standupStateKey(ticket.state) === 'on-hold') {
+    if (!standupNormText(ticket.today_note)) return false;
+    return tags.some((tag) =>
+      [
+        'Release Risk',
+        'Schedule Risk',
+        'Delivery Risk',
+        'Cross-Team Dependency',
+      ].includes(String(tag)),
+    );
+  }
+  if (standupCodeFamily(ticket.today_code) === '800') return true;
   return tags.some((tag) =>
     [
       'Release Risk',
@@ -819,6 +830,7 @@ function standupRequiresDailyUpdate(ticket) {
     [
       'new',
       'approved',
+      'on-hold',
       'shelved',
       'resolved',
       'ready for qa',
@@ -849,6 +861,12 @@ function standupExemptWorkflowDefault(ticket) {
     return {
       tag: 'Awaiting Routine Review',
       reason: 'No developer update is required while the ticket remains Shelved.',
+    };
+  }
+  if (state === 'on-hold') {
+    return {
+      tag: 'On Hold',
+      reason: 'Development is paused while the ticket remains On-Hold; no daily developer update or active delivery forecast is required.',
     };
   }
   if (state === 'new') {
@@ -1053,6 +1071,8 @@ export function normalizeStandupReviewResult(result, payload) {
       source,
       ticket,
     );
+    const isOnHold = standupStateKey(ticket.state) === 'on-hold';
+    const isManagedOnHold = isOnHold && !hasExplicitCurrentDeliveryRisk;
     const isBranchCheckin = standupStateKey(ticket.state) === 'branch checkin';
     const isBranchCheckinTransitionDay =
       standupIsBranchCheckinTransitionDay(ticket);
@@ -1077,13 +1097,14 @@ export function normalizeStandupReviewResult(result, payload) {
     const isBranchCheckinNoUpdateGrace =
       isBranchCheckin && isBranchCheckinTransitionDay &&
       !ticket.has_today_update;
-    const isWorkflowExempt = (isExemptWithoutToday && !isBranchCheckin) ||
+    const isWorkflowExempt = isManagedOnHold ||
+      (isExemptWithoutToday && !isBranchCheckin) ||
       isWorkflowHandoff500;
     const isBranchCheckinUpdateExempt = isBranchCheckinNoUpdateGrace ||
       isBranchCheckinTransition500 ||
       isBranchCheckinRoutine500;
     const isUpdateExempt = isWorkflowExempt || isBranchCheckinUpdateExempt;
-    const ignoreIncompleteUpdate = isWorkflowHandoff500 ||
+    const ignoreIncompleteUpdate = isManagedOnHold || isWorkflowHandoff500 ||
       isBranchCheckinTransition500;
     const isBackwardMovement = standupIsBackwardMovement(ticket);
     const isReturnToActiveDevelopment =
@@ -1128,7 +1149,7 @@ export function normalizeStandupReviewResult(result, payload) {
       isIncompleteUpdate: false,
       isActionableNoUpdate: false,
       isPersistentNoUpdate: false,
-      isNoMovement: standupIsNoMovement(ticket),
+      isNoMovement: isManagedOnHold ? false : standupIsNoMovement(ticket),
       isBackwardMovement,
       isReturnToActiveDevelopment,
       isStateAdvancementNeeded,
@@ -1174,6 +1195,7 @@ export function normalizeStandupReviewResult(result, payload) {
     }
 
     addStandupTag(tags, severityTag);
+    if (isOnHold) addStandupTag(tags, 'On Hold');
     if (isBranchCheckin) addStandupTag(tags, 'Sandbox Validation');
     if (deterministic.isActionableNoUpdate) {
       addStandupTag(tags, 'No Daily Update');
@@ -1195,7 +1217,10 @@ export function normalizeStandupReviewResult(result, payload) {
     ) {
       addStandupTag(tags, 'Wrong or Mismatched Progress Code');
     }
-    if (standupCodeFamily(ticket.today_code) === '800') {
+    if (
+      standupCodeFamily(ticket.today_code) === '800' &&
+      !isManagedOnHold
+    ) {
       addStandupTag(tags, 'Delayed');
     }
     if (!delivery.developmentComplete) {
@@ -1243,6 +1268,7 @@ export function normalizeStandupReviewResult(result, payload) {
       'Awaiting Routine Review',
       'New',
       'Pending Development',
+      'On Hold',
       'Done',
     ]);
     const aiMismatchWasOnlyActionableEvidence =
@@ -1509,7 +1535,9 @@ export function normalizeStandupReviewResult(result, payload) {
         : '';
     const recommendedAction =
       (isWorkflowExempt
-        ? 'No developer follow-up is required unless QA or the workflow owner reports a new risk.'
+        ? (isOnHold
+          ? 'No daily developer update is required while the hold remains active; follow up only when the hold owner reports a new material risk or work resumes.'
+          : 'No developer follow-up is required unless QA or the workflow owner reports a new risk.')
         : combinedReturnAction || progressCodeAction || deliveryAction ||
           deterministicAction ||
           (isBranchCheckinUpdateExempt ? '' : sourceRecommendedAction)) ||
@@ -1756,9 +1784,11 @@ export function normalizeStandupReviewResult(result, payload) {
       )
       .map((ticket) => String(ticket.ticket_id || '')),
   );
-  const developmentCompleteIds = new Set(
+  const deliveryQuestionExemptIds = new Set(
     classifications
-      .filter((c) => c.delivery_date_status === 'development_complete')
+      .filter((c) =>
+        ['development_complete', 'paused'].includes(c.delivery_date_status)
+      )
       .map((c) => c.ticket_id),
   );
   const follow_up_questions = (Array.isArray(result.follow_up_questions)
@@ -1771,7 +1801,7 @@ export function normalizeStandupReviewResult(result, payload) {
         /expected delivery|delivery date|reforecast|forecast/.test(questionText);
       return knownTicketIds.has(id) &&
         !exemptWithoutTodayIds.has(id) &&
-        !(developmentCompleteIds.has(id) && isDeliveryQuestion);
+        !(deliveryQuestionExemptIds.has(id) && isDeliveryQuestion);
     })
     .map((q) => ({
       ticket_id: String(q.ticket_id || ''),
@@ -1786,7 +1816,9 @@ export function normalizeStandupReviewResult(result, payload) {
     if (
       follow_up_questions.length >= 5 ||
       classification.reforecast_direction !== 'later' ||
-      classification.delivery_date_status === 'development_complete' ||
+      ['development_complete', 'paused'].includes(
+        classification.delivery_date_status,
+      ) ||
       classification.reforecast_explanation_status === 'Supported' ||
       follow_up_questions.some(
         (question) => question.ticket_id === classification.ticket_id,
@@ -2070,6 +2102,7 @@ Work item state taxonomy (use the state field to cross-check progress codes and 
 - Committed: Selected for sprint, assigned for development. Expect 100_xx or 200_xx progress codes.
 - In Development: Active coding, implementation, and self-testing in progress. Expect 200_xx or 300_xx.
 - Code Review: Development complete, submitted for peer or Team Lead review. Expect 400_xx.
+- On-Hold: Development is incomplete but intentionally paused. No daily developer update is required, the existing Expected Delivery is preserved with delivery_date_status=paused, and 800_xx is compatible. Do not infer delivery risk from On-Hold or 800_xx alone.
 - Shelved: Development and review complete but intentionally held for a future release. No active developer work expected; do NOT flag as Missing Update.
 - Branch Checkin: Changes passed Code Review and were checked in for Sandbox validation. Developer rework may still be required. Expect 500_01 plus a current Sandbox-status note after the transition date.
 - Resolved (Bug): Bug fix complete, ready for QA verification. Expect 500_xx.
@@ -2095,7 +2128,7 @@ Categories (assign exactly one per ticket):
 Sub-tags (optional, include only applicable ones): Delayed, Ready for QA, Sandbox Validation, Done, New,
 Pending Development, No Movement, Vague Update, Returned to Active Development,
 Wrong or Mismatched Progress Code, Possible Risk,
-Normal Progress, Awaiting Routine Review,
+Normal Progress, Awaiting Routine Review, On Hold,
 Waiting for Access, Waiting for Data, Waiting for Decision, Waiting for Environment, Cross-Team Dependency,
 Release Risk, Schedule Risk, Delivery Risk, No Daily Update, Missing Progress Code, Missing Notes,
 Critical Severity, High Severity, Persistent Missing Update, Expected Delivery Missing, Delivery Due Soon,
@@ -2127,28 +2160,28 @@ Update-author ownership rules:
 - PM, admin, and Team Lead progress rows and dedicated annotations are not developer progress evidence and must not affect classification.
 
 Workflow ownership rules:
-- New, Approved, Shelved, Resolved, Ready for QA, QA Testing, and Done do not require a daily developer update.
+- New, Approved, On-Hold, Shelved, Resolved, Ready for QA, QA Testing, and Done do not require a daily developer update.
 - Branch Checkin is exempt only on the calendar date it entered that state. Beginning the next workday, it requires a current assigned-developer Sandbox-status note.
 - If one of those states has no update today, classify it "On Track" and do not add Missing Update, No Daily Update, No Movement, Possible Risk, or PM escalation solely because the latest developer update is old.
-- Use the server-derived state tag New for New, Pending Development for Approved, Awaiting Routine Review for Shelved, Sandbox Validation for Branch Checkin, Ready for QA for Resolved/Ready for QA/QA Testing, and Done for Done.
+- Use the server-derived state tag New for New, Pending Development for Approved, On Hold for On-Hold, Awaiting Routine Review for Shelved, Sandbox Validation for Branch Checkin, Ready for QA for Resolved/Ready for QA/QA Testing, and Done for Done.
 - QA Testing means QA owns the active validation step. Use sub-tag "Ready for QA" and do not ask the developer for an update unless current evidence says the ticket was returned to development.
 - A current 500_xx update in an exempt downstream workflow state remains "On Track" even when notes are blank. Branch Checkin gets that blank-note exemption only on its transition date. Explicit current blockers, rework, release risk, schedule impact, or cross-team dependencies remain actionable.
 
 Priority and severity escalation rules (normalization is authoritative):
 - Severity policy applies only when type=Bug. PBIs ignore severity even if a value is present.
 - Bug severity 1/Critical always gets sub-tag "Critical Severity"; severity 2/High always gets "High Severity". Severity alone never creates TL or PM escalation.
-- Workflow-exempt downstream states remain On Track without a current developer update or with a current 500_xx unless current delivery impact is explicit, including Critical/High Bugs. Branch Checkin follows its transition-date grace and later daily-note rules.
+- Workflow-exempt downstream states remain On Track without a current developer update or with a current 500_xx unless current delivery impact is explicit, including Critical/High Bugs. On-Hold is a managed pause and remains On Track unless today's note explicitly identifies material release, schedule, delivery, or cross-team risk. Branch Checkin follows its transition-date grace and later daily-note rules.
 - P1/P2 tickets with Blocked, no update, or No Movement become "Needs PM Escalation" regardless of severity. P1/P2 submitted-but-incomplete updates go to "Needs Team Lead Clarification" first unless current delivery impact is explicit.
 - For P3/P4 Critical/High Bugs: Blocked or No Movement becomes "Needs PM Escalation".
 - For P3/P4 Critical/High Bugs with no update: first missed weekday becomes "Needs Team Lead Clarification"; a miss that also occurred on the immediately preceding Monday-Friday workday becomes "Needs PM Escalation" with sub-tag "Persistent Missing Update".
 - For P1-P4 tickets at any severity, an update submitted with a blank progress code or blank note becomes "Needs Team Lead Clarification" unless the current update contains explicit delivery impact.
 - Wrong code, state/code mismatch, or vague status goes to TL first unless a current update has explicit delivery impact.
-- Explicit delivery impact requires a current update and one of Release Risk, Schedule Risk, Delivery Risk, Cross-Team Dependency, Delayed, or a Waiting-for dependency tag; current 800_xx is also explicit evidence. Historical notes alone cannot trigger escalation.
+- Explicit delivery impact requires a current update and one of Release Risk, Schedule Risk, Delivery Risk, Cross-Team Dependency, Delayed, or a Waiting-for dependency tag; current 800_xx is also explicit evidence except while the ticket is On-Hold. For On-Hold, 800_xx, Delayed, and Waiting-for tags alone are not material-risk evidence; today's note plus Release Risk, Schedule Risk, Delivery Risk, or Cross-Team Dependency is required. Historical notes alone cannot trigger escalation.
 
 Expected Delivery rules (normalization is authoritative):
 - expected_delivery_date is the developer's mutable forecast for development completion, not a TFS resolved, closed, or finish date.
-- delivery_date_status and working_days_to_expected_delivery are precomputed by the server. Never recalculate or override them.
-- Development completion is state-based: Resolved, Ready for QA, QA Testing, and Done. A 500_xx code, Branch Checkin, or Shelved does not independently prove development completion.
+- delivery_date_status and working_days_to_expected_delivery are precomputed by the server. Never recalculate or override them. On-Hold uses delivery_date_status=paused and no working-day countdown.
+- Development completion is state-based: Resolved, Ready for QA, QA Testing, and Done. A 500_xx code, Branch Checkin, Shelved, or On-Hold does not independently prove development completion.
 - In Development, Code Review, Branch Checkin, and Re-Opened require Expected Delivery. Missing required dates need Team Lead clarification unless a stronger existing rule applies.
 - Code Review reviewer wait is Team Lead/team-owned unless today's note identifies developer rework.
 - For reforecast_direction=later, assess only today's assigned-developer note. prev_note, PM/lead notes, and TFS System.Reason cannot justify the change.
