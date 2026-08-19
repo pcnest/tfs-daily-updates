@@ -2,9 +2,9 @@
 
 **Status:** Implemented
 
-**Policy/cache version:** `standup_review_v18`
+**Policy/cache version:** `standup_review_v19`
 
-**Last implementation review:** August 18, 2026
+**Last implementation review:** August 19, 2026
 
 **Audience:** PMs, Team Leads, administrators, developers, QA, and maintainers
 
@@ -122,7 +122,7 @@ Successful generation atomically records the daily escalation-policy run, correc
 4. **Load developer evidence.** For each ticket, load the assigned developer's latest row today and latest row before today. PM/admin/lead/other-developer rows cannot satisfy or replace it. The prior row need not be from yesterday.
 5. **Load forecast context.** Load current Expected Delivery and audit events observed since the prior review. The earliest prior value in that window is compared with the current value.
 6. **Build payload.** Sanitize titles/notes, limit notes to 300 characters, and calculate delivery context.
-7. **Hash and check cache.** SHA-256 covers the ordered complete payload. Reuse requires the same date, v18, hash, and a snapshot younger than 30 minutes; `refresh=1` bypasses ordinary reuse.
+7. **Hash and check cache.** SHA-256 covers the ordered complete payload. Reuse requires the same date, v19, hash, and a snapshot younger than 30 minutes; `refresh=1` bypasses ordinary reuse.
 8. **Coalesce and call OpenAI.** Identical in-flight work shares one process promise and one cross-instance PostgreSQL advisory lock. Split all tickets into batches of 25, with at most two calls in flight. The configured model (default `gpt-4o-mini`) receives a minimized semantic-signal contract; the server derives summaries, queues, exceptions, and counts.
 9. **Normalize.** Merge AI results, then iterate the full payload. Canonical identity/date fields replace AI values; server rules set overrides and derive every secondary list and count.
 10. **Verify coverage.** Eligible and reviewed IDs must be non-empty, unique, equal in count, and equal as sets.
@@ -185,7 +185,8 @@ Diagnostics in states that require updates:
 | Row exists, blank code | `Missing Progress Code`; begins as Tier 1 developer correction unless an immediate-risk rule applies. |
 | Row exists, blank note | `Missing Notes`; begins as Tier 1 developer correction unless an immediate-risk rule applies. |
 | Same exact `200_xx` or `300_xx` and no meaningful note change | `No Movement`. |
-| Prior `400_xx` or `500_xx` moves to `100_xx`, `200_xx`, or `300_xx` | `Wrong or Mismatched Progress Code`. |
+| Prior `400_xx` or `500_xx` moves to an active code supported by the current TFS state | `Returned to Active Development`; Team Lead workflow clarification, not a developer correction. Supported pairs are Approved + `100_xx`, Committed + `100_xx`/`200_xx`, In Development + `200_xx`/`300_xx`, and Re-Opened + `200_xx`. |
+| Prior `400_xx` or `500_xx` moves to `100_xx`, `200_xx`, or `300_xx`, but the current TFS state does not support that code | `Wrong or Mismatched Progress Code`. |
 | Re-Opened with `500_xx` and a blank/whitespace-only current assigned-developer note | `Wrong or Mismatched Progress Code`; any nonblank same-day note satisfies the supporting-note exception. |
 | In Development or Code Review with `500_xx` | Stable correction key `Wrong or Mismatched Progress Code`, displayed as `TFS State May Need Advancement`. |
 | Branch Checkin note explicitly reports Sandbox passed | Same stable correction key and display label; action targets `Resolved` for a Bug or `Ready for QA` for a PBI. |
@@ -292,7 +293,7 @@ The browser renders the normalized response in this order.
 
 ### 12.1 Header and coverage
 
-The header shows review date, cached status, and coverage. History also shows `v18 · Current policy`, an older version as Previous policy, or Legacy.
+The header shows review date, cached status, and coverage. History also shows `v19 · Current policy`, an older version as Previous policy, or Legacy.
 
 A cached report means date, policy version, and complete canonical input matched a result from the last 30 minutes. It is not necessarily stale. Historical versions must be interpreted under their own policy.
 
@@ -364,13 +365,13 @@ Sub-tags overlap and do not replace the category.
 | Group | Tags |
 | --- | --- |
 | Update quality | No Daily Update, Missing Progress Code, Missing Notes, Vague Update, No Movement |
-| Workflow | Wrong or Mismatched Progress Code, New, Pending Development, Sandbox Validation, Ready for QA, Awaiting Routine Review, Done, Review Queue Risk |
+| Workflow | Returned to Active Development, Wrong or Mismatched Progress Code, New, Pending Development, Sandbox Validation, Ready for QA, Awaiting Routine Review, Done, Review Queue Risk |
 | Progress/risk | Normal Progress, Delayed, Possible Risk, Release Risk, Schedule Risk, Delivery Risk |
 | Dependency | Waiting for Access/Data/Decision/Environment, Cross-Team Dependency |
 | Impact | Critical Severity, High Severity, Persistent Missing Update |
 | Forecast | Expected Delivery Missing/Overdue/Reforecasted, Delivery Due Soon/Today, Reforecast Needs Rationale |
 
-The server adds deterministic tags and retains prompted AI semantic tags, except `Wrong or Mismatched Progress Code`: that tag is always removed from AI output and re-added only when the server's deterministic progress-code assessment matches. For workflow-exempt tickets, AI tags are first limited to `Normal Progress`; the server then adds the authoritative state tag. Authoritative severity/delivery tags can also be added. `Normal Progress` is removed when the final outcome conflicts with it.
+The server adds deterministic tags and retains prompted AI semantic tags, except `Returned to Active Development` and `Wrong or Mismatched Progress Code`: those tags are always removed from AI output and re-added only when the server's deterministic progress-code assessment matches. A compatible return is routed to Team Lead clarification and excluded from developer correction notifications. For workflow-exempt tickets, AI tags are first limited to `Normal Progress`; the server then adds the authoritative state tag. Authoritative severity/delivery tags can also be added. `Normal Progress` is removed when the final outcome conflicts with it.
 
 ### 12.6 Exceptions
 
@@ -467,7 +468,7 @@ The delivery ledger records logical recipients even when `TEST_RECIPIENT` redire
 }
 ```
 
-Each classification may include additive `progress_code_issue_type` metadata. The value `tfs_state_may_need_advancement` selects the state-advancement display wording while preserving the `Wrong or Mismatched Progress Code` sub-tag and persistence identity. Escalation correction entries may include an additive `label`; older snapshots without either field fall back to the correction key.
+Each classification may include additive `progress_code_issue_type` metadata. The value `tfs_state_may_need_advancement` selects the state-advancement display wording while preserving the `Wrong or Mismatched Progress Code` sub-tag and persistence identity. The value `returned_to_active_development` identifies a compatible workflow return and does not create a developer correction observation. Escalation correction entries may include an additive `label`; older snapshots without either field fall back to the correction key.
 
 The current-review response adds runtime `notification_counts`; those counts are not persisted in snapshots. History detail adds `generated_at`, `prompt_version`, and `is_current_version`, and returns `cached: true`. The raw AI response is not stored separately; the normalized result is stored.
 
@@ -496,7 +497,7 @@ Common mistakes:
 
 ### Current cache
 
-- Valid 30 minutes for the same date, v18, and exact input hash.
+- Valid 30 minutes for the same date, v19, and exact input hash.
 - Force refresh bypasses lookup and stores a new successful snapshot.
 - A corrupt matching cache row is ignored and generation proceeds.
 
@@ -574,7 +575,7 @@ The agent reads TFS `SupplyPro.SPApplication.ExpectedDeliveryDate`, normalizes i
 | `STANDUP_REVIEW_EMAILS_ENABLED` | Explicit notification master switch; defaults to false. |
 | `STANDUP_NOTIFICATION_LEASE_MINUTES` | Time before an abandoned `sending` notification claim can be reclaimed; defaults to 15 minutes. |
 | `TEST_RECIPIENT` | Redirects every To/CC destination during mail testing; the ledger still records the logical recipient. |
-| Prompt version | Code constant `standup_review_v18`. |
+| Prompt version | Code constant `standup_review_v19`. |
 | Escalation policy | Code constant `standup_escalation_v1`; independent from prompt-only revisions. |
 | Batch size / concurrency | Code constants 25 / 2. |
 | Cache lifetime | Code constant 30 minutes. |

@@ -65,7 +65,7 @@ dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const BONUS_ELIGIBILITY_PROMPT_VERSION = 'bonus_v2_value_impact';
-const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v18';
+const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v19';
 const STANDUP_REVIEW_BATCH_SIZE = 25;
 const STANDUP_REVIEW_BATCH_CONCURRENCY = 2;
 const STANDUP_NOTIFICATION_LEASE_MINUTES = Math.max(
@@ -899,6 +899,21 @@ function standupIsBackwardMovement(ticket) {
     ['100', '200', '300'].includes(today);
 }
 
+function standupIsCompatibleActiveProgress(ticket, currentCode) {
+  const state = standupStateKey(ticket.state);
+  const family = standupCodeFamily(currentCode);
+  if (state === 'approved') return family === '100';
+  if (state === 'committed') return ['100', '200'].includes(family);
+  if (state === 'in development') return ['200', '300'].includes(family);
+  if (state === 're-opened') return family === '200';
+  return false;
+}
+
+function standupIsReturnToActiveDevelopment(ticket) {
+  return standupIsBackwardMovement(ticket) &&
+    standupIsCompatibleActiveProgress(ticket, ticket.today_code);
+}
+
 function standupNeedsStateAdvancement(ticket, currentCode) {
   const state = standupStateKey(ticket.state);
   const family = standupCodeFamily(currentCode);
@@ -1071,6 +1086,8 @@ export function normalizeStandupReviewResult(result, payload) {
     const ignoreIncompleteUpdate = isWorkflowHandoff500 ||
       isBranchCheckinTransition500;
     const isBackwardMovement = standupIsBackwardMovement(ticket);
+    const isReturnToActiveDevelopment =
+      standupIsReturnToActiveDevelopment(ticket);
     const isActiveStateAdvancementNeeded = standupNeedsStateAdvancement(
       ticket,
       ticket.today_code,
@@ -1097,9 +1114,11 @@ export function normalizeStandupReviewResult(result, payload) {
       ? STANDUP_STATE_ADVANCEMENT_ISSUE_TYPE
       : isStateCodeMismatch
         ? 'state_code_mismatch'
-        : isBackwardMovement
-          ? 'backward_movement'
-          : '';
+        : isReturnToActiveDevelopment
+          ? 'returned_to_active_development'
+          : isBackwardMovement
+            ? 'backward_movement'
+            : '';
     const deterministic = {
       isNoDailyUpdate: !ticket.has_today_update && requiresDailyUpdate,
       isMissingCode:
@@ -1111,6 +1130,7 @@ export function normalizeStandupReviewResult(result, payload) {
       isPersistentNoUpdate: false,
       isNoMovement: standupIsNoMovement(ticket),
       isBackwardMovement,
+      isReturnToActiveDevelopment,
       isStateAdvancementNeeded,
       isStateCodeMismatch,
       isReopenedCompletionWithoutNote,
@@ -1134,9 +1154,15 @@ export function normalizeStandupReviewResult(result, payload) {
       'Wrong or Mismatched Progress Code',
     );
 
-    // This correction is server-authoritative. Discard the model's version
-    // and re-add it below only when a deterministic progress-code rule matches.
-    tags = tags.filter((tag) => tag !== 'Wrong or Mismatched Progress Code');
+    // Progress-code corrections and workflow returns are server-authoritative.
+    // Discard the model's versions and re-add them only when deterministic
+    // progress-code rules match.
+    tags = tags.filter((tag) =>
+      ![
+        'Wrong or Mismatched Progress Code',
+        'Returned to Active Development',
+      ].includes(tag)
+    );
     if (isBranchCheckin) {
       tags = tags.filter((tag) => tag !== 'Ready for Release');
     }
@@ -1158,8 +1184,12 @@ export function normalizeStandupReviewResult(result, payload) {
       addStandupTag(tags, 'Persistent Missing Update');
     }
     if (deterministic.isNoMovement) addStandupTag(tags, 'No Movement');
+    if (deterministic.isReturnToActiveDevelopment) {
+      addStandupTag(tags, 'Returned to Active Development');
+    }
     if (
-      deterministic.isBackwardMovement ||
+      (deterministic.isBackwardMovement &&
+        !deterministic.isReturnToActiveDevelopment) ||
       deterministic.isStateAdvancementNeeded ||
       deterministic.isStateCodeMismatch
     ) {
@@ -1389,6 +1419,8 @@ export function normalizeStandupReviewResult(result, payload) {
       deterministicReason = 'Active ticket is missing a required daily update.';
     } else if (deterministic.isNoMovement) {
       deterministicReason = 'Progress code and notes did not show clear movement from the prior update.';
+    } else if (deterministic.isReturnToActiveDevelopment) {
+      deterministicReason = `Returned to Active Development: progress moved from ${standupCodeFamily(ticket.prev_code)}_xx to ${standupCodeFamily(ticket.today_code)}_xx and the current ${String(ticket.state || 'active')} TFS state supports the active-work code. Team Lead confirmation is needed for the return reason and forecast impact.`;
     } else if (
       deterministic.isBackwardMovement ||
       deterministic.isStateCodeMismatch
@@ -1401,6 +1433,7 @@ export function normalizeStandupReviewResult(result, payload) {
       : S(source.reason);
     const progressCodeReason = (
       deterministic.isBackwardMovement ||
+      deterministic.isReturnToActiveDevelopment ||
       deterministic.isStateAdvancementNeeded ||
       deterministic.isStateCodeMismatch
     ) ? deterministicReason : '';
@@ -1444,6 +1477,8 @@ export function normalizeStandupReviewResult(result, payload) {
     if (deterministic.isStateAdvancementNeeded) {
       deterministicAction = stateAdvancementAction ||
         STANDUP_STATE_ADVANCEMENT_ACTION;
+    } else if (deterministic.isReturnToActiveDevelopment) {
+      deterministicAction = 'Team Lead should confirm why the ticket returned to active development and whether scope, ownership, or Expected Delivery needs to change.';
     } else if (deterministic.isReopenedCompletionWithoutNote) {
       deterministicAction = 'Team Lead should confirm the correct workflow state and progress code before accepting the ticket as complete.';
     } else if (deterministic.isPersistentNoUpdate && isHighImpactBug) {
@@ -1464,13 +1499,19 @@ export function normalizeStandupReviewResult(result, payload) {
       : S(source.recommended_action);
     const progressCodeAction = (
       deterministic.isBackwardMovement ||
+      deterministic.isReturnToActiveDevelopment ||
       deterministic.isStateAdvancementNeeded ||
       deterministic.isStateCodeMismatch
     ) ? deterministicAction : '';
+    const combinedReturnAction =
+      deterministic.isReturnToActiveDevelopment && deliveryAction
+        ? `${deliveryAction} ${deterministicAction}`
+        : '';
     const recommendedAction =
       (isWorkflowExempt
         ? 'No developer follow-up is required unless QA or the workflow owner reports a new risk.'
-        : progressCodeAction || deliveryAction || deterministicAction ||
+        : combinedReturnAction || progressCodeAction || deliveryAction ||
+          deterministicAction ||
           (isBranchCheckinUpdateExempt ? '' : sourceRecommendedAction)) ||
       (isBranchCheckinUpdateExempt
         ? 'No developer follow-up is required unless Sandbox validation or the delivery forecast reports a new risk.'
@@ -1645,6 +1686,7 @@ export function normalizeStandupReviewResult(result, payload) {
 
     if (
       c.category === 'Needs Team Lead Clarification' ||
+      tags.includes('Returned to Active Development') ||
       tags.includes('Wrong or Mismatched Progress Code') ||
       tags.includes('Expected Delivery Missing') ||
       tags.includes('Reforecast Needs Rationale') ||
@@ -1667,6 +1709,8 @@ export function normalizeStandupReviewResult(result, payload) {
         whyTlNeeded = 'A Team Lead should confirm why Expected Delivery moved later before the new forecast is accepted.';
       } else if (tags.includes('Review Queue Risk')) {
         whyTlNeeded = 'A Team Lead should confirm the Code Review owner and whether reviewer wait time affects the forecast.';
+      } else if (tags.includes('Returned to Active Development')) {
+        whyTlNeeded = 'A Team Lead should confirm why work returned from review or handoff to active development and whether the forecast must change.';
       } else if (tags.includes('Wrong or Mismatched Progress Code')) {
         whyTlNeeded = 'A Team Lead should confirm the correct workflow state and progress code.';
       }
@@ -2034,7 +2078,7 @@ Work item state taxonomy (use the state field to cross-check progress codes and 
 - Re-Opened (Bug only): QA verification failed or issue recurred; returned to developer. Expect 600_xx, 700_xx, or 200_xx.
 - Done: Work is complete in TFS. Do not infer that the ticket was released to QA or production. No developer update expected; do NOT flag as Missing Update.
 
-State/code mismatch rules (flag with sub-tag "Wrong or Mismatched Progress Code" when applicable):
+State/code and workflow-return rules:
 - state=In Development or Code Review but code=500_xx: keep the correction key "Wrong or Mismatched Progress Code", but explain it as "TFS State May Need Advancement" because the completion/handoff code may require the TFS state to advance.
 - state=Branch Checkin and today's assigned-developer note explicitly reports that Sandbox passed: keep the same correction key, display "TFS State May Need Advancement", and recommend Resolved for a Bug or Ready for QA for a PBI.
 - state=Code Review but code=200_xx or lower: possible update lag; flag for Team Lead clarification.
@@ -2049,7 +2093,8 @@ Categories (assign exactly one per ticket):
 - "Needs PM Escalation": affects delivery, priority, release timing, cross-team coordination, or management visibility
 
 Sub-tags (optional, include only applicable ones): Delayed, Ready for QA, Sandbox Validation, Done, New,
-Pending Development, No Movement, Vague Update, Wrong or Mismatched Progress Code, Possible Risk,
+Pending Development, No Movement, Vague Update, Returned to Active Development,
+Wrong or Mismatched Progress Code, Possible Risk,
 Normal Progress, Awaiting Routine Review,
 Waiting for Access, Waiting for Data, Waiting for Decision, Waiting for Environment, Cross-Team Dependency,
 Release Risk, Schedule Risk, Delivery Risk, No Daily Update, Missing Progress Code, Missing Notes,
@@ -2071,7 +2116,9 @@ Prior-update comparison rules:
 - prev_code/prev_note/prev_date are the most recent update before today, not necessarily yesterday.
 - Compare today_code/today_note against prev_code/prev_note for every ticket that has a current developer update.
 - Same 200_xx or 300_xx code with no meaningful note change means sub-tag "No Movement".
-- Backward movement means only a prior 400_xx or 500_xx family moving to 100_xx, 200_xx, or 300_xx. It gets sub-tag "Wrong or Mismatched Progress Code" and category "Needs Team Lead Clarification" unless PM escalation applies.
+- Backward movement means only a prior 400_xx or 500_xx family moving to 100_xx, 200_xx, or 300_xx.
+- When the current TFS state supports the active code (Approved 100_xx; Committed 100_xx/200_xx; In Development 200_xx/300_xx; Re-Opened 200_xx), use sub-tag "Returned to Active Development" and Team Lead clarification. This is a workflow-return signal, not a developer correction.
+- When the current state does not support the active code, use sub-tag "Wrong or Mismatched Progress Code" and Team Lead clarification unless PM escalation applies.
 - Never treat 600_xx, 700_xx, or 800_xx moving to 100_xx, 200_xx, or 300_xx as backward movement by itself. A separate current state/code conflict may still require clarification.
 - has_today_update=false means sub-tag "No Daily Update" only when the current TFS state requires a developer update.
 
