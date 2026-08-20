@@ -4656,7 +4656,7 @@ function assignedIdentityParts(v) {
   };
 }
 
-app.get('/api/tickets', requireAuth, async (req, res) => {
+app.get('/api/tickets', requireAuth, requireExpectedDeliveryDateSchema, async (req, res) => {
   const {
     assignedTo,
     state,
@@ -4868,6 +4868,7 @@ app.get('/api/tickets', requireAuth, async (req, res) => {
         t.iteration_path as "iterationPath",
         t.changed_date   as "changedDate",
         t.state_change_date as "stateChangeDate",
+        t.expected_delivery_date::text as "expectedDeliveryDate",
         t.severity,
         t.tags,
         t.priority,
@@ -4912,6 +4913,7 @@ app.get('/api/tickets', requireAuth, async (req, res) => {
         t.iteration_path as "iterationPath",
         t.changed_date   as "changedDate",
         t.state_change_date as "stateChangeDate",
+        t.expected_delivery_date::text as "expectedDeliveryDate",
         t.severity,
         t.tags,
         t.priority,

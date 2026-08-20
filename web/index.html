@@ -1074,6 +1074,7 @@
             <th style="width:120px">Severity</th>
             <th style="width:60px">Priority</th>
             <th style="width:75px">Code</th>
+            <th style="width:125px">Expected Delivery</th>
             <th>Note</th>
             <th style="width:75px">Action</th>
             <th style="width:45px">Flag</th>
@@ -2821,7 +2822,7 @@
         tbody.innerHTML = "";
         for (var i = 0; i < 5; i++) {
           var tr = document.createElement('tr'); tr.className = 'skeleton';
-          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
+          tr.innerHTML = '<td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td>';
           tbody.appendChild(tr);
         }
         var url = new URL((API || location.origin) + "/api/tickets");
@@ -2859,7 +2860,7 @@
               var noTixMsg = items.length === 0
                 ? 'No active tickets in this sprint.'
                 : 'All your tickets are marked done \u2014 nothing left to work on today?';
-              noTixRow.innerHTML = '<td colspan="10" style="text-align:center;padding:16px">'
+              noTixRow.innerHTML = '<td colspan="11" style="text-align:center;padding:16px">'
                 + '<div class="help">' + noTixMsg + '</div>'
                 + (window.__lockedToday
                   ? '<div class="help" style="margin-top:6px">Status already recorded for today.</div>'
@@ -2912,6 +2913,7 @@
                 '<td>' + esc(t.severity || '—') + '</td>' +
                 '<td>' + priBadge + '</td>' +
                 '<td>' + esc(code || '—') + '</td>' +
+                '<td>' + esc(t.expectedDeliveryDate || '—') + '</td>' +
                 '<td>' + esc(note || '—') + '</td>' +
                 '<td>' + (
                   ((window.__role !== 'dev' && window.__role !== 'lead') || window.__lockedToday)
@@ -2933,7 +2935,7 @@
           .catch(function () {
             status.textContent = "Failed to load";
             status.classList.add('err');
-            tbody.innerHTML = '<tr><td colspan="10">Unable to load tickets. Check network or try again.</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="11">Unable to load tickets. Check network or try again.</td></tr>';
           })
       }
 
@@ -2985,7 +2987,7 @@
               closeNoTicketModal();
               var row = byId('noTicketRow');
               if (row) {
-                row.innerHTML = '<td colspan="10" style="text-align:center;padding:12px" class="help">No active tickets — status recorded for today.</td>';
+                row.innerHTML = '<td colspan="11" style="text-align:center;padding:12px" class="help">No active tickets — status recorded for today.</td>';
               }
               setStatus('loadStatus', 'Status recorded for today.', true);
               if (typeof checkLockStatus === 'function') checkLockStatus();
@@ -3363,7 +3365,7 @@
               if (row) {
                 var cells = row.getElementsByTagName('td');
                 if (cells[6]) renderCodeBadge(cells[6], code || '');
-                if (cells[7]) cells[7].textContent = note || '—';
+                if (cells[8]) cells[8].textContent = note || '—';
               } else {
                 if (typeof loadTickets === 'function') { loadTickets(); }
               }
@@ -6011,8 +6013,8 @@
         var type = cells[1] ? cells[1].textContent.trim() : '';
         var title = cells[2] ? cells[2].textContent.trim() : '';
         var state = cells[3] ? cells[3].textContent.trim() : '';
-        var lastCode = cells[5] ? cells[5].textContent.trim() : '';
-        var lastNote = cells[6] ? cells[6].textContent.trim() : '';
+        var lastCode = cells[6] ? cells[6].textContent.trim() : '';
+        var lastNote = cells[8] ? cells[8].textContent.trim() : '';
 
         // Optional: try to attach tags if present (your /api/tickets already returns t.tags)
         // We stashed the last loaded items in a weak map for convenience (fallback safe)
