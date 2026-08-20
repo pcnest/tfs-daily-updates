@@ -65,7 +65,7 @@ dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const BONUS_ELIGIBILITY_PROMPT_VERSION = 'bonus_v2_value_impact';
-const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v20';
+const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v21';
 const STANDUP_REVIEW_BATCH_SIZE = 25;
 const STANDUP_REVIEW_BATCH_CONCURRENCY = 2;
 const STANDUP_NOTIFICATION_LEASE_MINUTES = Math.max(
@@ -899,6 +899,42 @@ function standupHasMeaningfulNoteChange(ticket) {
   return !!todayNote && todayNote !== prevNote;
 }
 
+const STANDUP_CONCRETE_ACTIVITY_PATTERN =
+  /\b(?:address(?:ed|ing)?|analy[sz](?:e|ed|ing)|cod(?:e|ed|ing)|debug(?:ged|ging)?|fix(?:ed|ing)?|implement(?:ed|ing)?|investigat(?:e|ed|ing)|reproduc(?:e|ed|ing)|review(?:ed|ing)?|submit(?:ted|ting)?|test(?:ed|ing)?|validat(?:e|ed|ing))\b/;
+const STANDUP_CURRENT_ACTIVITY_PATTERN =
+  /\b(?:currently|continu(?:e|ed|ing)|in progress|now|resum(?:e|ed|ing)|today)\b/;
+const STANDUP_NEXT_ACTION_PATTERN =
+  /\b(?:continu(?:e|ing)|next|plan(?:ned|ning)?\s+to|resum(?:e|ing)|today|will)\b/;
+const STANDUP_PROGRESS_OUTCOME_PATTERN =
+  /\b(?:addressed|analy[sz]ed|completed|debugged|finished|fixed|found|identified|implemented|investigated|made progress|reproduced|reviewed|submitted|tested|validated)\b/;
+const STANDUP_NO_PROGRESS_PATTERN =
+  /\b(?:made no progress|no (?:meaningful )?(?:change|changes|progress)|nothing (?:changed|completed|progressed))\b/;
+const STANDUP_NO_PROGRESS_REASON_PATTERN =
+  /\b(?:because|blocked by|due to|prioriti[sz](?:e|ed|ing)|reassigned|since|waiting for|waiting on)\b/;
+
+function standupHasClearlySufficientUpdate(ticket) {
+  if (
+    !ticket.has_today_update ||
+    !standupNormText(ticket.today_code) ||
+    !standupNormText(ticket.today_note)
+  ) {
+    return false;
+  }
+
+  const note = standupNormText(ticket.today_note);
+  const hasConcreteActivity = STANDUP_CONCRETE_ACTIVITY_PATTERN.test(note);
+  if (!hasConcreteActivity) return false;
+
+  if (STANDUP_NO_PROGRESS_PATTERN.test(note)) {
+    return STANDUP_NO_PROGRESS_REASON_PATTERN.test(note) &&
+      STANDUP_NEXT_ACTION_PATTERN.test(note);
+  }
+
+  return STANDUP_CURRENT_ACTIVITY_PATTERN.test(note) ||
+    (STANDUP_PROGRESS_OUTCOME_PATTERN.test(note) &&
+      STANDUP_NEXT_ACTION_PATTERN.test(note));
+}
+
 function standupIsNoMovement(ticket) {
   if (!ticket.has_today_update) return false;
   const todayFamily = standupCodeFamily(ticket.today_code);
@@ -1174,12 +1210,14 @@ export function normalizeStandupReviewResult(result, payload) {
     const hadAiProgressCodeMismatch = tags.includes(
       'Wrong or Mismatched Progress Code',
     );
+    const hadAiVagueUpdate = tags.includes('Vague Update');
 
-    // Progress-code corrections and workflow returns are server-authoritative.
-    // Discard the model's versions and re-add them only when deterministic
-    // progress-code rules match.
+    // Progress-code corrections, workflow returns, and clearly sufficient
+    // update-quality cases are server-authoritative. Discard the model's
+    // versions and re-add them only when the corresponding policy permits it.
     tags = tags.filter((tag) =>
       ![
+        'Vague Update',
         'Wrong or Mismatched Progress Code',
         'Returned to Active Development',
       ].includes(tag)
@@ -1202,6 +1240,18 @@ export function normalizeStandupReviewResult(result, payload) {
     }
     if (deterministic.isMissingCode) addStandupTag(tags, 'Missing Progress Code');
     if (deterministic.isMissingNotes) addStandupTag(tags, 'Missing Notes');
+    const hasSpecificUpdateCorrection =
+      deterministic.isNoDailyUpdate ||
+      deterministic.isMissingCode ||
+      deterministic.isMissingNotes;
+    const isClearlySufficientUpdate =
+      standupHasClearlySufficientUpdate(ticket);
+    const retainAiVagueUpdate =
+      hadAiVagueUpdate &&
+      !isUpdateExempt &&
+      !hasSpecificUpdateCorrection &&
+      !isClearlySufficientUpdate;
+    if (retainAiVagueUpdate) addStandupTag(tags, 'Vague Update');
     if (deterministic.isPersistentNoUpdate && isHighImpactBug) {
       addStandupTag(tags, 'Persistent Missing Update');
     }
@@ -1275,8 +1325,15 @@ export function normalizeStandupReviewResult(result, payload) {
       hadAiProgressCodeMismatch &&
       !progressCodeIssueType &&
       !tags.some((tag) => !benignTags.has(tag));
+    const aiVagueWasOnlyActionableEvidence =
+      hadAiVagueUpdate &&
+      !retainAiVagueUpdate &&
+      !tags.some((tag) => !benignTags.has(tag));
+    const removedAiConcernWasOnlyActionableEvidence =
+      aiMismatchWasOnlyActionableEvidence ||
+      aiVagueWasOnlyActionableEvidence;
     if (
-      aiMismatchWasOnlyActionableEvidence &&
+      removedAiConcernWasOnlyActionableEvidence &&
       category === 'Needs Team Lead Clarification'
     ) {
       category = 'On Track';
@@ -1291,6 +1348,8 @@ export function normalizeStandupReviewResult(result, payload) {
       if (deterministic.isActionableNoUpdate) {
         category = 'Missing Update';
       } else if (deterministic.isIncompleteUpdate) {
+        category = 'Needs Team Lead Clarification';
+      } else if (retainAiVagueUpdate && category === 'On Track') {
         category = 'Needs Team Lead Clarification';
       } else if (
         standupCodeFamily(ticket.today_code) === '800' &&
@@ -1454,7 +1513,7 @@ export function normalizeStandupReviewResult(result, payload) {
       deterministicReason = 'Progress code does not align with the prior update or current TFS state.';
     }
 
-    const sourceReason = aiMismatchWasOnlyActionableEvidence
+    const sourceReason = removedAiConcernWasOnlyActionableEvidence
       ? ''
       : S(source.reason);
     const progressCodeReason = (
@@ -1520,7 +1579,7 @@ export function normalizeStandupReviewResult(result, payload) {
     ) {
       deterministicAction = 'Team Lead should confirm the missing progress code or status detail before standup.';
     }
-    const sourceRecommendedAction = aiMismatchWasOnlyActionableEvidence
+    const sourceRecommendedAction = removedAiConcernWasOnlyActionableEvidence
       ? ''
       : S(source.recommended_action);
     const progressCodeAction = (
@@ -1561,6 +1620,7 @@ export function normalizeStandupReviewResult(result, payload) {
       'Missing Progress Code',
       'No Daily Update',
       'No Movement',
+      'Vague Update',
       'Wrong or Mismatched Progress Code',
       'Possible Risk',
     ];
@@ -2134,6 +2194,18 @@ Release Risk, Schedule Risk, Delivery Risk, No Daily Update, Missing Progress Co
 Critical Severity, High Severity, Persistent Missing Update, Expected Delivery Missing, Delivery Due Soon,
 Delivery Due Today, Expected Delivery Overdue, Expected Delivery Reforecasted, Reforecast Needs Rationale,
 and Review Queue Risk.
+
+Update-quality rules:
+- Evaluate today_note together with the ticket title, state, and progress code. The title supplies the work-item scope; the developer does not need to repeat the feature, module, or defect name in the note.
+- A usable update states the current status or outcome and the next executable work activity. A concrete ongoing activity such as currently debugging, testing, implementing, investigating, validating, reviewing, reproducing, fixing, or submitting can satisfy the activity requirement.
+- When the note reports no progress, delay, or a blocker, it must also state the reason, dependency, or constraint and the next intended activity.
+- Do not require an exact test case, debugging hypothesis, code location, or implementation detail unless it is necessary to understand a blocker, requested decision, or workflow handoff.
+- Use "Vague Update" only when required update information is absent after considering the ticket context. Do not use it merely because more detail could be helpful.
+- "No progress was made because build-release tickets were prioritized. Will continue debugging and testing today." is sufficient when attached to a specific ticket.
+- "Currently testing the bug fixes in the local environment." is sufficient ongoing-work detail when attached to a specific ticket.
+- "Working on it.", "No progress yesterday.", and "Will continue." are vague because they omit a usable activity, a required no-progress reason, or both.
+- Evaluate update quality independently from priority, severity, Expected Delivery, and delivery status. An overdue forecast does not make an otherwise usable note vague.
+- Repeated text belongs to the separate No Movement assessment; repetition alone does not make an update vague.
 
 Validation rules:
 1. Use only provided data. Do not invent facts.

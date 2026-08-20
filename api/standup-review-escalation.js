@@ -1,4 +1,4 @@
-export const STANDUP_ESCALATION_POLICY_VERSION = 'standup_escalation_v1';
+export const STANDUP_ESCALATION_POLICY_VERSION = 'standup_escalation_v2';
 
 export const STANDUP_STATE_ADVANCEMENT_ISSUE_TYPE =
   'tfs_state_may_need_advancement';
@@ -11,7 +11,7 @@ export const STANDUP_CORRECTION_ACTIONS = Object.freeze([
   ['No Daily Update', "Submit today's progress update with the current code, completed work, blocker status, and next step."],
   ['Missing Progress Code', 'Select the progress code that matches the work currently being performed.'],
   ['Missing Notes', 'Add a concise note describing progress, blockers, and the next step.'],
-  ['Vague Update', 'Clarify what changed, what remains, and the next concrete step.'],
+  ['Vague Update', 'Clarify the current status and next executable step. When reporting no progress, delay, or a blocker, include the reason.'],
   ['Wrong or Mismatched Progress Code', 'Align the progress code with the current TFS workflow state, or ask your lead to confirm the correct state.'],
   ['Expected Delivery Missing', 'Set the Expected Delivery date in TFS for development completion.'],
   ['Reforecast Needs Rationale', "Update today's note with the reason for the later forecast and its delivery impact."],
