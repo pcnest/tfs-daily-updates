@@ -6147,9 +6147,9 @@ function parseRangeFilters(req) {
 
 const RANGE_SQL = `
   SELECT
-    timezone($3, u.at)::date AS "date",
+    u.at::date        AS "date",
     u.ticket_id       AS "ticketId",
-    ${historicalTicketSelectSql(['type', 'title', 'severity', 'state'])},
+    ${historicalTicketSelectSql()},
     u.code,
     u.risk_level      AS "riskLevel",
     u.note
@@ -6161,7 +6161,7 @@ const RANGE_SQL = `
       OR lower(u.email) = $4
       OR split_part(lower(u.email),'@',1) = $5
     )
-  ORDER BY timezone($3, u.at)::date DESC, u.ticket_id
+  ORDER BY u.at::date DESC, u.ticket_id
 `;
 
 async function selectRangeRows({ from, to, devEmail, devLocal }) {
