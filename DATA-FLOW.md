@@ -133,6 +133,8 @@ deployment; existing forecast history is not backfilled.
 - PM role can view all users' updates; dev role sees only their own
 - New progress rows store an immutable ticket metadata snapshot in the same insert operation
 - Historical range and snapshot-analysis reports use the stored snapshot when `ticket_snapshot_at` is present
+- Historical range JSON/TSV reports return the latest update per ticket and stored local `date`; older same-day rows remain available in `progress_updates`
+- Range reports correct a captured ticket state only when the synchronized TFS state became effective before the update timestamp; later state changes do not rewrite earlier report history
 - Legacy rows without `ticket_snapshot_at` temporarily fall back to the current `tickets` values until Phase 2 backfill
 - Live ticket views continue to use the current `tickets` row
 

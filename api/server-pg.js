@@ -24,6 +24,7 @@ import {
   standupReviewInputHash,
 } from './standup-review-reliability.js';
 import {
+  PROGRESS_RANGE_SQL,
   PROGRESS_UPDATE_SNAPSHOT_SCHEMA_SQL,
   PROGRESS_UPDATE_WITH_SNAPSHOT_INSERT_SQL,
   historicalTicketSelectSql,
@@ -6145,28 +6146,14 @@ function parseRangeFilters(req) {
   return { from, to, devEmail, devLocal, devFilter };
 }
 
-const RANGE_SQL = `
-  SELECT
-    u.at::date        AS "date",
-    u.ticket_id       AS "ticketId",
-    ${historicalTicketSelectSql()},
-    u.code,
-    u.risk_level      AS "riskLevel",
-    u.note
-  FROM progress_updates u
-  JOIN tickets t ON t.id = u.ticket_id
-  WHERE timezone($3, u.at)::date BETWEEN $1::date AND $2::date
-    AND (
-      ($4::text IS NULL AND $5::text IS NULL)
-      OR lower(u.email) = $4
-      OR split_part(lower(u.email),'@',1) = $5
-    )
-  ORDER BY u.at::date DESC, u.ticket_id
-`;
-
 async function selectRangeRows({ from, to, devEmail, devLocal }) {
   await ensureProgressUpdateSnapshotSchema();
-  const r = await pool.query(RANGE_SQL, [from, to, APP_TZ, devEmail, devLocal]);
+  const r = await pool.query(PROGRESS_RANGE_SQL, [
+    from,
+    to,
+    devEmail,
+    devLocal,
+  ]);
   return r.rows;
 }
 
