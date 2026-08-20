@@ -1,7 +1,16 @@
 const SNAPSHOT_FIELDS = Object.freeze({
   type: { snapshot: 'ticket_type', current: 'type' },
   title: { snapshot: 'ticket_title', current: 'title' },
-  state: { snapshot: 'ticket_state', current: 'state' },
+  // state also tracks its own change-date so a snapshot taken before a later
+  // TFS state change (e.g. dev updates before the sync agent runs) can be detected as stale.
+  state: {
+    snapshot: 'ticket_state',
+    current: 'state',
+    changeDate: {
+      snapshot: 'ticket_state_change_date',
+      current: 'state_change_date',
+    },
+  },
   severity: { snapshot: 'ticket_severity', current: 'severity' },
 });
 
@@ -44,7 +53,8 @@ export function historicalTicketFieldSql(
   { updateAlias = 'u', ticketAlias = 't', outputAlias = field } = {},
 ) {
   const columns = SNAPSHOT_FIELDS[field];
-  if (!columns) throw new Error(`unsupported historical ticket field: ${field}`);
+  if (!columns)
+    throw new Error(`unsupported historical ticket field: ${field}`);
 
   const update = sqlIdentifier(updateAlias, 'update alias');
   const ticket = sqlIdentifier(ticketAlias, 'ticket alias');
@@ -52,6 +62,11 @@ export function historicalTicketFieldSql(
 
   // The marker distinguishes a deliberately captured null (for example, a PBI
   // with no severity) from a legacy row that has never been snapshotted.
+  if (columns.changeDate) {
+    // Only trust the snapshot while its captured change-date still matches the
+    // ticket's current one; otherwise TFS changed it again since the snapshot.
+    return `case when ${update}.ticket_snapshot_at is not null and ${ticket}.${columns.changeDate.current} is not distinct from ${update}.${columns.changeDate.snapshot} then ${update}.${columns.snapshot} else ${ticket}.${columns.current} end as "${output}"`;
+  }
   return `case when ${update}.ticket_snapshot_at is not null then ${update}.${columns.snapshot} else ${ticket}.${columns.current} end as "${output}"`;
 }
 

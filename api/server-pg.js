@@ -740,13 +740,9 @@ function standupStateKey(value) {
 }
 
 function standupIsWorkflowHandoff(ticket) {
-  return [
-    'shelved',
-    'resolved',
-    'ready for qa',
-    'qa testing',
-    'done',
-  ].includes(standupStateKey(ticket.state));
+  return ['shelved', 'resolved', 'ready for qa', 'qa testing', 'done'].includes(
+    standupStateKey(ticket.state),
+  );
 }
 
 function standupIsBranchCheckinTransitionDay(ticket) {
@@ -848,25 +844,29 @@ function standupExemptWorkflowDefault(ticket) {
   if (['resolved', 'ready for qa', 'qa testing'].includes(state)) {
     return {
       tag: 'Ready for QA',
-      reason: 'Developer work is complete and the ticket is in the QA workflow.',
+      reason:
+        'Developer work is complete and the ticket is in the QA workflow.',
     };
   }
   if (state === 'branch checkin') {
     return {
       tag: 'Sandbox Validation',
-      reason: 'The changes are checked in and awaiting or undergoing Sandbox validation; additional developer work may still be required.',
+      reason:
+        'The changes are checked in and awaiting or undergoing Sandbox validation; additional developer work may still be required.',
     };
   }
   if (state === 'shelved') {
     return {
       tag: 'Awaiting Routine Review',
-      reason: 'No developer update is required while the ticket remains Shelved.',
+      reason:
+        'No developer update is required while the ticket remains Shelved.',
     };
   }
   if (state === 'on-hold') {
     return {
       tag: 'On Hold',
-      reason: 'Development is paused while the ticket remains On-Hold; no daily developer update or active delivery forecast is required.',
+      reason:
+        'Development is paused while the ticket remains On-Hold; no daily developer update or active delivery forecast is required.',
     };
   }
   if (state === 'new') {
@@ -884,7 +884,8 @@ function standupExemptWorkflowDefault(ticket) {
   if (state === 'done') {
     return {
       tag: 'Done',
-      reason: 'The ticket is Done in TFS; no QA or production release status is inferred.',
+      reason:
+        'The ticket is Done in TFS; no QA or production release status is inferred.',
     };
   }
   return {
@@ -926,13 +927,17 @@ function standupHasClearlySufficientUpdate(ticket) {
   if (!hasConcreteActivity) return false;
 
   if (STANDUP_NO_PROGRESS_PATTERN.test(note)) {
-    return STANDUP_NO_PROGRESS_REASON_PATTERN.test(note) &&
-      STANDUP_NEXT_ACTION_PATTERN.test(note);
+    return (
+      STANDUP_NO_PROGRESS_REASON_PATTERN.test(note) &&
+      STANDUP_NEXT_ACTION_PATTERN.test(note)
+    );
   }
 
-  return STANDUP_CURRENT_ACTIVITY_PATTERN.test(note) ||
+  return (
+    STANDUP_CURRENT_ACTIVITY_PATTERN.test(note) ||
     (STANDUP_PROGRESS_OUTCOME_PATTERN.test(note) &&
-      STANDUP_NEXT_ACTION_PATTERN.test(note));
+      STANDUP_NEXT_ACTION_PATTERN.test(note))
+  );
 }
 
 function standupIsNoMovement(ticket) {
@@ -942,15 +947,16 @@ function standupIsNoMovement(ticket) {
   if (!['200', '300'].includes(todayFamily) || todayFamily !== prevFamily) {
     return false;
   }
-  return String(ticket.today_code || '') === String(ticket.prev_code || '') &&
-    !standupHasMeaningfulNoteChange(ticket);
+  return (
+    String(ticket.today_code || '') === String(ticket.prev_code || '') &&
+    !standupHasMeaningfulNoteChange(ticket)
+  );
 }
 
 function standupIsBackwardMovement(ticket) {
   const today = standupCodeFamily(ticket.today_code);
   const prev = standupCodeFamily(ticket.prev_code);
-  return ['400', '500'].includes(prev) &&
-    ['100', '200', '300'].includes(today);
+  return ['400', '500'].includes(prev) && ['100', '200', '300'].includes(today);
 }
 
 function standupIsCompatibleActiveProgress(ticket, currentCode) {
@@ -964,8 +970,10 @@ function standupIsCompatibleActiveProgress(ticket, currentCode) {
 }
 
 function standupIsReturnToActiveDevelopment(ticket) {
-  return standupIsBackwardMovement(ticket) &&
-    standupIsCompatibleActiveProgress(ticket, ticket.today_code);
+  return (
+    standupIsBackwardMovement(ticket) &&
+    standupIsCompatibleActiveProgress(ticket, ticket.today_code)
+  );
 }
 
 function standupNeedsStateAdvancement(ticket, currentCode) {
@@ -998,7 +1006,9 @@ function standupHasStateCodeMismatch(ticket, currentCode) {
 function standupDeliveryRisk(classification, ticket, deterministic) {
   const priority = Number(ticket.priority);
   const severity = standupSeverity(ticket);
-  const tags = Array.isArray(classification.sub_tags) ? classification.sub_tags : [];
+  const tags = Array.isArray(classification.sub_tags)
+    ? classification.sub_tags
+    : [];
   if (classification.delivery_date_status === 'overdue') {
     return `High - Expected Delivery ${classification.expected_delivery_date} has passed while development remains incomplete.`;
   }
@@ -1032,7 +1042,8 @@ function standupDeliveryRisk(classification, ticket, deterministic) {
   ) {
     return 'High - P1/P2 item has a blocker, missing update, or no movement.';
   }
-  if (tags.includes('Release Risk')) return 'High - Release timing may be affected.';
+  if (tags.includes('Release Risk'))
+    return 'High - Release timing may be affected.';
   if (tags.includes('Delayed') || tags.includes('Cross-Team Dependency')) {
     return 'Medium - Delivery depends on follow-up outside normal progress.';
   }
@@ -1042,7 +1053,9 @@ function makeStandupException(classification) {
   return {
     ticket_id: String(classification.ticket_id || ''),
     developer: String(classification.developer || ''),
-    issue: String(classification.reason || classification.update_summary || 'Needs review.'),
+    issue: String(
+      classification.reason || classification.update_summary || 'Needs review.',
+    ),
   };
 }
 
@@ -1073,14 +1086,21 @@ function buildStandupSummary(classifications, validation) {
       : '';
   const risks = attentionItems.length
     ? `Top review items: ${attentionItems
-      .map((item) => `#${item.ticket_id} (${item.category}): ${String(item.reason || 'Needs review').replace(/[.!?]+$/, '')}`)
-      .join('; ')}.`
+        .map(
+          (item) =>
+            `#${item.ticket_id} (${item.category}): ${String(item.reason || 'Needs review').replace(/[.!?]+$/, '')}`,
+        )
+        .join('; ')}.`
     : 'No blocker, missing-update, Team Lead clarification, or PM escalation items were identified.';
-  return [health, counts, visibility, deliveryVisibility, risks].filter(Boolean).join(' ');
+  return [health, counts, visibility, deliveryVisibility, risks]
+    .filter(Boolean)
+    .join(' ');
 }
 export function normalizeStandupReviewResult(result, payload) {
   const byTicket = new Map();
-  for (const c of Array.isArray(result.classifications) ? result.classifications : []) {
+  for (const c of Array.isArray(result.classifications)
+    ? result.classifications
+    : []) {
     const id = String(c?.ticket_id || '');
     if (id && !byTicket.has(id)) byTicket.set(id, c);
   }
@@ -1103,10 +1123,8 @@ export function normalizeStandupReviewResult(result, payload) {
       reforecast_direction: delivery.reforecastDirection,
     });
     const sandboxAssessment = validateStandupSandboxAssessment(source, ticket);
-    const hasExplicitCurrentDeliveryRisk = standupHasExplicitCurrentDeliveryRisk(
-      source,
-      ticket,
-    );
+    const hasExplicitCurrentDeliveryRisk =
+      standupHasExplicitCurrentDeliveryRisk(source, ticket);
     const isOnHold = standupStateKey(ticket.state) === 'on-hold';
     const isManagedOnHold = isOnHold && !hasExplicitCurrentDeliveryRisk;
     const isBranchCheckin = standupStateKey(ticket.state) === 'branch checkin';
@@ -1129,19 +1147,23 @@ export function normalizeStandupReviewResult(result, payload) {
         sandboxAssessment.status,
       ) &&
       !hasExplicitCurrentDeliveryRisk;
-    const isExemptWithoutToday = !requiresDailyUpdate && !ticket.has_today_update;
+    const isExemptWithoutToday =
+      !requiresDailyUpdate && !ticket.has_today_update;
     const isBranchCheckinNoUpdateGrace =
-      isBranchCheckin && isBranchCheckinTransitionDay &&
+      isBranchCheckin &&
+      isBranchCheckinTransitionDay &&
       !ticket.has_today_update;
-    const isWorkflowExempt = isManagedOnHold ||
+    const isWorkflowExempt =
+      isManagedOnHold ||
       (isExemptWithoutToday && !isBranchCheckin) ||
       isWorkflowHandoff500;
-    const isBranchCheckinUpdateExempt = isBranchCheckinNoUpdateGrace ||
+    const isBranchCheckinUpdateExempt =
+      isBranchCheckinNoUpdateGrace ||
       isBranchCheckinTransition500 ||
       isBranchCheckinRoutine500;
     const isUpdateExempt = isWorkflowExempt || isBranchCheckinUpdateExempt;
-    const ignoreIncompleteUpdate = isManagedOnHold || isWorkflowHandoff500 ||
-      isBranchCheckinTransition500;
+    const ignoreIncompleteUpdate =
+      isManagedOnHold || isWorkflowHandoff500 || isBranchCheckinTransition500;
     const isBackwardMovement = standupIsBackwardMovement(ticket);
     const isReturnToActiveDevelopment =
       standupIsReturnToActiveDevelopment(ticket);
@@ -1151,8 +1173,8 @@ export function normalizeStandupReviewResult(result, payload) {
     );
     const isSandboxStateAdvancementNeeded =
       isBranchCheckin && sandboxAssessment.status === 'Passed';
-    const isStateAdvancementNeeded = isActiveStateAdvancementNeeded ||
-      isSandboxStateAdvancementNeeded;
+    const isStateAdvancementNeeded =
+      isActiveStateAdvancementNeeded || isSandboxStateAdvancementNeeded;
     const stateAdvancementTarget = isSandboxStateAdvancementNeeded
       ? standupStateAdvancementTarget(ticket)
       : '';
@@ -1179,9 +1201,13 @@ export function normalizeStandupReviewResult(result, payload) {
     const deterministic = {
       isNoDailyUpdate: !ticket.has_today_update && requiresDailyUpdate,
       isMissingCode:
-        !!ticket.has_today_update && !S(ticket.today_code) && !ignoreIncompleteUpdate,
+        !!ticket.has_today_update &&
+        !S(ticket.today_code) &&
+        !ignoreIncompleteUpdate,
       isMissingNotes:
-        !!ticket.has_today_update && !S(ticket.today_note) && !ignoreIncompleteUpdate,
+        !!ticket.has_today_update &&
+        !S(ticket.today_note) &&
+        !ignoreIncompleteUpdate,
       isIncompleteUpdate: false,
       isActionableNoUpdate: false,
       isPersistentNoUpdate: false,
@@ -1215,12 +1241,13 @@ export function normalizeStandupReviewResult(result, payload) {
     // Progress-code corrections, workflow returns, and clearly sufficient
     // update-quality cases are server-authoritative. Discard the model's
     // versions and re-add them only when the corresponding policy permits it.
-    tags = tags.filter((tag) =>
-      ![
-        'Vague Update',
-        'Wrong or Mismatched Progress Code',
-        'Returned to Active Development',
-      ].includes(tag)
+    tags = tags.filter(
+      (tag) =>
+        ![
+          'Vague Update',
+          'Wrong or Mismatched Progress Code',
+          'Returned to Active Development',
+        ].includes(tag),
     );
     if (isBranchCheckin) {
       tags = tags.filter((tag) => tag !== 'Ready for Release');
@@ -1238,14 +1265,14 @@ export function normalizeStandupReviewResult(result, payload) {
     if (deterministic.isActionableNoUpdate) {
       addStandupTag(tags, 'No Daily Update');
     }
-    if (deterministic.isMissingCode) addStandupTag(tags, 'Missing Progress Code');
+    if (deterministic.isMissingCode)
+      addStandupTag(tags, 'Missing Progress Code');
     if (deterministic.isMissingNotes) addStandupTag(tags, 'Missing Notes');
     const hasSpecificUpdateCorrection =
       deterministic.isNoDailyUpdate ||
       deterministic.isMissingCode ||
       deterministic.isMissingNotes;
-    const isClearlySufficientUpdate =
-      standupHasClearlySufficientUpdate(ticket);
+    const isClearlySufficientUpdate = standupHasClearlySufficientUpdate(ticket);
     const retainAiVagueUpdate =
       hadAiVagueUpdate &&
       !isUpdateExempt &&
@@ -1267,10 +1294,7 @@ export function normalizeStandupReviewResult(result, payload) {
     ) {
       addStandupTag(tags, 'Wrong or Mismatched Progress Code');
     }
-    if (
-      standupCodeFamily(ticket.today_code) === '800' &&
-      !isManagedOnHold
-    ) {
+    if (standupCodeFamily(ticket.today_code) === '800' && !isManagedOnHold) {
       addStandupTag(tags, 'Delayed');
     }
     if (!delivery.developmentComplete) {
@@ -1330,8 +1354,7 @@ export function normalizeStandupReviewResult(result, payload) {
       !retainAiVagueUpdate &&
       !tags.some((tag) => !benignTags.has(tag));
     const removedAiConcernWasOnlyActionableEvidence =
-      aiMismatchWasOnlyActionableEvidence ||
-      aiVagueWasOnlyActionableEvidence;
+      aiMismatchWasOnlyActionableEvidence || aiVagueWasOnlyActionableEvidence;
     if (
       removedAiConcernWasOnlyActionableEvidence &&
       category === 'Needs Team Lead Clarification'
@@ -1402,8 +1425,7 @@ export function normalizeStandupReviewResult(result, payload) {
         deterministic.isActionableNoUpdate ||
         deterministic.isNoMovement;
       const nearTermDelivery =
-        delivery.status === 'due_soon' ||
-        delivery.status === 'due_today';
+        delivery.status === 'due_soon' || delivery.status === 'due_today';
 
       if (!delivery.developmentComplete) {
         if (
@@ -1461,16 +1483,18 @@ export function normalizeStandupReviewResult(result, payload) {
     ) {
       deliveryReason = `Expected Delivery ${delivery.expectedDeliveryDate} has passed while the ticket remains in Code Review; Team Lead review is needed to confirm review ownership.`;
     } else if (delivery.status === 'overdue') {
-      deliveryReason = category === 'Needs PM Escalation'
-        ? `Expected Delivery ${delivery.expectedDeliveryDate} has passed and current evidence requires PM visibility or reforecasting.`
-        : `Expected Delivery ${delivery.expectedDeliveryDate} has passed; the developer's current forecast needs Team Lead clarification.`;
+      deliveryReason =
+        category === 'Needs PM Escalation'
+          ? `Expected Delivery ${delivery.expectedDeliveryDate} has passed and current evidence requires PM visibility or reforecasting.`
+          : `Expected Delivery ${delivery.expectedDeliveryDate} has passed; the developer's current forecast needs Team Lead clarification.`;
     } else if (
       ['due_soon', 'due_today'].includes(delivery.status) &&
       category === 'Needs PM Escalation'
     ) {
       deliveryReason = `Expected Delivery ${delivery.expectedDeliveryDate} is near and the current blocker, missing update, or lack of movement puts the forecast at risk.`;
     } else if (delivery.status === 'missing_required') {
-      deliveryReason = 'Expected Delivery is required for this development stage but is missing.';
+      deliveryReason =
+        'Expected Delivery is required for this development stage but is missing.';
     } else if (
       delivery.reforecastDirection === 'later' &&
       reforecastAssessment.status !== 'Supported'
@@ -1484,7 +1508,8 @@ export function normalizeStandupReviewResult(result, payload) {
     } else if (deterministic.isStateAdvancementNeeded) {
       deterministicReason = `${STANDUP_STATE_ADVANCEMENT_LABEL}: the 500_xx progress code indicates development completion or handoff, but the ticket remains in ${String(ticket.state || 'an active state')}.`;
     } else if (deterministic.isReopenedCompletionWithoutNote) {
-      deterministicReason = 'Progress code does not align with the current Re-Opened TFS state without a supporting same-day note.';
+      deterministicReason =
+        'Progress code does not align with the current Re-Opened TFS state without a supporting same-day note.';
     } else if (deterministic.isPersistentNoUpdate && isHighImpactBug) {
       deterministicReason = `${severity === 'critical' ? 'Critical' : 'High'} severity Bug has no update for two consecutive working days.`;
     } else if (
@@ -1497,32 +1522,37 @@ export function normalizeStandupReviewResult(result, payload) {
       deterministic.isIncompleteUpdate &&
       category === 'Needs Team Lead Clarification'
     ) {
-      deterministicReason = 'Today\'s submitted update is incomplete and needs Team Lead clarification.';
+      deterministicReason =
+        "Today's submitted update is incomplete and needs Team Lead clarification.";
     } else if (deterministic.isMissingUpdate && isHighPriority) {
       deterministicReason = 'P1/P2 ticket is missing a usable current update.';
     } else if (deterministic.isActionableNoUpdate) {
       deterministicReason = 'Active ticket is missing a required daily update.';
     } else if (deterministic.isNoMovement) {
-      deterministicReason = 'Progress code and notes did not show clear movement from the prior update.';
+      deterministicReason =
+        'Progress code and notes did not show clear movement from the prior update.';
     } else if (deterministic.isReturnToActiveDevelopment) {
       deterministicReason = `Returned to Active Development: progress moved from ${standupCodeFamily(ticket.prev_code)}_xx to ${standupCodeFamily(ticket.today_code)}_xx and the current ${String(ticket.state || 'active')} TFS state supports the active-work code. Team Lead confirmation is needed for the return reason and forecast impact.`;
     } else if (
       deterministic.isBackwardMovement ||
       deterministic.isStateCodeMismatch
     ) {
-      deterministicReason = 'Progress code does not align with the prior update or current TFS state.';
+      deterministicReason =
+        'Progress code does not align with the prior update or current TFS state.';
     }
 
     const sourceReason = removedAiConcernWasOnlyActionableEvidence
       ? ''
       : S(source.reason);
-    const progressCodeReason = (
+    const progressCodeReason =
       deterministic.isBackwardMovement ||
       deterministic.isReturnToActiveDevelopment ||
       deterministic.isStateAdvancementNeeded ||
       deterministic.isStateCodeMismatch
-    ) ? deterministicReason : '';
-    const reason = (isWorkflowExempt ? workflowDefault?.reason : '') ||
+        ? deterministicReason
+        : '';
+    const reason =
+      (isWorkflowExempt ? workflowDefault?.reason : '') ||
       progressCodeReason ||
       deliveryReason ||
       deterministicReason ||
@@ -1537,67 +1567,79 @@ export function normalizeStandupReviewResult(result, payload) {
       delivery.isCodeReview &&
       !delivery.developerRework
     ) {
-      deliveryAction = 'Team Lead should confirm the review owner and whether the development-complete forecast needs revision.';
+      deliveryAction =
+        'Team Lead should confirm the review owner and whether the development-complete forecast needs revision.';
     } else if (
       delivery.status === 'overdue' &&
       category === 'Needs PM Escalation'
     ) {
       deliveryAction = `PM should confirm the owner, delivery impact, and a revised development-complete date for ${delivery.expectedDeliveryDate}.`;
     } else if (delivery.status === 'overdue') {
-      deliveryAction = 'Team Lead should obtain a current development-complete estimate before standup.';
+      deliveryAction =
+        'Team Lead should obtain a current development-complete estimate before standup.';
     } else if (delivery.status === 'missing_required') {
-      deliveryAction = category === 'Needs PM Escalation'
-        ? 'PM should confirm current delivery risk and have the Team Lead obtain the required Expected Delivery date.'
-        : 'Team Lead should have the developer set the required Expected Delivery date in TFS.';
+      deliveryAction =
+        category === 'Needs PM Escalation'
+          ? 'PM should confirm current delivery risk and have the Team Lead obtain the required Expected Delivery date.'
+          : 'Team Lead should have the developer set the required Expected Delivery date in TFS.';
     } else if (
       delivery.reforecastDirection === 'later' &&
       reforecastAssessment.status !== 'Supported'
     ) {
-      deliveryAction = category === 'Needs PM Escalation'
-        ? 'PM should address the underlying delivery risk and have the Team Lead confirm the later forecast rationale.'
-        : 'Team Lead should ask what changed and confirm why the later date is now the best estimate.';
+      deliveryAction =
+        category === 'Needs PM Escalation'
+          ? 'PM should address the underlying delivery risk and have the Team Lead confirm the later forecast rationale.'
+          : 'Team Lead should ask what changed and confirm why the later date is now the best estimate.';
     }
 
     let deterministicAction = '';
     if (deterministic.isStateAdvancementNeeded) {
-      deterministicAction = stateAdvancementAction ||
-        STANDUP_STATE_ADVANCEMENT_ACTION;
+      deterministicAction =
+        stateAdvancementAction || STANDUP_STATE_ADVANCEMENT_ACTION;
     } else if (deterministic.isReturnToActiveDevelopment) {
-      deterministicAction = 'Team Lead should confirm why the ticket returned to active development and whether scope, ownership, or Expected Delivery needs to change.';
+      deterministicAction =
+        'Team Lead should confirm why the ticket returned to active development and whether scope, ownership, or Expected Delivery needs to change.';
     } else if (deterministic.isReopenedCompletionWithoutNote) {
-      deterministicAction = 'Team Lead should confirm the correct workflow state and progress code before accepting the ticket as complete.';
+      deterministicAction =
+        'Team Lead should confirm the correct workflow state and progress code before accepting the ticket as complete.';
     } else if (deterministic.isPersistentNoUpdate && isHighImpactBug) {
-      deterministicAction = 'PM should confirm the owner, current status, and delivery impact before standup.';
+      deterministicAction =
+        'PM should confirm the owner, current status, and delivery impact before standup.';
     } else if (
       category === 'Needs Team Lead Clarification' &&
       deterministic.isActionableNoUpdate
     ) {
-      deterministicAction = 'Team Lead should confirm ownership and obtain a usable update before the next working-day review.';
+      deterministicAction =
+        'Team Lead should confirm ownership and obtain a usable update before the next working-day review.';
     } else if (
       category === 'Needs Team Lead Clarification' &&
       deterministic.isIncompleteUpdate
     ) {
-      deterministicAction = 'Team Lead should confirm the missing progress code or status detail before standup.';
+      deterministicAction =
+        'Team Lead should confirm the missing progress code or status detail before standup.';
     }
     const sourceRecommendedAction = removedAiConcernWasOnlyActionableEvidence
       ? ''
       : S(source.recommended_action);
-    const progressCodeAction = (
+    const progressCodeAction =
       deterministic.isBackwardMovement ||
       deterministic.isReturnToActiveDevelopment ||
       deterministic.isStateAdvancementNeeded ||
       deterministic.isStateCodeMismatch
-    ) ? deterministicAction : '';
+        ? deterministicAction
+        : '';
     const combinedReturnAction =
       deterministic.isReturnToActiveDevelopment && deliveryAction
         ? `${deliveryAction} ${deterministicAction}`
         : '';
     const recommendedAction =
       (isWorkflowExempt
-        ? (isOnHold
+        ? isOnHold
           ? 'No daily developer update is required while the hold remains active; follow up only when the hold owner reports a new material risk or work resumes.'
-          : 'No developer follow-up is required unless QA or the workflow owner reports a new risk.')
-        : combinedReturnAction || progressCodeAction || deliveryAction ||
+          : 'No developer follow-up is required unless QA or the workflow owner reports a new risk.'
+        : combinedReturnAction ||
+          progressCodeAction ||
+          deliveryAction ||
           deterministicAction ||
           (isBranchCheckinUpdateExempt ? '' : sourceRecommendedAction)) ||
       (isBranchCheckinUpdateExempt
@@ -1640,7 +1682,9 @@ export function normalizeStandupReviewResult(result, payload) {
         .toLowerCase(),
       current_code: currentCode,
       update_summary: isUpdateExempt
-        ? S(source.update_summary) || String(ticket.today_note || '') || previousUpdateSummary
+        ? S(source.update_summary) ||
+          String(ticket.today_note || '') ||
+          previousUpdateSummary
         : S(source.update_summary) || String(ticket.today_note || ''),
       category,
       sub_tags: tags,
@@ -1650,11 +1694,9 @@ export function normalizeStandupReviewResult(result, payload) {
       reason,
       recommended_action: recommendedAction,
       expected_delivery_date: delivery.expectedDeliveryDate,
-      previous_expected_delivery_date:
-        delivery.previousExpectedDeliveryDate,
+      previous_expected_delivery_date: delivery.previousExpectedDeliveryDate,
       delivery_date_status: delivery.status,
-      working_days_to_expected_delivery:
-        delivery.workingDaysToExpectedDelivery,
+      working_days_to_expected_delivery: delivery.workingDaysToExpectedDelivery,
       reforecast_direction: delivery.reforecastDirection,
       reforecast_explanation_status: reforecastAssessment.status,
       reforecast_reason_type: reforecastAssessment.reasonType,
@@ -1705,10 +1747,7 @@ export function normalizeStandupReviewResult(result, payload) {
       exceptions.blocked.push(exception);
     }
     if (c.category === 'Missing Update') validation.missing_update += 1;
-    if (
-      c.category === 'Missing Update' ||
-      tags.includes('No Daily Update')
-    ) {
+    if (c.category === 'Missing Update' || tags.includes('No Daily Update')) {
       exceptions.missing_updates.push(exception);
     }
     if (c.category === 'Needs Team Lead Clarification') {
@@ -1758,13 +1797,16 @@ export function normalizeStandupReviewResult(result, payload) {
     }
     if (tags.includes('Delayed')) validation.sub_tag_delayed += 1;
     if (tags.includes('Ready for QA')) validation.sub_tag_ready_for_qa += 1;
-    if (tags.includes('Ready for Release')) validation.sub_tag_ready_for_release += 1;
+    if (tags.includes('Ready for Release'))
+      validation.sub_tag_ready_for_release += 1;
     if (tags.includes('Sandbox Validation')) {
       validation.sub_tag_sandbox_validation += 1;
     }
     if (c.delivery_date_status === 'overdue') validation.delivery_overdue += 1;
-    if (c.delivery_date_status === 'due_today') validation.delivery_due_today += 1;
-    if (c.delivery_date_status === 'due_soon') validation.delivery_due_soon += 1;
+    if (c.delivery_date_status === 'due_today')
+      validation.delivery_due_today += 1;
+    if (c.delivery_date_status === 'due_soon')
+      validation.delivery_due_soon += 1;
     if (c.delivery_date_status === 'missing_required') {
       validation.expected_delivery_missing += 1;
     }
@@ -1780,27 +1822,35 @@ export function normalizeStandupReviewResult(result, payload) {
       tags.includes('Reforecast Needs Rationale') ||
       tags.includes('Review Queue Risk')
     ) {
-      let whyTlNeeded = 'A Team Lead should resolve the technical or scope ambiguity before standup.';
+      let whyTlNeeded =
+        'A Team Lead should resolve the technical or scope ambiguity before standup.';
       if (
         tags.includes('No Daily Update') &&
         (tags.includes('Critical Severity') || tags.includes('High Severity'))
       ) {
-        whyTlNeeded = 'A Team Lead should confirm ownership after the first missed update for a Critical/High severity Bug.';
+        whyTlNeeded =
+          'A Team Lead should confirm ownership after the first missed update for a Critical/High severity Bug.';
       } else if (
         tags.includes('Missing Progress Code') ||
         tags.includes('Missing Notes')
       ) {
-        whyTlNeeded = 'A Team Lead should clarify the incomplete progress update before delivery status is accepted.';
+        whyTlNeeded =
+          'A Team Lead should clarify the incomplete progress update before delivery status is accepted.';
       } else if (tags.includes('Expected Delivery Missing')) {
-        whyTlNeeded = 'A Team Lead should ensure the required development-complete forecast is set in TFS.';
+        whyTlNeeded =
+          'A Team Lead should ensure the required development-complete forecast is set in TFS.';
       } else if (tags.includes('Reforecast Needs Rationale')) {
-        whyTlNeeded = 'A Team Lead should confirm why Expected Delivery moved later before the new forecast is accepted.';
+        whyTlNeeded =
+          'A Team Lead should confirm why Expected Delivery moved later before the new forecast is accepted.';
       } else if (tags.includes('Review Queue Risk')) {
-        whyTlNeeded = 'A Team Lead should confirm the Code Review owner and whether reviewer wait time affects the forecast.';
+        whyTlNeeded =
+          'A Team Lead should confirm the Code Review owner and whether reviewer wait time affects the forecast.';
       } else if (tags.includes('Returned to Active Development')) {
-        whyTlNeeded = 'A Team Lead should confirm why work returned from review or handoff to active development and whether the forecast must change.';
+        whyTlNeeded =
+          'A Team Lead should confirm why work returned from review or handoff to active development and whether the forecast must change.';
       } else if (tags.includes('Wrong or Mismatched Progress Code')) {
-        whyTlNeeded = 'A Team Lead should confirm the correct workflow state and progress code.';
+        whyTlNeeded =
+          'A Team Lead should confirm the correct workflow state and progress code.';
       }
       tl_review_items.push({
         ticket_id: c.ticket_id,
@@ -1809,7 +1859,8 @@ export function normalizeStandupReviewResult(result, payload) {
         developer_email: c.developer_email,
         issue: c.reason,
         why_tl_needed: whyTlNeeded,
-        suggested_action: c.recommended_action ||
+        suggested_action:
+          c.recommended_action ||
           'Confirm correct status and next technical step before standup.',
       });
     }
@@ -1829,7 +1880,8 @@ export function normalizeStandupReviewResult(result, payload) {
         issue: c.reason,
         evidence: c.update_summary || c.reason,
         delivery_risk: standupDeliveryRisk(c, ticket, deterministic),
-        recommended_pm_action: c.recommended_action ||
+        recommended_pm_action:
+          c.recommended_action ||
           'Confirm risk, owner, and next action before standup.',
       });
     }
@@ -1847,21 +1899,26 @@ export function normalizeStandupReviewResult(result, payload) {
   const deliveryQuestionExemptIds = new Set(
     classifications
       .filter((c) =>
-        ['development_complete', 'paused'].includes(c.delivery_date_status)
+        ['development_complete', 'paused'].includes(c.delivery_date_status),
       )
       .map((c) => c.ticket_id),
   );
-  const follow_up_questions = (Array.isArray(result.follow_up_questions)
-    ? result.follow_up_questions
-    : [])
+  const follow_up_questions = (
+    Array.isArray(result.follow_up_questions) ? result.follow_up_questions : []
+  )
     .filter((q) => {
       const id = String(q?.ticket_id || '');
-      const questionText = `${q?.reason || ''} ${q?.question || ''}`.toLowerCase();
+      const questionText =
+        `${q?.reason || ''} ${q?.question || ''}`.toLowerCase();
       const isDeliveryQuestion =
-        /expected delivery|delivery date|reforecast|forecast/.test(questionText);
-      return knownTicketIds.has(id) &&
+        /expected delivery|delivery date|reforecast|forecast/.test(
+          questionText,
+        );
+      return (
+        knownTicketIds.has(id) &&
         !exemptWithoutTodayIds.has(id) &&
-        !(deliveryQuestionExemptIds.has(id) && isDeliveryQuestion);
+        !(deliveryQuestionExemptIds.has(id) && isDeliveryQuestion)
+      );
     })
     .map((q) => ({
       ticket_id: String(q.ticket_id || ''),
@@ -1889,7 +1946,8 @@ export function normalizeStandupReviewResult(result, payload) {
     follow_up_questions.push({
       ticket_id: classification.ticket_id,
       developer: classification.developer,
-      reason: 'Expected Delivery moved later without a supported same-day rationale.',
+      reason:
+        'Expected Delivery moved later without a supported same-day rationale.',
       question: `What changed since the previous Expected Delivery of ${classification.previous_expected_delivery_date || 'not set'}, and why is ${classification.expected_delivery_date || 'not set'} now the best development-complete estimate?`,
     });
   }
@@ -1945,13 +2003,13 @@ function buildStandupReviewPayload(
       ),
       review_date: standupDateOnly(reviewDate),
       previous_workday_date: previousWorkdayDate,
-      expected_delivery_date: standupDateOnly(
-        t.expectedDeliveryDate || t.expected_delivery_date,
-      ) || null,
-      previous_expected_delivery_date: standupDateOnly(
-        t.previousExpectedDeliveryDate ||
-          t.previous_expected_delivery_date,
-      ) || null,
+      expected_delivery_date:
+        standupDateOnly(t.expectedDeliveryDate || t.expected_delivery_date) ||
+        null,
+      previous_expected_delivery_date:
+        standupDateOnly(
+          t.previousExpectedDeliveryDate || t.previous_expected_delivery_date,
+        ) || null,
       expected_delivery_changed: Boolean(
         t.expectedDeliveryChanged ?? t.expected_delivery_changed,
       ),
@@ -1973,8 +2031,7 @@ function buildStandupReviewPayload(
       ...ticket,
       reforecast_direction: delivery.reforecastDirection,
       delivery_date_status: delivery.status,
-      working_days_to_expected_delivery:
-        delivery.workingDaysToExpectedDelivery,
+      working_days_to_expected_delivery: delivery.workingDaysToExpectedDelivery,
     };
   });
 }
@@ -1999,8 +2056,7 @@ function buildStandupModelPayload(payload) {
     has_today_update: ticket.has_today_update,
     reforecast_direction: ticket.reforecast_direction,
     delivery_date_status: ticket.delivery_date_status,
-    working_days_to_expected_delivery:
-      ticket.working_days_to_expected_delivery,
+    working_days_to_expected_delivery: ticket.working_days_to_expected_delivery,
   }));
 }
 
@@ -2064,9 +2120,7 @@ async function queryStandupReviewInput(db, date) {
     [priorStandupAt],
   );
 
-  const reviewTicketIds = ticketsResult.rows.map((ticket) =>
-    String(ticket.id),
-  );
+  const reviewTicketIds = ticketsResult.rows.map((ticket) => String(ticket.id));
   const reviewDeveloperEmails = ticketsResult.rows.map((ticket) =>
     String(ticket.assignedDeveloperEmail),
   );
@@ -3301,7 +3355,9 @@ async function enrichStandupNotificationReview(review) {
     for (const row of resolved.rows) {
       resolvedByTicket.set(
         String(row.id),
-        String(row.developer_email || '').trim().toLowerCase(),
+        String(row.developer_email || '')
+          .trim()
+          .toLowerCase(),
       );
     }
   }
@@ -3309,7 +3365,9 @@ async function enrichStandupNotificationReview(review) {
   const enrichedClassifications = classifications.map((classification) => ({
     ...classification,
     developer_email:
-      String(classification?.developer_email || '').trim().toLowerCase() ||
+      String(classification?.developer_email || '')
+        .trim()
+        .toLowerCase() ||
       resolvedByTicket.get(String(classification?.ticket_id || '')) ||
       '',
   }));
@@ -3326,8 +3384,12 @@ async function enrichStandupNotificationReview(review) {
         ...item,
         title: String(item?.title || classification.title || ''),
         developer_email:
-          String(item?.developer_email || '').trim().toLowerCase() ||
-          String(classification.developer_email || '').trim().toLowerCase(),
+          String(item?.developer_email || '')
+            .trim()
+            .toLowerCase() ||
+          String(classification.developer_email || '')
+            .trim()
+            .toLowerCase(),
       };
     });
 
@@ -3344,10 +3406,9 @@ async function applyPersistedStandupEscalationPolicy(
   client,
   { review, date, inputHash },
 ) {
-  await client.query(
-    `select pg_advisory_xact_lock(hashtext($1))`,
-    [`${STANDUP_ESCALATION_POLICY_VERSION}:${date}`],
-  );
+  await client.query(`select pg_advisory_xact_lock(hashtext($1))`, [
+    `${STANDUP_ESCALATION_POLICY_VERSION}:${date}`,
+  ]);
 
   const previousRun = await client.query(
     `select review_date::text as review_date
@@ -3505,13 +3566,7 @@ async function findCachedStandupReview(
         and ($5::boolean = false or created_at > now() - interval '30 minutes')
       order by created_at desc
       limit 1`,
-    [
-      date,
-      STANDUP_REVIEW_PROMPT_VERSION,
-      inputHash,
-      createdAfter,
-      recentOnly,
-    ],
+    [date, STANDUP_REVIEW_PROMPT_VERSION, inputHash, createdAfter, recentOnly],
   );
   if (!cached.rowCount) return null;
   const stored = parseJsonMaybe(cached.rows[0].ai_output);
@@ -3633,7 +3688,10 @@ async function generatePersistedStandupReview({
       try {
         await client.query(`select pg_advisory_unlock(hashtext($1))`, [key]);
       } catch (unlockError) {
-        console.warn('[standup-review] generation unlock failed:', unlockError.message);
+        console.warn(
+          '[standup-review] generation unlock failed:',
+          unlockError.message,
+        );
       }
       client.release();
     }
@@ -4103,85 +4161,89 @@ app.post(
 );
 
 // POST /api/sync/tickets     body: { source, tickets: [...], pushedAt, presentIds: [...] }
-app.post('/api/sync/tickets', requireSyncKey, requireExpectedDeliveryDateSchema, async (req, res) => {
-  // The agent can send: { source, tickets: [...], pushedAt, presentIds: [...], presentIteration: "Sprint 2025-400", presentIterationPath: "SupplyPro.Core\2025\Sprint 400" }
-  const {
-    source = 'unknown',
-    tickets = [],
-    pushedAt,
-    presentIds = [],
-    presentIteration = '',
-    presentIterationPath = '',
-  } = req.body || {};
-  // Debug: log batch sizes and request size to aid 502 investigation
-  console.log('[sync] incoming', {
-    source,
-    ticketsCount: Array.isArray(tickets) ? tickets.length : 'n/a',
-    presentIdsCount: Array.isArray(presentIds) ? presentIds.length : 'n/a',
-    contentLength: req.header('content-length') || 'n/a',
-  });
-
-  // Defensive validation: ensure caller sent expected shapes to avoid runtime TypeErrors
-  if (!Array.isArray(tickets)) {
-    console.error('[sync] bad_request: tickets must be an array', {
+app.post(
+  '/api/sync/tickets',
+  requireSyncKey,
+  requireExpectedDeliveryDateSchema,
+  async (req, res) => {
+    // The agent can send: { source, tickets: [...], pushedAt, presentIds: [...], presentIteration: "Sprint 2025-400", presentIterationPath: "SupplyPro.Core\2025\Sprint 400" }
+    const {
+      source = 'unknown',
+      tickets = [],
+      pushedAt,
+      presentIds = [],
+      presentIteration = '',
+      presentIterationPath = '',
+    } = req.body || {};
+    // Debug: log batch sizes and request size to aid 502 investigation
+    console.log('[sync] incoming', {
       source,
-      ticketsType: typeof tickets,
+      ticketsCount: Array.isArray(tickets) ? tickets.length : 'n/a',
+      presentIdsCount: Array.isArray(presentIds) ? presentIds.length : 'n/a',
+      contentLength: req.header('content-length') || 'n/a',
     });
-    return res.status(400).json({
-      status: 'error',
-      error: 'bad_request',
-      detail: 'tickets must be an array',
-    });
-  }
-  if (presentIds && !Array.isArray(presentIds)) {
-    console.error('[sync] bad_request: presentIds must be an array', {
-      presentIdsType: typeof presentIds,
-    });
-    return res.status(400).json({
-      status: 'error',
-      error: 'bad_request',
-      detail: 'presentIds must be an array',
-    });
-  }
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
 
-    const WATCH_IDS = new Set(['154823']);
+    // Defensive validation: ensure caller sent expected shapes to avoid runtime TypeErrors
+    if (!Array.isArray(tickets)) {
+      console.error('[sync] bad_request: tickets must be an array', {
+        source,
+        ticketsType: typeof tickets,
+      });
+      return res.status(400).json({
+        status: 'error',
+        error: 'bad_request',
+        detail: 'tickets must be an array',
+      });
+    }
+    if (presentIds && !Array.isArray(presentIds)) {
+      console.error('[sync] bad_request: presentIds must be an array', {
+        presentIdsType: typeof presentIds,
+      });
+      return res.status(400).json({
+        status: 'error',
+        error: 'bad_request',
+        detail: 'presentIds must be an array',
+      });
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
 
-    // Upsert all tickets we just saw; set last_seen_at and clear deleted
-    for (const t of tickets) {
-      const expectedDeliveryDate = expectedDeliveryDateSyncValue(t);
-      let previousExpectedDeliveryDate = null;
-      let expectedDeliveryChangeDirection = null;
-      if (expectedDeliveryDate.provided) {
-        const previousDelivery = await client.query(
-          `select expected_delivery_date::text as expected_delivery_date
+      const WATCH_IDS = new Set(['154823']);
+
+      // Upsert all tickets we just saw; set last_seen_at and clear deleted
+      for (const t of tickets) {
+        const expectedDeliveryDate = expectedDeliveryDateSyncValue(t);
+        let previousExpectedDeliveryDate = null;
+        let expectedDeliveryChangeDirection = null;
+        if (expectedDeliveryDate.provided) {
+          const previousDelivery = await client.query(
+            `select expected_delivery_date::text as expected_delivery_date
              from tickets
             where id = $1
             limit 1`,
-          [String(t.id)],
-        );
-        previousExpectedDeliveryDate = previousDelivery.rowCount
-          ? previousDelivery.rows[0].expected_delivery_date
-          : null;
-        expectedDeliveryChangeDirection = expectedDeliveryDateChangeDirection(
-          previousExpectedDeliveryDate,
-          expectedDeliveryDate.value,
-        );
-      }
-      if (WATCH_IDS.has(String(t.id))) {
-        console.log('[sync/watch]', {
-          id: String(t.id),
-          state: t.state,
-          changedDate: t.changedDate,
-          iterationPath: t.iterationPath,
-        });
-      }
+            [String(t.id)],
+          );
+          previousExpectedDeliveryDate = previousDelivery.rowCount
+            ? previousDelivery.rows[0].expected_delivery_date
+            : null;
+          expectedDeliveryChangeDirection = expectedDeliveryDateChangeDirection(
+            previousExpectedDeliveryDate,
+            expectedDeliveryDate.value,
+          );
+        }
+        if (WATCH_IDS.has(String(t.id))) {
+          console.log('[sync/watch]', {
+            id: String(t.id),
+            state: t.state,
+            changedDate: t.changedDate,
+            iterationPath: t.iterationPath,
+          });
+        }
 
-      const seenAt = pushedAt || new Date().toISOString();
-      await client.query(
-        `
+        const seenAt = pushedAt || new Date().toISOString();
+        await client.query(
+          `
   INSERT INTO tickets (
     id, type, title, state, reason,
     priority, severity,
@@ -4241,202 +4303,200 @@ app.post('/api/sync/tickets', requireSyncKey, requireExpectedDeliveryDateSchema,
     last_seen_at        = EXCLUDED.last_seen_at,
     deleted             = false
   `,
-        [
-          String(t.id), // $1
-          t.type || '', // $2
-          t.title || '', // $3
-          t.state || '', // $4
-          t.reason || '', // $5
-
-          Number.isFinite(+t.priority) ? +t.priority : null, // $6
-          t.severity || null, // $7
-
-          t.assignedTo || '', // $8
-          t.areaPath || '', // $9
-          t.iterationPath || '', // $10
-
-          t.createdDate || null, // $11
-          t.changedDate || null, // $12
-          t.stateChangeDate || null, // $13
-
-          t.tags || '', // $14
-          t.foundInBuild || null, // $15
-          t.integratedInBuild || null, // $16
-
-          Number.isFinite(+t.relatedLinkCount) ? +t.relatedLinkCount : 0, // $17
-          t.effort != null && t.effort !== '' ? String(t.effort) : null, // $18
-
-          expectedDeliveryDate.value, // $19
-          t.createdBy || '', // $20
-          seenAt, // $21
-          expectedDeliveryDate.provided, // $22
-        ],
-      );
-
-      if (expectedDeliveryChangeDirection) {
-        await client.query(
-          EXPECTED_DELIVERY_DATE_HISTORY_INSERT_SQL,
           [
+            String(t.id), // $1
+            t.type || '', // $2
+            t.title || '', // $3
+            t.state || '', // $4
+            t.reason || '', // $5
+
+            Number.isFinite(+t.priority) ? +t.priority : null, // $6
+            t.severity || null, // $7
+
+            t.assignedTo || '', // $8
+            t.areaPath || '', // $9
+            t.iterationPath || '', // $10
+
+            t.createdDate || null, // $11
+            t.changedDate || null, // $12
+            t.stateChangeDate || null, // $13
+
+            t.tags || '', // $14
+            t.foundInBuild || null, // $15
+            t.integratedInBuild || null, // $16
+
+            Number.isFinite(+t.relatedLinkCount) ? +t.relatedLinkCount : 0, // $17
+            t.effort != null && t.effort !== '' ? String(t.effort) : null, // $18
+
+            expectedDeliveryDate.value, // $19
+            t.createdBy || '', // $20
+            seenAt, // $21
+            expectedDeliveryDate.provided, // $22
+          ],
+        );
+
+        if (expectedDeliveryChangeDirection) {
+          await client.query(EXPECTED_DELIVERY_DATE_HISTORY_INSERT_SQL, [
             String(t.id),
             previousExpectedDeliveryDate,
             expectedDeliveryDate.value,
             expectedDeliveryChangeDirection,
             t.changedDate || null,
-          ],
-        );
+          ]);
+        }
       }
-    }
 
-    // ---- Presence sweep (use agent's authoritative presentIterationPath) ----
-    {
-      const idsText = Array.isArray(presentIds)
-        ? presentIds.map(String).filter(Boolean)
-        : [];
-      const authPath = String(presentIterationPath || '').trim();
+      // ---- Presence sweep (use agent's authoritative presentIterationPath) ----
+      {
+        const idsText = Array.isArray(presentIds)
+          ? presentIds.map(String).filter(Boolean)
+          : [];
+        const authPath = String(presentIterationPath || '').trim();
 
-      // 1) If we have any "present" IDs, un-delete them and bump last_seen_at
-      if (idsText.length > 0) {
-        await client.query(
-          `UPDATE tickets
+        // 1) If we have any "present" IDs, un-delete them and bump last_seen_at
+        if (idsText.length > 0) {
+          await client.query(
+            `UPDATE tickets
          SET deleted = false, last_seen_at = now()
        WHERE id = ANY($1::text[])`,
-          [idsText],
-        );
+            [idsText],
+          );
 
-        // 2) Use agent's presentIterationPath as authoritative scope (not DB's stale paths)
-        // This ensures we tombstone based on TFS current state, not historical DB state
-        if (authPath) {
-          // Tombstone anything whose iteration_path MATCHES the agent's current iteration
-          // but wasn't in the present list
-          const iterSweepResult = await client.query(
-            `UPDATE tickets
+          // 2) Use agent's presentIterationPath as authoritative scope (not DB's stale paths)
+          // This ensures we tombstone based on TFS current state, not historical DB state
+          if (authPath) {
+            // Tombstone anything whose iteration_path MATCHES the agent's current iteration
+            // but wasn't in the present list
+            const iterSweepResult = await client.query(
+              `UPDATE tickets
            SET deleted = true
          WHERE lower(iteration_path) = lower($1)
            AND NOT (id = ANY($2::text[]))
          RETURNING id`,
-            [authPath, idsText],
-          );
+              [authPath, idsText],
+            );
 
-          console.log('[sweep]', {
-            presentCount: idsText.length,
-            authPath,
-            mode: 'agent-authoritative',
-            iterTombstoned: iterSweepResult.rowCount,
-          });
+            console.log('[sweep]', {
+              presentCount: idsText.length,
+              authPath,
+              mode: 'agent-authoritative',
+              iterTombstoned: iterSweepResult.rowCount,
+            });
 
-          // Additional sweep: tombstone items recently synced but NOT in scope
-          // These are cross-iteration items (WIQL C) that were refreshed but aren't in presentIds
-          // Use a 3-hour window to handle gaps in agent runs (e.g., server downtime, network issues)
-          // This ensures out-of-scope items are tombstoned even if agent is delayed
-          const recentResult = await client.query(
-            `UPDATE tickets
+            // Additional sweep: tombstone items recently synced but NOT in scope
+            // These are cross-iteration items (WIQL C) that were refreshed but aren't in presentIds
+            // Use a 3-hour window to handle gaps in agent runs (e.g., server downtime, network issues)
+            // This ensures out-of-scope items are tombstoned even if agent is delayed
+            const recentResult = await client.query(
+              `UPDATE tickets
            SET deleted = true
          WHERE NOT (id = ANY($1::text[]))
            AND last_seen_at >= now() - interval '3 hours'
          RETURNING id`,
-            [idsText],
-          );
+              [idsText],
+            );
 
-          if (recentResult.rowCount > 0) {
-            console.log('[recent-sweep]', {
-              tombstoned: recentResult.rowCount,
-              sampleIds: recentResult.rows
-                .slice(0, 10)
-                .map((r) => r.id)
-                .join(', '),
-            });
+            if (recentResult.rowCount > 0) {
+              console.log('[recent-sweep]', {
+                tombstoned: recentResult.rowCount,
+                sampleIds: recentResult.rows
+                  .slice(0, 10)
+                  .map((r) => r.id)
+                  .join(', '),
+              });
+            } else {
+              console.log('[recent-sweep]', { tombstoned: 0 });
+            }
           } else {
-            console.log('[recent-sweep]', { tombstoned: 0 });
-          }
-        } else {
-          // Fallback: derive scope from DB (original behavior) if agent didn't provide path
-          const { rows: pathRows } = await client.query(
-            `SELECT DISTINCT iteration_path
+            // Fallback: derive scope from DB (original behavior) if agent didn't provide path
+            const { rows: pathRows } = await client.query(
+              `SELECT DISTINCT iteration_path
          FROM tickets
         WHERE id = ANY($1::text[])`,
-            [idsText],
-          );
+              [idsText],
+            );
 
-          const scopePaths = pathRows
-            .map((r) => r.iteration_path)
-            .filter((p) => p != null);
+            const scopePaths = pathRows
+              .map((r) => r.iteration_path)
+              .filter((p) => p != null);
 
-          if (scopePaths.length > 0) {
-            await client.query(
-              `UPDATE tickets
+            if (scopePaths.length > 0) {
+              await client.query(
+                `UPDATE tickets
            SET deleted = true
          WHERE iteration_path = ANY($1::text[])
            AND NOT (id = ANY($2::text[]))`,
-              [scopePaths, idsText],
-            );
-          }
+                [scopePaths, idsText],
+              );
+            }
 
-          const hasNullPath = pathRows.some((r) => r.iteration_path == null);
-          if (hasNullPath) {
-            await client.query(
-              `UPDATE tickets
+            const hasNullPath = pathRows.some((r) => r.iteration_path == null);
+            if (hasNullPath) {
+              await client.query(
+                `UPDATE tickets
            SET deleted = true
          WHERE iteration_path IS NULL
            AND NOT (id = ANY($1::text[]))`,
-              [idsText],
-            );
+                [idsText],
+              );
+            }
+
+            console.log('[sweep]', {
+              presentCount: idsText.length,
+              scopePaths: scopePaths.length,
+              hasNullPath,
+              mode: 'db-derived-fallback',
+            });
           }
-
-          console.log('[sweep]', {
-            presentCount: idsText.length,
-            scopePaths: scopePaths.length,
-            hasNullPath,
-            mode: 'db-derived-fallback',
-          });
+        } else {
+          console.log('[sweep] skipped (no presentIds)');
         }
-      } else {
-        console.log('[sweep] skipped (no presentIds)');
       }
-    }
 
-    // ---- Age-based sweep: tombstone tickets not seen in 7 days ----
-    // Catches deleted/removed items from old sprints that the iteration-scoped
-    // sweep above never touches (it only covers the current sprint path).
-    // Safe because every legitimate ticket (current-sprint direct or WIQL B
-    // cross-sprint parent) has last_seen_at bumped on every agent run.
-    const ageResult = await client.query(
-      `UPDATE tickets
+      // ---- Age-based sweep: tombstone tickets not seen in 7 days ----
+      // Catches deleted/removed items from old sprints that the iteration-scoped
+      // sweep above never touches (it only covers the current sprint path).
+      // Safe because every legitimate ticket (current-sprint direct or WIQL B
+      // cross-sprint parent) has last_seen_at bumped on every agent run.
+      const ageResult = await client.query(
+        `UPDATE tickets
           SET deleted = true
         WHERE coalesce(deleted, false) = false
           AND last_seen_at < now() - interval '7 days'
         RETURNING id`,
-    );
-    if (ageResult.rowCount > 0) {
-      console.log('[age-sweep]', {
-        tombstoned: ageResult.rowCount,
-        sampleIds: ageResult.rows
-          .slice(0, 10)
-          .map((r) => r.id)
-          .join(', '),
-      });
-    } else {
-      console.log('[age-sweep]', { tombstoned: 0 });
-    }
-    // ---- end presence sweep ----
+      );
+      if (ageResult.rowCount > 0) {
+        console.log('[age-sweep]', {
+          tombstoned: ageResult.rowCount,
+          sampleIds: ageResult.rows
+            .slice(0, 10)
+            .map((r) => r.id)
+            .join(', '),
+        });
+      } else {
+        console.log('[age-sweep]', { tombstoned: 0 });
+      }
+      // ---- end presence sweep ----
 
-    await client.query('COMMIT');
-    res.json({
-      status: 'ok',
-      source,
-      count: tickets.length,
-      prunedScope: Array.isArray(presentIds) ? presentIds.length : 0,
-      iteration: presentIteration || null,
-    });
-  } catch (e) {
-    await client.query('ROLLBACK');
-    console.error('sync error:', e);
-    res
-      .status(500)
-      .json({ status: 'error', error: 'sync_failed', detail: e.message });
-  } finally {
-    client.release();
-  }
-});
+      await client.query('COMMIT');
+      res.json({
+        status: 'ok',
+        source,
+        count: tickets.length,
+        prunedScope: Array.isArray(presentIds) ? presentIds.length : 0,
+        iteration: presentIteration || null,
+      });
+    } catch (e) {
+      await client.query('ROLLBACK');
+      console.error('sync error:', e);
+      res
+        .status(500)
+        .json({ status: 'error', error: 'sync_failed', detail: e.message });
+    } finally {
+      client.release();
+    }
+  },
+);
 
 // Team member list for manager dropdowns
 app.get('/api/team-members', requireAuth, requirePMOnly, async (req, res) => {
@@ -5271,31 +5331,36 @@ app.get('/api/updates/locks/range', requireAuth, async (req, res) => {
 });
 
 // --- collation (enriched)
-app.get('/api/updates/today', requireAuth, requirePMOnly, requireExpectedDeliveryDateSchema, async (req, res) => {
-  const date = await todayLocal(pool);
-  const me = await pool.query(
-    `select role, nullif(btrim(team), '') as team
+app.get(
+  '/api/updates/today',
+  requireAuth,
+  requirePMOnly,
+  requireExpectedDeliveryDateSchema,
+  async (req, res) => {
+    const date = await todayLocal(pool);
+    const me = await pool.query(
+      `select role, nullif(btrim(team), '') as team
      from users
      where lower(email)=lower($1)
      limit 1`,
-    [req.userEmail],
-  );
-  const callerRole = me.rows[0]?.role || 'dev';
-  const leadTeam = me.rows[0]?.team || null;
-  const params = [date];
-  const visibilityWhere = ['u.date = $1'];
-  if (callerRole === 'lead') {
-    visibilityWhere.push(`update_user.role = 'dev'`);
-    if (leadTeam) {
-      params.push(leadTeam);
-      visibilityWhere.push(
-        `lower(nullif(btrim(update_user.team), '')) = lower($${params.length})`,
-      );
+      [req.userEmail],
+    );
+    const callerRole = me.rows[0]?.role || 'dev';
+    const leadTeam = me.rows[0]?.team || null;
+    const params = [date];
+    const visibilityWhere = ['u.date = $1'];
+    if (callerRole === 'lead') {
+      visibilityWhere.push(`update_user.role = 'dev'`);
+      if (leadTeam) {
+        params.push(leadTeam);
+        visibilityWhere.push(
+          `lower(nullif(btrim(update_user.team), '')) = lower($${params.length})`,
+        );
+      }
     }
-  }
 
-  const updates = await pool.query(
-    `select u.ticket_id as "ticketId", u.email, u.code, pc.label as "codeLabel",
+    const updates = await pool.query(
+      `select u.ticket_id as "ticketId", u.email, u.code, pc.label as "codeLabel",
             u.note, u.risk_level as "riskLevel",
             u.impact_area as "impactArea", u.at,
             t.title, t.state, t.type, t.severity,
@@ -5312,120 +5377,121 @@ app.get('/api/updates/today', requireAuth, requirePMOnly, requireExpectedDeliver
      left join ticket_flags tf on tf.ticket_id = u.ticket_id
      left join users fb on fb.id = tf.flagged_by
      where ${visibilityWhere.join(' and ')}`,
-    params,
-  );
-  const locks = await pool.query(
-    `select email from progress_locks where date=$1`,
-    [date],
-  );
+      params,
+    );
+    const locks = await pool.query(
+      `select email from progress_locks where date=$1`,
+      [date],
+    );
 
-  const lockedSet = new Set(locks.rows.map((x) => x.email));
-  // keep latest per (email,ticket)
-  const byUser = new Map();
-  for (const r of updates.rows) {
-    const derived = deriveRiskForUpdate(r);
-    r.riskLevel = derived.riskLevel;
-    r.riskReasons = derived.riskReasons;
-    r.riskStaleDays = derived.staleDays;
+    const lockedSet = new Set(locks.rows.map((x) => x.email));
+    // keep latest per (email,ticket)
+    const byUser = new Map();
+    for (const r of updates.rows) {
+      const derived = deriveRiskForUpdate(r);
+      r.riskLevel = derived.riskLevel;
+      r.riskReasons = derived.riskReasons;
+      r.riskStaleDays = derived.staleDays;
 
-    const email = r.email;
-    if (!byUser.has(email))
-      byUser.set(email, {
-        email,
-        name: '',
-        locked: lockedSet.has(email),
-        tickets: new Map(),
-      });
-    const m = byUser.get(email).tickets;
-    const prev = m.get(r.ticketId);
-    if (!prev || r.at > prev.at) m.set(r.ticketId, r);
-  }
-  // load names in one shot
-  const emails = Array.from(byUser.keys());
-  let names = new Map();
-  if (emails.length) {
-    const rNames = await pool.query(
-      `select lower(email) as email, coalesce(nullif(name,''), '') as name
+      const email = r.email;
+      if (!byUser.has(email))
+        byUser.set(email, {
+          email,
+          name: '',
+          locked: lockedSet.has(email),
+          tickets: new Map(),
+        });
+      const m = byUser.get(email).tickets;
+      const prev = m.get(r.ticketId);
+      if (!prev || r.at > prev.at) m.set(r.ticketId, r);
+    }
+    // load names in one shot
+    const emails = Array.from(byUser.keys());
+    let names = new Map();
+    if (emails.length) {
+      const rNames = await pool.query(
+        `select lower(email) as email, coalesce(nullif(name,''), '') as name
        from users
        where lower(email) = any($1)`,
-      [emails.map((e) => e.toLowerCase())],
-    );
-    names = new Map(rNames.rows.map((x) => [x.email, x.name || '']));
-  }
-  const users = Array.from(byUser.values())
-    .map((u) => {
-      const nm = names.get(String(u.email).toLowerCase()) || '';
-      return {
+        [emails.map((e) => e.toLowerCase())],
+      );
+      names = new Map(rNames.rows.map((x) => [x.email, x.name || '']));
+    }
+    const users = Array.from(byUser.values())
+      .map((u) => {
+        const nm = names.get(String(u.email).toLowerCase()) || '';
+        return {
+          email: u.email,
+          name: nm,
+          locked: u.locked,
+          tickets: Array.from(u.tickets.values()).sort((a, b) =>
+            String(a.ticketId).localeCompare(String(b.ticketId)),
+          ),
+        };
+      })
+      .map((u) => ({
         email: u.email,
-        name: nm,
+        name: u.name,
         locked: u.locked,
         tickets: Array.from(u.tickets.values()).sort((a, b) =>
           String(a.ticketId).localeCompare(String(b.ticketId)),
         ),
-      };
-    })
-    .map((u) => ({
-      email: u.email,
-      name: u.name,
-      locked: u.locked,
-      tickets: Array.from(u.tickets.values()).sort((a, b) =>
-        String(a.ticketId).localeCompare(String(b.ticketId)),
-      ),
-      ...u,
-    }))
-    .sort((a, b) => a.email.localeCompare(b.email));
+        ...u,
+      }))
+      .sort((a, b) => a.email.localeCompare(b.email));
 
-  if (callerRole === 'pm' || callerRole === 'admin') {
-    let pmNoteRows = [];
-    try {
-      await ensurePmDevNotesSchema();
+    if (callerRole === 'pm' || callerRole === 'admin') {
+      let pmNoteRows = [];
+      try {
+        await ensurePmDevNotesSchema();
 
-      // Attach today's PM notes for the logged-in PM/admin only.
-      const pmNotes = await pool.query(
-        `SELECT dev_email, note
+        // Attach today's PM notes for the logged-in PM/admin only.
+        const pmNotes = await pool.query(
+          `SELECT dev_email, note
          FROM pm_dev_notes
          WHERE date=$1::date AND lower(pm_email)=lower($2)
          ORDER BY dev_email`,
-        [date, req.userEmail],
+          [date, req.userEmail],
+        );
+        pmNoteRows = pmNotes.rows;
+      } catch (e) {
+        console.error('[error][updates/today pm notes]', e);
+      }
+
+      const pmNoteMap = new Map(
+        pmNoteRows.map((r) => [r.dev_email.toLowerCase(), r.note]),
       );
-      pmNoteRows = pmNotes.rows;
-    } catch (e) {
-      console.error('[error][updates/today pm notes]', e);
-    }
+      for (const u of users) {
+        u.pmNote = pmNoteMap.get((u.email || '').toLowerCase()) || null;
+      }
+    } else if (callerRole === 'lead') {
+      let leadNoteRows = [];
+      try {
+        await ensureLeadDevNotesSchema();
 
-    const pmNoteMap = new Map(
-      pmNoteRows.map((r) => [r.dev_email.toLowerCase(), r.note]),
-    );
-    for (const u of users) {
-      u.pmNote = pmNoteMap.get((u.email || '').toLowerCase()) || null;
-    }
-  } else if (callerRole === 'lead') {
-    let leadNoteRows = [];
-    try {
-      await ensureLeadDevNotesSchema();
-
-      const leadNotes = await pool.query(
-        `SELECT dev_email, note
+        const leadNotes = await pool.query(
+          `SELECT dev_email, note
          FROM lead_dev_notes
          WHERE date=$1::date AND lower(lead_email)=lower($2)
          ORDER BY dev_email`,
-        [date, req.userEmail],
+          [date, req.userEmail],
+        );
+        leadNoteRows = leadNotes.rows;
+      } catch (e) {
+        console.error('[error][updates/today lead notes]', e);
+      }
+
+      const leadNoteMap = new Map(
+        leadNoteRows.map((r) => [r.dev_email.toLowerCase(), r.note]),
       );
-      leadNoteRows = leadNotes.rows;
-    } catch (e) {
-      console.error('[error][updates/today lead notes]', e);
+      for (const u of users) {
+        u.leadNote = leadNoteMap.get((u.email || '').toLowerCase()) || null;
+      }
     }
 
-    const leadNoteMap = new Map(
-      leadNoteRows.map((r) => [r.dev_email.toLowerCase(), r.note]),
-    );
-    for (const u of users) {
-      u.leadNote = leadNoteMap.get((u.email || '').toLowerCase()) || null;
-    }
-  }
-
-  res.json({ date, users });
-});
+    res.json({ date, users });
+  },
+);
 
 // --- AI risk rationale (PM only)
 app.get('/api/updates/today/ai', requireAuth, async (req, res) => {
@@ -5584,8 +5650,12 @@ app.post(
       }
 
       const date = String(req.body?.date || '').trim();
-      const inputHash = String(req.body?.input_hash || '').trim().toLowerCase();
-      const audience = String(req.body?.audience || '').trim().toLowerCase();
+      const inputHash = String(req.body?.input_hash || '')
+        .trim()
+        .toLowerCase();
+      const audience = String(req.body?.audience || '')
+        .trim()
+        .toLowerCase();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
         return res.status(400).json({ error: 'invalid_date' });
       }
@@ -6077,9 +6147,9 @@ function parseRangeFilters(req) {
 
 const RANGE_SQL = `
   SELECT
-    u.at::date        AS "date",
+    timezone($3, u.at)::date AS "date",
     u.ticket_id       AS "ticketId",
-    ${historicalTicketSelectSql()},
+    ${historicalTicketSelectSql(['type', 'title', 'severity', 'state'])},
     u.code,
     u.risk_level      AS "riskLevel",
     u.note
@@ -6091,7 +6161,7 @@ const RANGE_SQL = `
       OR lower(u.email) = $4
       OR split_part(lower(u.email),'@',1) = $5
     )
-  ORDER BY u.at::date DESC, u.ticket_id
+  ORDER BY timezone($3, u.at)::date DESC, u.ticket_id
 `;
 
 async function selectRangeRows({ from, to, devEmail, devLocal }) {
@@ -12040,45 +12110,48 @@ app.post('/api/gen/notes', requireAuth, async (req, res) => {
 app.use('/', express.static(path.join(process.cwd(), '..', 'web')));
 
 if (process.env.NODE_ENV !== 'test') {
-// --- boot: ensure Standup Review notification delivery ledger exists ---
-ensureStandupNotificationSchema()
-  .then(() => {
-    console.log('[boot] Standup Review notification ledger is ready');
-  })
-  .catch((error) => {
-    console.error('[boot] Standup Review notification ledger failed:', error);
-  });
+  // --- boot: ensure Standup Review notification delivery ledger exists ---
+  ensureStandupNotificationSchema()
+    .then(() => {
+      console.log('[boot] Standup Review notification ledger is ready');
+    })
+    .catch((error) => {
+      console.error('[boot] Standup Review notification ledger failed:', error);
+    });
 
-ensureStandupEscalationSchema()
-  .then(() => {
-    console.log('[boot] Standup Review escalation policy tables are ready');
-  })
-  .catch((error) => {
-    console.error('[boot] Standup Review escalation policy tables failed:', error);
-  });
+  ensureStandupEscalationSchema()
+    .then(() => {
+      console.log('[boot] Standup Review escalation policy tables are ready');
+    })
+    .catch((error) => {
+      console.error(
+        '[boot] Standup Review escalation policy tables failed:',
+        error,
+      );
+    });
 
-// --- boot: add TFS Expected Delivery Date to current ticket metadata ---
-ensureExpectedDeliveryDateSchema()
-  .then(() => {
-    console.log('[boot] tickets.expected_delivery_date column is ready');
-  })
-  .catch((e) => {
-    console.error('[boot] expected delivery date migration failed:', e);
-  });
+  // --- boot: add TFS Expected Delivery Date to current ticket metadata ---
+  ensureExpectedDeliveryDateSchema()
+    .then(() => {
+      console.log('[boot] tickets.expected_delivery_date column is ready');
+    })
+    .catch((e) => {
+      console.error('[boot] expected delivery date migration failed:', e);
+    });
 
-// --- boot: add immutable ticket metadata snapshots to progress updates ---
-ensureProgressUpdateSnapshotSchema()
-  .then(() => {
-    console.log('[boot] progress update snapshot columns are ready');
-  })
-  .catch((e) => {
-    console.error('[boot] progress update snapshot migration failed:', e);
-  });
+  // --- boot: add immutable ticket metadata snapshots to progress updates ---
+  ensureProgressUpdateSnapshotSchema()
+    .then(() => {
+      console.log('[boot] progress update snapshot columns are ready');
+    })
+    .catch((e) => {
+      console.error('[boot] progress update snapshot migration failed:', e);
+    });
 
-// --- boot: ensure meta table exists (key/value store) ---
-pool
-  .query(
-    `
+  // --- boot: ensure meta table exists (key/value store) ---
+  pool
+    .query(
+      `
   create table if not exists meta (
     key text primary key,
     value text,
@@ -12086,18 +12159,18 @@ pool
     updated_at timestamptz default now()
   )
 `,
-  )
-  .then(() => {
-    console.log('[boot] meta table is ready');
-  })
-  .catch((e) => {
-    console.error('[boot] meta table ensure failed:', e);
-  });
+    )
+    .then(() => {
+      console.log('[boot] meta table is ready');
+    })
+    .catch((e) => {
+      console.error('[boot] meta table ensure failed:', e);
+    });
 
-// --- boot: ensure ai_snapshot_runs table exists (history for RAG deltas) ---
-pool
-  .query(
-    `
+  // --- boot: ensure ai_snapshot_runs table exists (history for RAG deltas) ---
+  pool
+    .query(
+      `
   create table if not exists ai_snapshot_runs (
     id bigserial primary key,
     dev_email text not null,
@@ -12111,38 +12184,38 @@ pool
     created_at timestamptz default now()
   )
 `,
-  )
-  .then(() =>
-    pool.query(
-      `create index if not exists ai_snapshot_runs_dev_period on ai_snapshot_runs (dev_email, period_end)`,
-    ),
-  )
-  .then(() =>
-    pool.query(
-      `create index if not exists ai_snapshot_runs_standup_cache
+    )
+    .then(() =>
+      pool.query(
+        `create index if not exists ai_snapshot_runs_dev_period on ai_snapshot_runs (dev_email, period_end)`,
+      ),
+    )
+    .then(() =>
+      pool.query(
+        `create index if not exists ai_snapshot_runs_standup_cache
          on ai_snapshot_runs
          (period_start, prompt_version, (ai_output->>'input_hash'), created_at desc)
        where dev_email = '_team_standup'`,
-    ),
-  )
-  .then(() =>
-    pool.query(
-      `create index if not exists ai_snapshot_runs_standup_history
+      ),
+    )
+    .then(() =>
+      pool.query(
+        `create index if not exists ai_snapshot_runs_standup_history
          on ai_snapshot_runs (period_start desc, created_at desc)
        where dev_email = '_team_standup'`,
-    ),
-  )
-  .then(() => {
-    console.log('[boot] ai_snapshot_runs table is ready');
-  })
-  .catch((e) => {
-    console.error('[boot] ai_snapshot_runs table ensure failed:', e);
-  });
+      ),
+    )
+    .then(() => {
+      console.log('[boot] ai_snapshot_runs table is ready');
+    })
+    .catch((e) => {
+      console.error('[boot] ai_snapshot_runs table ensure failed:', e);
+    });
 
-// --- boot: ensure bonus_evaluations table exists (audit trail for bonus eligibility) ---
-pool
-  .query(
-    `
+  // --- boot: ensure bonus_evaluations table exists (audit trail for bonus eligibility) ---
+  pool
+    .query(
+      `
   create table if not exists bonus_evaluations (
     id bigserial primary key,
     dev_email text not null,
@@ -12155,41 +12228,41 @@ pool
     created_at timestamptz default now()
   )
 `,
-  )
-  .then(() =>
-    pool.query(
-      `create index if not exists bonus_evaluations_dev_period on bonus_evaluations (dev_email, period_end)`,
-    ),
-  )
-  .then(() => {
-    console.log('[boot] bonus_evaluations table is ready');
-  })
-  .catch((e) => {
-    console.error('[boot] bonus_evaluations table ensure failed:', e);
-  });
+    )
+    .then(() =>
+      pool.query(
+        `create index if not exists bonus_evaluations_dev_period on bonus_evaluations (dev_email, period_end)`,
+      ),
+    )
+    .then(() => {
+      console.log('[boot] bonus_evaluations table is ready');
+    })
+    .catch((e) => {
+      console.error('[boot] bonus_evaluations table ensure failed:', e);
+    });
 
-// --- boot: ensure ticket_flags table exists (shared urgent flag per ticket) ---
-pool
-  .query(
-    `
+  // --- boot: ensure ticket_flags table exists (shared urgent flag per ticket) ---
+  pool
+    .query(
+      `
   create table if not exists ticket_flags (
     ticket_id  text        not null primary key,
     flagged_by uuid        not null,
     flagged_at timestamptz default now()
   )
 `,
-  )
-  .then(() => {
-    console.log('[boot] ticket_flags table is ready');
-  })
-  .catch((e) => {
-    console.error('[boot] ticket_flags table ensure failed:', e);
-  });
+    )
+    .then(() => {
+      console.log('[boot] ticket_flags table is ready');
+    })
+    .catch((e) => {
+      console.error('[boot] ticket_flags table ensure failed:', e);
+    });
 
-// --- boot: ensure gen_tickets table (QA/TS parent items) ---
-pool
-  .query(
-    `
+  // --- boot: ensure gen_tickets table (QA/TS parent items) ---
+  pool
+    .query(
+      `
   create table if not exists gen_tickets (
     id             text primary key,
     type           text,
@@ -12204,18 +12277,18 @@ pool
     deleted        boolean default false
   )
 `,
-  )
-  .then(() => {
-    console.log('[boot] gen_tickets table is ready');
-  })
-  .catch((e) => {
-    console.error('[boot] gen_tickets table ensure failed:', e);
-  });
+    )
+    .then(() => {
+      console.log('[boot] gen_tickets table is ready');
+    })
+    .catch((e) => {
+      console.error('[boot] gen_tickets table ensure failed:', e);
+    });
 
-// --- boot: ensure gen_task_items table (QA/TS task items) ---
-pool
-  .query(
-    `
+  // --- boot: ensure gen_task_items table (QA/TS task items) ---
+  pool
+    .query(
+      `
   create table if not exists gen_task_items (
     id                text primary key,
     parent_id         text,
@@ -12237,33 +12310,35 @@ pool
     deleted           boolean default false
   )
 `,
-  )
-  .then(() => {
-    console.log('[boot] gen_task_items table is ready');
-  })
-  .catch((e) => {
-    console.error('[boot] gen_task_items table ensure failed:', e);
-  });
+    )
+    .then(() => {
+      console.log('[boot] gen_task_items table is ready');
+    })
+    .catch((e) => {
+      console.error('[boot] gen_task_items table ensure failed:', e);
+    });
 
-// --- boot: migrate gen_task_items — add changed_by if missing ---
-pool
-  .query(`ALTER TABLE gen_task_items ADD COLUMN IF NOT EXISTS changed_by text`)
-  .catch((e) => {
-    console.error('[boot] gen_task_items migrate changed_by failed:', e);
-  });
+  // --- boot: migrate gen_task_items — add changed_by if missing ---
+  pool
+    .query(
+      `ALTER TABLE gen_task_items ADD COLUMN IF NOT EXISTS changed_by text`,
+    )
+    .catch((e) => {
+      console.error('[boot] gen_task_items migrate changed_by failed:', e);
+    });
 
-// --- boot: migrate gen_task_items — add remaining_work if missing ---
-pool
-  .query(
-    `ALTER TABLE gen_task_items ADD COLUMN IF NOT EXISTS remaining_work numeric`,
-  )
-  .catch((e) => {
-    console.error('[boot] gen_task_items migrate remaining_work failed:', e);
-  });
+  // --- boot: migrate gen_task_items — add remaining_work if missing ---
+  pool
+    .query(
+      `ALTER TABLE gen_task_items ADD COLUMN IF NOT EXISTS remaining_work numeric`,
+    )
+    .catch((e) => {
+      console.error('[boot] gen_task_items migrate remaining_work failed:', e);
+    });
 
-pool
-  .query(
-    `
+  pool
+    .query(
+      `
   create table if not exists gen_daily_notes (
     id        bigserial   primary key,
     task_id   text        not null,
@@ -12275,132 +12350,131 @@ pool
     unique (task_id, noted_by, date)
   )
 `,
-  )
-  .then(() => {
-    console.log('[boot] gen_daily_notes table is ready');
-  })
-  .catch((e) => {
-    console.error('[boot] gen_daily_notes table ensure failed:', e);
-  });
+    )
+    .then(() => {
+      console.log('[boot] gen_daily_notes table is ready');
+    })
+    .catch((e) => {
+      console.error('[boot] gen_daily_notes table ensure failed:', e);
+    });
 
-// --- boot: ensure pm_dev_notes table (PM per-developer daily notes) ---
-ensurePmDevNotesSchema()
-  .then(() => {
-    console.log('[boot] pm_dev_notes table is ready');
-  })
-  .catch((e) => {
-    console.error('[boot] pm_dev_notes table ensure failed:', e);
-  });
+  // --- boot: ensure pm_dev_notes table (PM per-developer daily notes) ---
+  ensurePmDevNotesSchema()
+    .then(() => {
+      console.log('[boot] pm_dev_notes table is ready');
+    })
+    .catch((e) => {
+      console.error('[boot] pm_dev_notes table ensure failed:', e);
+    });
 
-// --- boot: ensure lead_dev_notes table (lead per-developer daily notes) ---
-ensureLeadDevNotesSchema()
-  .then(() => {
-    console.log('[boot] lead_dev_notes table is ready');
-  })
-  .catch((e) => {
-    console.error('[boot] lead_dev_notes table ensure failed:', e);
-  });
+  // --- boot: ensure lead_dev_notes table (lead per-developer daily notes) ---
+  ensureLeadDevNotesSchema()
+    .then(() => {
+      console.log('[boot] lead_dev_notes table is ready');
+    })
+    .catch((e) => {
+      console.error('[boot] lead_dev_notes table ensure failed:', e);
+    });
 
-// --- boot: seed gen_enabled_teams meta key (TS only by default) ---
-pool
-  .query(
-    `insert into meta (key, value) values ('gen_enabled_teams', 'ts')
+  // --- boot: seed gen_enabled_teams meta key (TS only by default) ---
+  pool
+    .query(
+      `insert into meta (key, value) values ('gen_enabled_teams', 'ts')
      on conflict (key) do nothing`,
-  )
-  .then(() => {
-    console.log('[boot] gen_enabled_teams meta key is ready');
-  })
-  .catch((e) => {
-    console.error('[boot] gen_enabled_teams meta seed failed:', e);
-  });
+    )
+    .then(() => {
+      console.log('[boot] gen_enabled_teams meta key is ready');
+    })
+    .catch((e) => {
+      console.error('[boot] gen_enabled_teams meta seed failed:', e);
+    });
 
-// --- boot: seed/migrate 900_01 progress code (rename from 900_no_tickets if present) ---
-pool
-  .query(
-    `UPDATE progress_codes SET code = '900_01' WHERE code = '900_no_tickets';
+  // --- boot: seed/migrate 900_01 progress code (rename from 900_no_tickets if present) ---
+  pool
+    .query(
+      `UPDATE progress_codes SET code = '900_01' WHERE code = '900_no_tickets';
      UPDATE progress_updates SET code = '900_01' WHERE code = '900_no_tickets';`,
-  )
-  .then(() =>
-    pool.query(
-      `insert into progress_codes (code, label, family, require_note, active, sort_order)
+    )
+    .then(() =>
+      pool.query(
+        `insert into progress_codes (code, label, family, require_note, active, sort_order)
        values ('900_01', 'No active tickets — working on non-ticket tasks', '900', true, true, 900)
        on conflict (code) do nothing`,
-    ),
-  )
-  .then(() => {
-    console.log('[boot] 900_01 progress code is ready');
-  })
-  .catch((e) => {
-    console.error('[boot] 900_01 seed failed:', e);
-  });
+      ),
+    )
+    .then(() => {
+      console.log('[boot] 900_01 progress code is ready');
+    })
+    .catch((e) => {
+      console.error('[boot] 900_01 seed failed:', e);
+    });
 
-// --- boot: seed sentinel ticket id='0' (satisfies FK for 900_no_tickets submissions) ---
-pool
-  .query(
-    `insert into tickets (id, title, type, state, deleted)
+  // --- boot: seed sentinel ticket id='0' (satisfies FK for 900_no_tickets submissions) ---
+  pool
+    .query(
+      `insert into tickets (id, title, type, state, deleted)
      values ('0', 'sentinel — no active tickets', 'sentinel', 'closed', true)
      on conflict (id) do nothing`,
-  )
-  .then(() => {
-    console.log('[boot] sentinel ticket (id=0) is ready');
-  })
-  .catch((e) => {
-    console.error('[boot] sentinel ticket seed failed:', e);
-  });
+    )
+    .then(() => {
+      console.log('[boot] sentinel ticket (id=0) is ready');
+    })
+    .catch((e) => {
+      console.error('[boot] sentinel ticket seed failed:', e);
+    });
 
-// --- boot: ensure sessions.created_at exists (for 30-day expiry) ---
-pool
-  .query(
-    `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()`,
-  )
-  .then(() => console.log('[boot] sessions.created_at column ready'))
-  .catch((e) =>
-    console.error('[boot] sessions.created_at migration failed:', e),
-  );
+  // --- boot: ensure sessions.created_at exists (for 30-day expiry) ---
+  pool
+    .query(
+      `ALTER TABLE sessions ADD COLUMN IF NOT EXISTS created_at timestamptz DEFAULT now()`,
+    )
+    .then(() => console.log('[boot] sessions.created_at column ready'))
+    .catch((e) =>
+      console.error('[boot] sessions.created_at migration failed:', e),
+    );
 
-// --- boot: index sessions(email) for efficient per-user session queries ---
-pool
-  .query(`CREATE INDEX IF NOT EXISTS sessions_email_idx ON sessions (email)`)
-  .then(() => console.log('[boot] sessions_email_idx ready'))
-  .catch((e) =>
-    console.error('[boot] sessions_email_idx migration failed:', e),
-  );
+  // --- boot: index sessions(email) for efficient per-user session queries ---
+  pool
+    .query(`CREATE INDEX IF NOT EXISTS sessions_email_idx ON sessions (email)`)
+    .then(() => console.log('[boot] sessions_email_idx ready'))
+    .catch((e) =>
+      console.error('[boot] sessions_email_idx migration failed:', e),
+    );
 
-// --- boot: ensure users email verification columns exist ---
-pool
-  .query(
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT false`,
-  )
-  .then(() =>
-    // Mark all existing users as verified so they are not locked out
-    pool.query(
-      `UPDATE users SET email_verified = true WHERE email_verified = false`,
-    ),
-  )
-  .then(() => console.log('[boot] users.email_verified column ready'))
-  .catch((e) =>
-    console.error('[boot] users.email_verified migration failed:', e),
-  );
+  // --- boot: ensure users email verification columns exist ---
+  pool
+    .query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verified boolean NOT NULL DEFAULT false`,
+    )
+    .then(() =>
+      // Mark all existing users as verified so they are not locked out
+      pool.query(
+        `UPDATE users SET email_verified = true WHERE email_verified = false`,
+      ),
+    )
+    .then(() => console.log('[boot] users.email_verified column ready'))
+    .catch((e) =>
+      console.error('[boot] users.email_verified migration failed:', e),
+    );
 
-pool
-  .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verify_token text`)
-  .then(() => console.log('[boot] users.email_verify_token column ready'))
-  .catch((e) =>
-    console.error('[boot] users.email_verify_token migration failed:', e),
-  );
+  pool
+    .query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verify_token text`)
+    .then(() => console.log('[boot] users.email_verify_token column ready'))
+    .catch((e) =>
+      console.error('[boot] users.email_verify_token migration failed:', e),
+    );
 
-pool
-  .query(
-    `ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verify_token_expires timestamptz`,
-  )
-  .then(() =>
-    console.log('[boot] users.email_verify_token_expires column ready'),
-  )
-  .catch((e) =>
-    console.error(
-      '[boot] users.email_verify_token_expires migration failed:',
-      e,
-    ),
-  );
-
+  pool
+    .query(
+      `ALTER TABLE users ADD COLUMN IF NOT EXISTS email_verify_token_expires timestamptz`,
+    )
+    .then(() =>
+      console.log('[boot] users.email_verify_token_expires column ready'),
+    )
+    .catch((e) =>
+      console.error(
+        '[boot] users.email_verify_token_expires migration failed:',
+        e,
+      ),
+    );
 }
