@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import {
   STANDUP_CORRECTION_ACTIONS,
+  standupActionableIssue,
   standupCorrectionDisplay,
 } from './standup-review-escalation.js';
 
@@ -244,12 +245,32 @@ export function routeStandupNotifications({ audience, review, users }) {
       (Array.isArray(review?.pm_escalation_items)
         ? review.pm_escalation_items
         : []
-      ).map((item) => enrichItem(item, classifications)),
+      ).map((item) => {
+        const enriched = enrichItem(item, classifications);
+        const classification =
+          classifications.get(text(item?.ticket_id)) || {};
+        return {
+          ...enriched,
+          issue: standupActionableIssue(
+            enriched.issue,
+            standupActionableIssue(
+              classification.reason,
+              'Current evidence requires PM visibility to confirm delivery risk, ownership, and next action.',
+            ),
+          ),
+        };
+      }),
     );
     const pmActionIds = new Set(pmItems.map((item) => text(item.ticket_id)));
     const pmWatchItems = uniqueItems(
       (Array.isArray(review?.pm_watch_items) ? review.pm_watch_items : []).map(
-        (item) => enrichItem(item, classifications),
+        (item) => ({
+          ...enrichItem(item, classifications),
+          issue: standupActionableIssue(
+            item?.issue,
+            'A repeated developer correction remains under Team Lead review.',
+          ),
+        }),
       ),
     ).filter((item) => !pmActionIds.has(text(item.ticket_id)));
     const totalPmItems = uniqueItems([...pmItems, ...pmWatchItems]);

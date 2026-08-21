@@ -56,6 +56,7 @@ import {
   STANDUP_STATE_ADVANCEMENT_LABEL,
   applyStandupEscalationOverlay,
   buildStandupCorrectionState,
+  standupActionableIssue,
 } from './standup-review-escalation.js';
 import { runStandupSingleFlight } from './standup-review-singleflight.js';
 
@@ -66,7 +67,7 @@ dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const BONUS_ELIGIBILITY_PROMPT_VERSION = 'bonus_v2_value_impact';
-const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v21';
+const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v22';
 const STANDUP_REVIEW_BATCH_SIZE = 25;
 const STANDUP_REVIEW_BATCH_CONCURRENCY = 2;
 const STANDUP_NOTIFICATION_LEASE_MINUTES = Math.max(
@@ -755,6 +756,68 @@ function standupIsBranchCheckinTransitionDay(ticket) {
 
 function addStandupTag(tags, tag) {
   if (tag && !tags.includes(tag)) tags.push(tag);
+}
+
+function standupCategoryFallbackReason(category, tags = []) {
+  const riskReasons = [
+    [
+      'Release Risk',
+      'Current update indicates release risk and requires PM visibility.',
+    ],
+    [
+      'Schedule Risk',
+      'Current update indicates schedule risk and requires PM visibility.',
+    ],
+    [
+      'Delivery Risk',
+      'Current update indicates delivery risk and requires PM visibility.',
+    ],
+    [
+      'Cross-Team Dependency',
+      'A current cross-team dependency requires PM visibility and coordination.',
+    ],
+    [
+      'Waiting for Access',
+      'Current work is waiting for access and requires PM visibility.',
+    ],
+    [
+      'Waiting for Data',
+      'Current work is waiting for data and requires PM visibility.',
+    ],
+    [
+      'Waiting for Decision',
+      'Current work is waiting for a decision and requires PM visibility.',
+    ],
+    [
+      'Waiting for Environment',
+      'Current work is waiting for an environment and requires PM visibility.',
+    ],
+    [
+      'Delayed',
+      'The current update indicates a delay and requires PM visibility.',
+    ],
+    [
+      'Possible Risk',
+      'Current evidence indicates potential delivery risk and requires PM visibility.',
+    ],
+  ];
+  if (category === 'Needs PM Escalation') {
+    const matched = riskReasons.find(([tag]) => tags.includes(tag));
+    return (
+      matched?.[1] ||
+      'Current evidence requires PM visibility to confirm delivery risk, ownership, and next action.'
+    );
+  }
+  if (category === 'Needs Team Lead Clarification') {
+    return 'The current update needs Team Lead clarification before standup.';
+  }
+  if (category === 'Missing Update') {
+    return 'Active ticket is missing a required daily update.';
+  }
+  if (category === 'Blocked') {
+    return 'Current work is blocked and needs an identified owner and unblock path.';
+  }
+  return 'No deterministic progress-code mismatch was identified.';
 }
 
 function standupSeverity(ticket) {
@@ -1542,9 +1605,13 @@ export function normalizeStandupReviewResult(result, payload) {
         'Progress code does not align with the prior update or current TFS state.';
     }
 
-    const sourceReason = removedAiConcernWasOnlyActionableEvidence
+    const sourceReasonCandidate = removedAiConcernWasOnlyActionableEvidence
       ? ''
       : S(source.reason);
+    const sourceReason =
+      category === 'On Track'
+        ? sourceReasonCandidate
+        : standupActionableIssue(sourceReasonCandidate);
     const progressCodeReason =
       deterministic.isBackwardMovement ||
       deterministic.isReturnToActiveDevelopment ||
@@ -1559,9 +1626,7 @@ export function normalizeStandupReviewResult(result, payload) {
       deterministicReason ||
       workflowDefault?.reason ||
       sourceReason ||
-      (category === 'On Track'
-        ? 'No deterministic progress-code mismatch was identified.'
-        : 'AI output was incomplete and needs review.');
+      standupCategoryFallbackReason(category, tags);
     let deliveryAction = '';
     if (
       delivery.status === 'overdue' &&
@@ -2249,6 +2314,10 @@ Release Risk, Schedule Risk, Delivery Risk, No Daily Update, Missing Progress Co
 Critical Severity, High Severity, Persistent Missing Update, Expected Delivery Missing, Delivery Due Soon,
 Delivery Due Today, Expected Delivery Overdue, Expected Delivery Reforecasted, Reforecast Needs Rationale,
 and Review Queue Risk.
+
+Reason consistency rules:
+- Use "Normal Progress" only with category "On Track". Never use it as the reason for Blocked, Missing Update, Team Lead clarification, or PM escalation.
+- For every non-On Track category, reason must name the blocker, missing information, clarification need, or delivery/coordination risk that makes the item actionable.
 
 Update-quality rules:
 - Evaluate today_note together with the ticket title, state, and progress code. The title supplies the work-item scope; the developer does not need to repeat the feature, module, or defect name in the note.

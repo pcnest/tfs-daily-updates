@@ -2,9 +2,9 @@
 
 **Status:** Implemented
 
-**Policy/cache version:** `standup_review_v21`
+**Policy/cache version:** `standup_review_v22`
 
-**Last implementation review:** August 20, 2026
+**Last implementation review:** August 21, 2026
 
 **Audience:** PMs, Team Leads, administrators, developers, QA, and maintainers
 
@@ -122,7 +122,7 @@ Successful generation atomically records the daily escalation-policy run, correc
 4. **Load developer evidence.** For each ticket, load the assigned developer's latest row today and latest row before today. PM/admin/lead/other-developer rows cannot satisfy or replace it. The prior row need not be from yesterday.
 5. **Load forecast context.** Load current Expected Delivery and audit events observed since the prior review. The earliest prior value in that window is compared with the current value.
 6. **Build payload.** Sanitize titles/notes, limit notes to 300 characters, and calculate delivery context.
-7. **Hash and check cache.** SHA-256 covers the ordered complete payload. Reuse requires the same date, v21, hash, and a snapshot younger than 30 minutes; `refresh=1` bypasses ordinary reuse.
+7. **Hash and check cache.** SHA-256 covers the ordered complete payload. Reuse requires the same date, v22, hash, and a snapshot younger than 30 minutes; `refresh=1` bypasses ordinary reuse.
 8. **Coalesce and call OpenAI.** Identical in-flight work shares one process promise and one cross-instance PostgreSQL advisory lock. Split all tickets into batches of 25, with at most two calls in flight. The configured model (default `gpt-4o-mini`) receives a minimized semantic-signal contract; the server derives summaries, queues, exceptions, and counts.
 9. **Normalize.** Merge AI results, then iterate the full payload. Canonical identity/date fields replace AI values; server rules set overrides and derive every secondary list and count.
 10. **Verify coverage.** Eligible and reviewed IDs must be non-empty, unique, equal in count, and equal as sets.
@@ -311,7 +311,7 @@ The browser renders the normalized response in this order.
 
 ### 12.1 Header and coverage
 
-The header shows review date, cached status, and coverage. History also shows `v21 · Current policy`, an older version as Previous policy, or Legacy.
+The header shows review date, cached status, and coverage. History also shows `v22 · Current policy`, an older version as Previous policy, or Legacy.
 
 A cached report means date, policy version, and complete canonical input matched a result from the last 30 minutes. It is not necessarily stale. Historical versions must be interpreted under their own policy.
 
@@ -371,7 +371,7 @@ Tickets are grouped by developer. Developers with the highest-attention category
 | Category | Single normalized primary outcome. |
 | Escalation | Effective tier/action owner, persistence day, and whether routing bypassed the normal ladder. |
 | Sub-tags | Overlapping evidence and diagnostics. |
-| Reason | Highest-precedence server reason, otherwise AI explanation; validated reforecast detail appears beneath it. |
+| Reason | Highest-precedence server reason, otherwise a non-benign AI explanation or category/risk fallback; validated reforecast detail appears beneath it. `Normal Progress`, `On Track`, and equivalent no-issue text are valid only for On Track classifications. |
 | Recommended Action | Highest-precedence deterministic action, otherwise AI/category fallback. |
 
 The API classification also carries canonical `developer_email`, `previous_expected_delivery_date`, `delivery_date_status`, `working_days_to_expected_delivery`, `reforecast_direction`, `reforecast_explanation_status`, `reforecast_reason_type`, `reforecast_evidence`, `sandbox_validation_status`, `sandbox_validation_evidence`, and optional state-advancement target/action metadata.
@@ -427,6 +427,8 @@ Tier 2 repeated corrections appear here for monitoring while the Team Lead owns 
 ### 12.10 PM Escalation Items
 
 Immediate PM-risk tickets and Tier 3 repeated corrections appear. Rows include issue, concise evidence, delivery risk, and recommended PM action.
+
+Every PM action or watch row must have an actionable issue. Benign text such as `Normal Progress`, `On Track`, or `No issues` is replaced during normalization and again at notification routing as defense in depth; valid escalation routing is retained.
 
 Risk text prioritizes overdue/due-today, then due-soon, persistent Critical/High misses, severity with current risk, P1/P2 risk, release risk, delay/dependency, then generic visibility. Current normalized fallbacks begin with `High -` or `Medium -`.
 
@@ -518,7 +520,7 @@ Common mistakes:
 
 ### Current cache
 
-- Valid 30 minutes for the same date, v21, and exact input hash.
+- Valid 30 minutes for the same date, v22, and exact input hash.
 - Force refresh bypasses lookup and stores a new successful snapshot.
 - A corrupt matching cache row is ignored and generation proceeds.
 
@@ -596,7 +598,7 @@ The agent reads TFS `SupplyPro.SPApplication.ExpectedDeliveryDate`, normalizes i
 | `STANDUP_REVIEW_EMAILS_ENABLED` | Explicit notification master switch; defaults to false. |
 | `STANDUP_NOTIFICATION_LEASE_MINUTES` | Time before an abandoned `sending` notification claim can be reclaimed; defaults to 15 minutes. |
 | `TEST_RECIPIENT` | Redirects every To/CC destination during mail testing; the ledger still records the logical recipient. |
-| Prompt version | Code constant `standup_review_v21`. |
+| Prompt version | Code constant `standup_review_v22`. |
 | Escalation policy | Code constant `standup_escalation_v2`; v2 starts fresh correction streaks under the context-aware vague-update rule. |
 | Batch size / concurrency | Code constants 25 / 2. |
 | Cache lifetime | Code constant 30 minutes. |

@@ -66,6 +66,34 @@ function text(value) {
   return String(value ?? '').trim();
 }
 
+const BENIGN_STANDUP_ISSUES = new Set([
+  'normal progress',
+  'on track',
+  'no issue',
+  'no issues',
+  'no issue identified',
+  'no issues identified',
+  'none',
+  'n/a',
+  'not applicable',
+  'no action required',
+]);
+
+export function isStandupBenignIssue(value) {
+  const normalized = text(value)
+    .toLowerCase()
+    .replace(/[.!]+$/g, '')
+    .trim();
+  return BENIGN_STANDUP_ISSUES.has(normalized);
+}
+
+export function standupActionableIssue(value, fallback = '') {
+  const candidate = text(value);
+  return candidate && !isStandupBenignIssue(candidate)
+    ? candidate
+    : text(fallback);
+}
+
 function email(value) {
   return text(value).toLowerCase();
 }
@@ -316,6 +344,13 @@ export function applyStandupEscalationOverlay(review, observations = []) {
 
     if (immediatePm || correctionTier >= 3) {
       const base = basePm.get(ticketId) || {};
+      const immediatePmIssue = standupActionableIssue(
+        base.issue,
+        standupActionableIssue(
+          classification.reason,
+          'Current evidence requires PM visibility to confirm delivery risk, ownership, and next action.',
+        ),
+      );
       pmEscalationItems.push({
         ticket_id: ticketId,
         title: text(base.title) || text(classification.title),
@@ -323,7 +358,7 @@ export function applyStandupEscalationOverlay(review, observations = []) {
         developer_email: email(base.developer_email) || email(classification.developer_email),
         issue: correctionTier >= 3 && !immediatePm
           ? `Correction remains after ${escalation.consecutive_review_days} reviewed workdays: ${correctionText}.`
-          : text(base.issue) || text(classification.reason),
+          : immediatePmIssue,
         evidence: text(base.evidence) || text(classification.update_summary) || text(classification.reason),
         delivery_risk: text(base.delivery_risk) ||
           'Medium - The correction remains after Team Lead follow-up and now needs PM visibility.',
