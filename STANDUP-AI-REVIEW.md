@@ -2,7 +2,7 @@
 
 **Status:** Implemented
 
-**Policy/cache version:** `standup_review_v22`
+**Policy/cache version:** `standup_review_v23`
 
 **Last implementation review:** August 21, 2026
 
@@ -122,7 +122,7 @@ Successful generation atomically records the daily escalation-policy run, correc
 4. **Load developer evidence.** For each ticket, load the assigned developer's latest row today and latest row before today. PM/admin/lead/other-developer rows cannot satisfy or replace it. The prior row need not be from yesterday.
 5. **Load forecast context.** Load current Expected Delivery and audit events observed since the prior review. The earliest prior value in that window is compared with the current value.
 6. **Build payload.** Sanitize titles/notes, limit notes to 300 characters, and calculate delivery context.
-7. **Hash and check cache.** SHA-256 covers the ordered complete payload. Reuse requires the same date, v22, hash, and a snapshot younger than 30 minutes; `refresh=1` bypasses ordinary reuse.
+7. **Hash and check cache.** SHA-256 covers the ordered complete payload. Reuse requires the same date, v23, hash, and a snapshot younger than 30 minutes; `refresh=1` bypasses ordinary reuse.
 8. **Coalesce and call OpenAI.** Identical in-flight work shares one process promise and one cross-instance PostgreSQL advisory lock. Split all tickets into batches of 25, with at most two calls in flight. The configured model (default `gpt-4o-mini`) receives a minimized semantic-signal contract; the server derives summaries, queues, exceptions, and counts.
 9. **Normalize.** Merge AI results, then iterate the full payload. Canonical identity/date fields replace AI values; server rules set overrides and derive every secondary list and count.
 10. **Verify coverage.** Eligible and reviewed IDs must be non-empty, unique, equal in count, and equal as sets.
@@ -175,7 +175,9 @@ The `600_xx`, `700_xx`, and `800_xx` families describe exception or status condi
 
 No current developer update is required in New, Approved, On-Hold, Shelved, Resolved, Ready for QA, QA Testing, or Done. `Branch Checkin` is the exact TFS state value and is exempt only on the local calendar date it entered that state. Beginning the next workday, the assigned developer must provide a current Sandbox-status note. Done and Removed are excluded from live selection.
 
-Exempt tickets without today's update become On Track with a server-derived state tag: New adds `New`; Approved adds `Pending Development`; On-Hold adds `On Hold`; Shelved adds `Awaiting Routine Review`; Resolved/Ready for QA/QA Testing add `Ready for QA`; and Done adds `Done`. The Done tag describes only the TFS state and does not imply release to QA or production. Branch Checkin always adds `Sandbox Validation`; no update or a blank-note `500_01` is tolerated only on its transition date. Explicit blockers, rework, or delivery impact remain actionable.
+Exempt tickets without today's update become On Track with `workflow_update_exempt=true` and a server-derived state tag: New adds `New`; Approved adds `Pending Development`; On-Hold adds `On Hold`; Shelved adds `Awaiting Routine Review`; Resolved/Ready for QA/QA Testing add `Ready for QA`; and Done adds `Done`. The Done tag describes only the TFS state and does not imply release to QA or production. Branch Checkin always adds `Sandbox Validation`; no update or a blank-note `500_01` is tolerated only on its transition date. Explicit blockers, rework, or delivery impact remain actionable and set `workflow_update_exempt=false`.
+
+For an On Track workflow-exempt classification with no active correction, the exemption overrides immediate Team Lead routing caused only by a diagnostic tag. The tag and its report evidence remain visible, but the ticket does not enter `tl_review_items` or Team Lead notification counts. This override does not apply to active-work tickets or current actionable risk.
 
 On-Hold is an **incomplete managed pause**, not a completion state and not the same as Shelved. While it remains active, the server suppresses missing/incomplete-update and No Movement diagnostics, accepts `800_xx` without adding `Delayed` or escalating from the code alone, preserves the existing Expected Delivery with status `paused`, and removes delivery/reforecast follow-up questions. A current note can still reach PM when it explicitly carries Release Risk, Schedule Risk, Delivery Risk, or Cross-Team Dependency. Waiting-for or Delayed tags and `800_xx` alone are not sufficient On-Hold escalation evidence.
 
@@ -250,6 +252,7 @@ Policy application:
 7. Overdue Code Review waiting on a reviewer is a Team Lead queue issue unless today's note identifies developer rework.
 8. Active-state or Branch Checkin `500_xx` remains incomplete for date policy until TFS reaches a development-complete state.
 9. On-Hold forces `paused`, a null working-day countdown, and `unchanged` reforecast direction. Due, overdue, missing-date, and reforecast-rationale diagnostics resume when the ticket returns to an active state.
+10. In New, Approved, Shelved, and other workflow-exempt states, an existing overdue date remains visible as `overdue` with `Expected Delivery Overdue`, but it does not by itself create a Team Lead action item while the classification remains On Track and has no active correction.
 
 ### Reforecast policy
 
@@ -302,6 +305,7 @@ Primary categories remain unchanged for snapshot compatibility, but the additive
 - Tier 2: the same correction on the next completed reviewed workday is Team Lead-owned and appears on the PM watchlist.
 - Tier 3: the same correction on a third completed reviewed workday becomes a formal PM escalation while remaining visible to the Team Lead.
 - Blockers and material priority, delivery, schedule, release, or cross-team risks bypass persistence and route immediately to the appropriate manager tier.
+- An On Track `workflow_update_exempt` ticket cannot bypass into Team Lead ownership from a diagnostic tag alone when it has no active correction.
 
 Correction streaks are tracked independently per ticket, canonical developer, and correction key. Missing review days pause a streak; a completed review without the correction resolves it; a developer ownership change resets it. Same-day refreshes replace the day's observation and never increment the streak.
 
@@ -311,7 +315,7 @@ The browser renders the normalized response in this order.
 
 ### 12.1 Header and coverage
 
-The header shows review date, cached status, and coverage. History also shows `v22 · Current policy`, an older version as Previous policy, or Legacy.
+The header shows review date, cached status, and coverage. History also shows `v23 · Current policy`, an older version as Previous policy, or Legacy.
 
 A cached report means date, policy version, and complete canonical input matched a result from the last 30 minutes. It is not necessarily stale. Historical versions must be interpreted under their own policy.
 
@@ -374,7 +378,7 @@ Tickets are grouped by developer. Developers with the highest-attention category
 | Reason | Highest-precedence server reason, otherwise a non-benign AI explanation or category/risk fallback; validated reforecast detail appears beneath it. `Normal Progress`, `On Track`, and equivalent no-issue text are valid only for On Track classifications. |
 | Recommended Action | Highest-precedence deterministic action, otherwise AI/category fallback. |
 
-The API classification also carries canonical `developer_email`, `previous_expected_delivery_date`, `delivery_date_status`, `working_days_to_expected_delivery`, `reforecast_direction`, `reforecast_explanation_status`, `reforecast_reason_type`, `reforecast_evidence`, `sandbox_validation_status`, `sandbox_validation_evidence`, and optional state-advancement target/action metadata.
+The API classification also carries canonical `developer_email`, additive `workflow_update_exempt`, `previous_expected_delivery_date`, `delivery_date_status`, `working_days_to_expected_delivery`, `reforecast_direction`, `reforecast_explanation_status`, `reforecast_reason_type`, `reforecast_evidence`, `sandbox_validation_status`, `sandbox_validation_evidence`, and optional state-advancement target/action metadata.
 
 ### 12.5 Sub-tags
 
@@ -416,7 +420,7 @@ An empty list means no qualifying ambiguity was identified, not that discussion 
 
 ### 12.8 Team Lead Review Items
 
-Each row has ticket/developer, tier, persistence days, issue, why TL is needed, and suggested action. Inclusion occurs for immediate Lead concerns and Tier 2 or Tier 3 repeated corrections. Routine Tier 1 corrections do not enter this queue.
+Each row has ticket/developer, tier, persistence days, issue, why TL is needed, and suggested action. Inclusion occurs for immediate Lead concerns and Tier 2 or Tier 3 repeated corrections. Routine Tier 1 corrections do not enter this queue. On Track workflow-exempt tickets with no active correction do not enter from an immediate diagnostic tag alone; forecast badges and exception diagnostics remain visible elsewhere in the report.
 
 A Needs PM ticket can also appear here because inclusion uses tags. Interpretation: PM owns delivery/coordination risk while TL owns the supporting technical, workflow, or forecast-quality action.
 
@@ -490,7 +494,7 @@ The delivery ledger records logical recipients even when `TEST_RECIPIENT` redire
 }
 ```
 
-Each classification may include additive `progress_code_issue_type` metadata. The value `tfs_state_may_need_advancement` selects the state-advancement display wording while preserving the `Wrong or Mismatched Progress Code` sub-tag and persistence identity. The value `returned_to_active_development` identifies a compatible workflow return and does not create a developer correction observation. Escalation correction entries may include an additive `label`; older snapshots without either field fall back to the correction key.
+Each classification includes additive `workflow_update_exempt` metadata derived from the authoritative workflow/update decision. It is true only when the current classification is eligible for the no-update workflow exemption; a current actionable update makes it false and preserves normal routing. A classification may also include additive `progress_code_issue_type` metadata. The value `tfs_state_may_need_advancement` selects the state-advancement display wording while preserving the `Wrong or Mismatched Progress Code` sub-tag and persistence identity. The value `returned_to_active_development` identifies a compatible workflow return and does not create a developer correction observation. Escalation correction entries may include an additive `label`; older snapshots without these fields retain their stored policy behavior and fall back to the correction key.
 
 The current-review response adds runtime `notification_counts`; those counts are not persisted in snapshots. History detail adds `generated_at`, `prompt_version`, and `is_current_version`, and returns `cached: true`. The raw AI response is not stored separately; the normalized result is stored.
 
@@ -510,6 +514,7 @@ Common mistakes:
 
 - Due soon is not late; healthy near-term work may be On Track.
 - Reforecasted is not automatically escalated.
+- An overdue forecast can remain visible on an On Track workflow-exempt ticket without creating a Team Lead email action.
 - An old Expected Delivery on an On-Hold ticket is paused, not overdue; the date remains visible and is revalidated when work resumes.
 - Development complete does not mean QA, release, or deployment complete.
 - Severity is visibility, not automatic escalation.
@@ -520,7 +525,7 @@ Common mistakes:
 
 ### Current cache
 
-- Valid 30 minutes for the same date, v22, and exact input hash.
+- Valid 30 minutes for the same date, v23, and exact input hash.
 - Force refresh bypasses lookup and stores a new successful snapshot.
 - A corrupt matching cache row is ignored and generation proceeds.
 
@@ -598,7 +603,7 @@ The agent reads TFS `SupplyPro.SPApplication.ExpectedDeliveryDate`, normalizes i
 | `STANDUP_REVIEW_EMAILS_ENABLED` | Explicit notification master switch; defaults to false. |
 | `STANDUP_NOTIFICATION_LEASE_MINUTES` | Time before an abandoned `sending` notification claim can be reclaimed; defaults to 15 minutes. |
 | `TEST_RECIPIENT` | Redirects every To/CC destination during mail testing; the ledger still records the logical recipient. |
-| Prompt version | Code constant `standup_review_v22`. |
+| Prompt version | Code constant `standup_review_v23`. |
 | Escalation policy | Code constant `standup_escalation_v2`; v2 starts fresh correction streaks under the context-aware vague-update rule. |
 | Batch size / concurrency | Code constants 25 / 2. |
 | Cache lifetime | Code constant 30 minutes. |
@@ -615,7 +620,7 @@ From `api/`:
 npm test
 ```
 
-Standup tests cover identity, weekday logic, hash/batching/coverage, admin access, handoffs, P1/P2 behavior, Bug severity, On-Hold managed-pause behavior, `800_xx` suppression and explicit-risk escape, delivery status/persistence, resumption validation, Code Review ownership, date auditing, reforecast evidence, derived response integrity, cache/history versions, UI badges/sorting/errors, and legacy snapshot fallbacks.
+Standup tests cover identity, weekday logic, hash/batching/coverage, admin access, handoffs, P1/P2 behavior, Bug severity, workflow-exempt tag-routing suppression and current-risk escape, On-Hold managed-pause behavior, `800_xx` suppression and explicit-risk escape, delivery status/persistence, resumption validation, Code Review ownership, date auditing, reforecast evidence, derived response integrity, cache/history versions, UI badges/sorting/errors, and legacy snapshot fallbacks.
 
 Suggested integration smoke checks:
 

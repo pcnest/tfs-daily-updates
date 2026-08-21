@@ -228,6 +228,13 @@ function hasImmediateLeadSignal(classification, correctionKeys) {
   const tags = new Set(
     (Array.isArray(classification?.sub_tags) ? classification.sub_tags : []).map(text),
   );
+  if (
+    classification?.workflow_update_exempt === true &&
+    classification?.category === 'On Track' &&
+    correctionKeys.length === 0
+  ) {
+    return false;
+  }
   if (classification?.category === 'Blocked') return true;
   if (Array.from(tags).some((tag) => IMMEDIATE_LEAD_TAGS.has(tag))) return true;
   return classification?.category === 'Needs Team Lead Clarification' &&

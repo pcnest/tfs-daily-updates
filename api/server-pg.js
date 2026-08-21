@@ -67,7 +67,7 @@ dotenv.config();
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const BONUS_ELIGIBILITY_PROMPT_VERSION = 'bonus_v2_value_impact';
-const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v22';
+const STANDUP_REVIEW_PROMPT_VERSION = 'standup_review_v23';
 const STANDUP_REVIEW_BATCH_SIZE = 25;
 const STANDUP_REVIEW_BATCH_CONCURRENCY = 2;
 const STANDUP_NOTIFICATION_LEASE_MINUTES = Math.max(
@@ -1754,6 +1754,7 @@ export function normalizeStandupReviewResult(result, payload) {
         : S(source.update_summary) || String(ticket.today_note || ''),
       category,
       sub_tags: tags,
+      workflow_update_exempt: isWorkflowExempt,
       progress_code_issue_type: progressCodeIssueType || null,
       state_advancement_target: stateAdvancementTarget || null,
       state_advancement_action: stateAdvancementAction || null,
