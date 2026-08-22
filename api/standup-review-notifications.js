@@ -56,6 +56,12 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function developerDisplayName(value) {
+  const raw = text(value);
+  const assignedIdentity = raw.match(/^(.*?)\s*<[^>]+>$/);
+  return assignedIdentity ? text(assignedIdentity[1]) : raw;
+}
+
 function ticketCompare(a, b) {
   const aId = text(a?.ticket_id);
   const bId = text(b?.ticket_id);
@@ -424,13 +430,13 @@ function emailTable(audience, items) {
         item.title ? `<br><span>${escapeHtml(item.title)}</span>` : ''
       }`;
       if (audience === 'lead') {
-        return `<tr>${bodyCell(ticket)}${bodyCell(escapeHtml(item.developer))}${bodyCell(escapeHtml(item.issue))}${bodyCell(escapeHtml(item.why_tl_needed))}${bodyCell(escapeHtml(item.suggested_action))}</tr>`;
+        return `<tr>${bodyCell(ticket)}${bodyCell(escapeHtml(developerDisplayName(item.developer)))}${bodyCell(escapeHtml(item.issue))}${bodyCell(escapeHtml(item.why_tl_needed))}${bodyCell(escapeHtml(item.suggested_action))}</tr>`;
       }
       if (audience === 'pm') {
-        return `<tr>${bodyCell(ticket)}${bodyCell(escapeHtml(item.developer))}${bodyCell(escapeHtml(item.issue))}${bodyCell(escapeHtml(item.evidence))}${bodyCell(escapeHtml(item.delivery_risk))}${bodyCell(escapeHtml(item.recommended_pm_action))}</tr>`;
+        return `<tr>${bodyCell(ticket)}${bodyCell(escapeHtml(developerDisplayName(item.developer)))}${bodyCell(escapeHtml(item.issue))}${bodyCell(escapeHtml(item.evidence))}${bodyCell(escapeHtml(item.delivery_risk))}${bodyCell(escapeHtml(item.recommended_pm_action))}</tr>`;
       }
       if (audience === 'pm_watch') {
-        return `<tr>${bodyCell(ticket)}${bodyCell(escapeHtml(item.developer))}${bodyCell(escapeHtml(item.issue))}${bodyCell(escapeHtml(item.monitoring_reason))}${bodyCell(escapeHtml(item.lead_action))}</tr>`;
+        return `<tr>${bodyCell(ticket)}${bodyCell(escapeHtml(developerDisplayName(item.developer)))}${bodyCell(escapeHtml(item.issue))}${bodyCell(escapeHtml(item.monitoring_reason))}${bodyCell(escapeHtml(item.lead_action))}</tr>`;
       }
       return `<tr>${bodyCell(ticket)}${bodyCell(escapeHtml(item.issue))}${bodyCell(escapeHtml(item.action))}</tr>`;
     })
