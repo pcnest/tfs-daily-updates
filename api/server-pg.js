@@ -16,7 +16,6 @@ import {
 import {
   chunkStandupReviewPayload,
   hasCompleteStandupCoverage,
-  isStandupReviewRoleAllowed,
   standupDateOnly,
   standupDateInTimeZone,
   standupIsWeekday,
@@ -59,6 +58,15 @@ import {
   standupActionableIssue,
 } from './standup-review-escalation.js';
 import { runStandupSingleFlight } from './standup-review-singleflight.js';
+import {
+  ITERATION_PERIODS_SCHEMA_SQL,
+  iterationStatus,
+  normalizeIterationSyncPayload,
+} from './iteration-periods.js';
+import {
+  WEEKLY_FLOW_POLICY_VERSION,
+  buildWeeklyFlowReview,
+} from './weekly-flow-review.js';
 
 // Load environment
 dotenv.config();
@@ -1742,6 +1750,10 @@ export function normalizeStandupReviewResult(result, payload) {
     classifications.push({
       ticket_id: id,
       title: S(source.title) || String(ticket.title || ''),
+      type: String(ticket.type || ''),
+      state: String(ticket.state || ''),
+      priority: ticket.priority ?? null,
+      severity: String(ticket.severity || ''),
       developer: String(ticket.assigned_to || ''),
       developer_email: String(ticket.assigned_developer_email || '')
         .trim()
@@ -2533,6 +2545,59 @@ function ensureStandupEscalationSchema() {
       });
   }
   return standupEscalationSchemaPromise;
+}
+
+let iterationPeriodsSchemaPromise = null;
+function ensureIterationPeriodsSchema() {
+  if (!iterationPeriodsSchemaPromise) {
+    iterationPeriodsSchemaPromise = pool
+      .query(ITERATION_PERIODS_SCHEMA_SQL)
+      .catch((error) => {
+        iterationPeriodsSchemaPromise = null;
+        throw error;
+      });
+  }
+  return iterationPeriodsSchemaPromise;
+}
+
+function iterationContextFromRow(row) {
+  if (!row) return null;
+  return {
+    iteration_id: Number(row.id),
+    iteration_name: row.iteration_name,
+    iteration_path: row.iteration_path,
+    project: row.project,
+    team: row.team,
+    start_date: String(row.start_date).slice(0, 10),
+    end_date: String(row.end_date).slice(0, 10),
+  };
+}
+
+async function resolveIterationContext(reviewDate, db = pool) {
+  await ensureIterationPeriodsSchema();
+  const scope = await configuredIterationScope(db);
+  const params = [reviewDate];
+  const scopeWhere = [];
+  if (scope.project) {
+    params.push(scope.project);
+    scopeWhere.push(`lower(project)=lower($${params.length})`);
+  }
+  if (scope.team) {
+    params.push(scope.team);
+    scopeWhere.push(`lower(team)=lower($${params.length})`);
+  }
+  const matches = await db.query(
+    `select id, project, team, iteration_name, iteration_path,
+            start_date::text as start_date, end_date::text as end_date
+       from iteration_periods
+      where $1::date between start_date and end_date
+        ${scopeWhere.length ? `and ${scopeWhere.join(' and ')}` : ''}
+      order by last_observed_at desc`,
+    params,
+  );
+  return matches.rowCount === 1
+    ? iterationContextFromRow(matches.rows[0])
+    : null;
 }
 
 // Log which DB host we are talking to (masking secrets) to rule out DSN drift
@@ -3718,9 +3783,11 @@ async function generatePersistedStandupReview({
           status: 500,
         });
       }
+      const iterationContext = await resolveIterationContext(date, client);
       const baseResult = {
         ...normalized,
         input_hash: inputHash,
+        iteration_context: iterationContext,
         coverage: {
           eligible: payload.length,
           reviewed,
@@ -4614,6 +4681,14 @@ app.post('/api/iteration/current', requireSyncKey, async (req, res) => {
   try {
     const name = String(req.body?.name || '').trim();
     const team = String(req.body?.team || '').trim();
+    const project = String(req.body?.project || '').trim();
+    const path = String(req.body?.path || '').trim();
+    const startDate =
+      String(req.body?.start_date || req.body?.startDate || '').slice(0, 10) ||
+      null;
+    const endDate =
+      String(req.body?.end_date || req.body?.endDate || '').slice(0, 10) ||
+      null;
     const at = req.body?.at || null;
 
     if (!name) return res.status(400).json({ error: 'name is required' });
@@ -4625,13 +4700,68 @@ app.post('/api/iteration/current', requireSyncKey, async (req, res) => {
          set value = excluded.value,
              extra = excluded.extra,
              updated_at = now()`,
-      [name, JSON.stringify({ team, at })],
+      [
+        name,
+        JSON.stringify({
+          team,
+          project,
+          path,
+          start_date: startDate,
+          end_date: endDate,
+          at,
+        }),
+      ],
     );
 
     res.json({ ok: true, name });
   } catch (e) {
     console.error('POST /api/iteration/current error:', e);
     res.status(500).json({ error: 'server_error' });
+  }
+});
+
+// Persist authoritative current/recent TFS team iteration periods.
+app.post('/api/sync/iterations', requireSyncKey, async (req, res) => {
+  const normalized = normalizeIterationSyncPayload(req.body || {});
+  if (!normalized.ok)
+    return res.status(400).json({ error: normalized.error });
+
+  const payload = normalized.value;
+  let client = null;
+  try {
+    client = await pool.connect();
+    await ensureIterationPeriodsSchema();
+    await client.query('begin');
+    const ids = [];
+    for (const iteration of payload.iterations) {
+      const stored = await client.query(
+        `insert into iteration_periods
+           (project, team, iteration_name, iteration_path, start_date, end_date)
+         values ($1, $2, $3, $4, $5::date, $6::date)
+         on conflict (project, team, iteration_path) do update
+           set iteration_name = excluded.iteration_name,
+               start_date = excluded.start_date,
+               end_date = excluded.end_date,
+               last_observed_at = now()
+         returning id`,
+        [
+          payload.project,
+          payload.team,
+          iteration.iteration_name,
+          iteration.iteration_path,
+          iteration.start_date,
+          iteration.end_date,
+        ],
+      );
+      ids.push(Number(stored.rows[0].id));
+    }
+    await client.query('commit');
+    res.json({ ok: true, count: ids.length, ids });
+  } catch (e) {
+    if (client) await client.query('rollback').catch(() => {});
+    return serverError(res, e, 'sync/iterations');
+  } finally {
+    if (client) client.release();
   }
 });
 
@@ -6320,7 +6450,7 @@ async function requirePMOrAdmin(req, res, next) {
       req.userEmail,
     ]);
     const role = me.rows[0]?.role || 'dev';
-    if (!isStandupReviewRoleAllowed(role))
+    if (!['pm', 'admin'].includes(role))
       return res.status(403).json({ error: 'pm/admin only' });
     next();
   } catch (e) {
@@ -6340,6 +6470,415 @@ async function requireAdminOnly(req, res, next) {
     return serverError(res, e, 'requireAdminOnly');
   }
 }
+
+async function configuredIterationScope(db = pool) {
+  const result = await db.query(
+    `select extra from meta where key='current_iteration' limit 1`,
+  );
+  const extra = parseStoredJsonObject(result.rows[0]?.extra) || {};
+  return {
+    project: String(extra.project || '').trim(),
+    team: String(extra.team || '').trim(),
+  };
+}
+
+async function weeklyStandupDays(period, developerEmail) {
+  const snapshots = await pool.query(
+    `select distinct on (period_start)
+            period_start::text as date, ai_output, created_at
+       from ai_snapshot_runs
+      where dev_email = '_team_standup'
+        and period_start between $1::date and $2::date
+        and prompt_version = $3
+      order by period_start, created_at desc`,
+    [period.start_date, period.end_date, STANDUP_REVIEW_PROMPT_VERSION],
+  );
+  const overlaps = await pool.query(
+    `select id, start_date::text as start_date, end_date::text as end_date
+       from iteration_periods
+      where start_date <= $2::date and end_date >= $1::date`,
+    [period.start_date, period.end_date],
+  );
+  const days = [];
+  for (const row of snapshots.rows) {
+    const stored = parseStoredJsonObject(row.ai_output);
+    if (!stored || !Array.isArray(stored.classifications)) continue;
+    const context = stored.iteration_context;
+    let belongs = false;
+    if (context) {
+      belongs =
+        Number(context.iteration_id) === Number(period.id) ||
+        (String(context.iteration_path || '') === period.iteration_path &&
+          String(context.project || '') === period.project &&
+          String(context.team || '') === period.team);
+    } else {
+      const dateMatches = overlaps.rows.filter(
+        (candidate) =>
+          row.date >= candidate.start_date && row.date <= candidate.end_date,
+      );
+      belongs =
+        dateMatches.length === 1 &&
+        Number(dateMatches[0].id) === Number(period.id);
+    }
+    if (!belongs) continue;
+    days.push({
+      date: row.date,
+      items: stored.classifications.filter(
+        (item) =>
+          String(item.developer_email || '')
+            .trim()
+            .toLowerCase() === developerEmail,
+      ),
+    });
+  }
+  return days;
+}
+
+async function weeklyBaselineDay(period, developerEmail) {
+  const baseline = await pool.query(
+    `select period_start::text as date, ai_output
+       from ai_snapshot_runs
+      where dev_email = '_team_standup'
+        and period_start < $1::date
+        and period_start >= $1::date - 7
+        and prompt_version = $2
+      order by period_start desc, created_at desc
+      limit 1`,
+    [period.start_date, STANDUP_REVIEW_PROMPT_VERSION],
+  );
+  if (!baseline.rowCount) return null;
+  const stored = parseStoredJsonObject(baseline.rows[0].ai_output);
+  if (!stored || !Array.isArray(stored.classifications)) return null;
+  return {
+    date: baseline.rows[0].date,
+    items: stored.classifications.filter(
+      (item) =>
+        String(item.developer_email || '')
+          .trim()
+          .toLowerCase() === developerEmail,
+    ),
+  };
+}
+
+async function rewriteWeeklyFlowWording(report) {
+  if (!openai || report.coverage.status === 'insufficient') {
+    return { report, usedAI: false };
+  }
+  try {
+    const response = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      messages: [
+        {
+          role: 'system',
+          content:
+            'Rewrite only the supplied weekly summary and action wording. Preserve every fact, ticket ID, action type, owner, ordering, and count. The summary must be no more than two concise sentences. Do not add recommendations or claims not present in the input.',
+        },
+        {
+          role: 'user',
+          content: JSON.stringify({
+            assessment: report.assessment,
+            coverage: report.coverage,
+            flow_snapshot: report.flow_snapshot,
+            tickets_needing_attention: report.tickets_needing_attention,
+            summary: report.summary,
+            actions: report.next_period_actions.map((item) => item.wording),
+          }),
+        },
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'weekly_flow_wording',
+          strict: true,
+          schema: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['summary', 'actions'],
+            properties: {
+              summary: { type: 'string' },
+              actions: {
+                type: 'array',
+                maxItems: 3,
+                items: { type: 'string' },
+              },
+            },
+          },
+        },
+      },
+      max_tokens: 350,
+    });
+    const wording = parseOpenAIJson(response);
+    const summary = String(wording?.summary || '').trim();
+    const actions = Array.isArray(wording?.actions) ? wording.actions : [];
+    const sentenceCount = summary.split(/[.!?]+/).filter((part) => part.trim()).length;
+    const hasUnexpectedNumbers = (candidate, source) => {
+      const allowed = new Set(String(source || '').match(/\d+(?:\.\d+)?/g) || []);
+      return (String(candidate || '').match(/\d+(?:\.\d+)?/g) || []).some(
+        (number) => !allowed.has(number),
+      );
+    };
+    if (
+      !summary ||
+      sentenceCount > 2 ||
+      hasUnexpectedNumbers(summary, report.summary) ||
+      actions.length !== report.next_period_actions.length ||
+      actions.some(
+        (item, index) =>
+          !String(item || '').trim() ||
+          hasUnexpectedNumbers(
+            item,
+            report.next_period_actions[index]?.wording,
+          ),
+      )
+    ) {
+      throw new Error('invalid_weekly_flow_wording');
+    }
+    return {
+      usedAI: true,
+      report: {
+        ...report,
+        summary,
+        next_period_actions: report.next_period_actions.map((item, index) => ({
+          ...item,
+          wording: String(actions[index]).trim(),
+        })),
+      },
+    };
+  } catch (error) {
+    console.warn('[weekly-flow] AI wording fallback:', error.message);
+    return { report, usedAI: false };
+  }
+}
+
+app.get(
+  '/api/reports/weekly-flow/iterations',
+  requireAuth,
+  requirePMOrAdmin,
+  async (_req, res) => {
+    try {
+      await ensureIterationPeriodsSchema();
+      const today = await todayLocal(pool);
+      const scope = await configuredIterationScope();
+      const params = [];
+      const where = [];
+      if (scope.project) {
+        params.push(scope.project);
+        where.push(`lower(project)=lower($${params.length})`);
+      }
+      if (scope.team) {
+        params.push(scope.team);
+        where.push(`lower(team)=lower($${params.length})`);
+      }
+      const result = await pool.query(
+        `select id, project, team, iteration_name, iteration_path,
+                start_date::text as start_date, end_date::text as end_date
+           from iteration_periods
+          ${where.length ? `where ${where.join(' and ')}` : ''}
+          order by end_date desc, start_date desc
+          limit 12`,
+        params,
+      );
+      const items = result.rows.map((row) => ({
+        ...iterationContextFromRow(row),
+        status: iterationStatus(row, today),
+      }));
+      const defaultItem =
+        items.find((item) => item.end_date < today) ||
+        items.find((item) => item.status === 'current') ||
+        null;
+      res.json({
+        items,
+        default_iteration_id: defaultItem?.iteration_id || null,
+        today,
+      });
+    } catch (e) {
+      return serverError(res, e, 'weekly-flow/iterations');
+    }
+  },
+);
+
+app.get(
+  '/api/reports/weekly-flow',
+  requireAuth,
+  requirePMOrAdmin,
+  async (req, res) => {
+    try {
+      const rawDeveloper = String(req.query.developer || '').trim();
+      const iterationId = Number.parseInt(
+        String(req.query.iteration_id || ''),
+        10,
+      );
+      if (!rawDeveloper)
+        return res.status(400).json({ error: 'developer_required' });
+      if (!Number.isSafeInteger(iterationId) || iterationId < 1) {
+        return res.status(400).json({ error: 'valid_iteration_id_required' });
+      }
+      await ensureIterationPeriodsSchema();
+
+      const periodResult = await pool.query(
+        `select id, project, team, iteration_name, iteration_path,
+                start_date::text as start_date, end_date::text as end_date
+           from iteration_periods where id=$1 limit 1`,
+        [iterationId],
+      );
+      if (!periodResult.rowCount)
+        return res.status(404).json({ error: 'iteration_not_found' });
+      const period = {
+        ...iterationContextFromRow(periodResult.rows[0]),
+        id: iterationId,
+      };
+      const scope = await configuredIterationScope();
+      if (
+        (scope.project &&
+          scope.project.toLowerCase() !== period.project.toLowerCase()) ||
+        (scope.team && scope.team.toLowerCase() !== period.team.toLowerCase())
+      ) {
+        return res
+          .status(403)
+          .json({ error: 'iteration_outside_configured_scope' });
+      }
+
+      const developerEmail = await resolveRecipientEmail(
+        pool,
+        rawDeveloper,
+        '',
+      );
+      if (!developerEmail)
+        return res.status(404).json({ error: 'developer_not_found' });
+      const developerRole = await pool.query(
+        `select role from users where lower(email)=lower($1) limit 1`,
+        [developerEmail],
+      );
+      if (
+        developerRole.rowCount &&
+        developerRole.rows[0].role !== 'dev'
+      ) {
+        return res.status(400).json({ error: 'developer_required' });
+      }
+      const displayName = await resolveDeveloperDisplayName(
+        pool,
+        developerEmail,
+        '',
+      );
+      const developer = {
+        email: developerEmail,
+        display_name: displayName,
+      };
+      const today = await todayLocal(pool);
+      period.status = iterationStatus(period, today);
+      const days = await weeklyStandupDays(period, developerEmail);
+      const baselineDay = await weeklyBaselineDay(period, developerEmail);
+
+      const previousResult = await pool.query(
+        `select id, project, team, iteration_name, iteration_path,
+                start_date::text as start_date, end_date::text as end_date
+           from iteration_periods
+          where lower(project)=lower($1)
+            and lower(team)=lower($2)
+            and end_date < $3::date
+          order by end_date desc, start_date desc
+          limit 1`,
+        [period.project, period.team, period.start_date],
+      );
+      let priorMetrics = null;
+      if (previousResult.rowCount) {
+        const previous = {
+          ...iterationContextFromRow(previousResult.rows[0]),
+          id: Number(previousResult.rows[0].id),
+        };
+        const previousDays = await weeklyStandupDays(
+          previous,
+          developerEmail,
+        );
+        const previousReport = buildWeeklyFlowReview({
+          period: previous,
+          developer,
+          days: previousDays,
+          today: previous.end_date,
+        });
+        if (previousReport.coverage.observed_days >= 3) {
+          priorMetrics = previousReport.flow_snapshot;
+        }
+      }
+
+      const deterministic = buildWeeklyFlowReview({
+        period,
+        developer,
+        days,
+        baselineDay,
+        today,
+        priorMetrics,
+      });
+      const inputHash = crypto
+        .createHash('sha256')
+        .update(
+          JSON.stringify({
+            developer: developerEmail,
+            iteration_id: iterationId,
+            dates: [period.start_date, period.end_date],
+            period,
+            policy: WEEKLY_FLOW_POLICY_VERSION,
+            days,
+            prior_metrics: priorMetrics,
+          }),
+        )
+        .digest('hex');
+      const refresh = String(req.query.refresh || '') === '1';
+      if (!refresh) {
+        const cached = await pool.query(
+          `select ai_output from ai_snapshot_runs
+            where lower(dev_email)=lower($1)
+              and period_start=$2::date and period_end=$3::date
+              and prompt_version=$4 and ai_output->>'input_hash'=$5
+            order by created_at desc limit 1`,
+          [
+            developerEmail,
+            period.start_date,
+            period.end_date,
+            WEEKLY_FLOW_POLICY_VERSION,
+            inputHash,
+          ],
+        );
+        if (cached.rowCount) {
+          return res.json({
+            ...parseStoredJsonObject(cached.rows[0].ai_output),
+            cached: true,
+          });
+        }
+      }
+
+      const wording = await rewriteWeeklyFlowWording(deterministic);
+      const output = {
+        ...wording.report,
+        input_hash: inputHash,
+        cached: false,
+        ai_wording_used: wording.usedAI,
+      };
+      await pool.query(
+        `insert into ai_snapshot_runs
+           (dev_email, period_start, period_end, period_label, prompt_version,
+            metrics_summary, evidence_summary, ai_output)
+         values ($1, $2::date, $3::date, $4, $5, $6::jsonb, $7::jsonb, $8::jsonb)`,
+        [
+          developerEmail,
+          period.start_date,
+          period.end_date,
+          period.iteration_name,
+          WEEKLY_FLOW_POLICY_VERSION,
+          JSON.stringify(output.flow_snapshot),
+          JSON.stringify({
+            coverage: output.coverage,
+            attention: output.tickets_needing_attention,
+          }),
+          JSON.stringify(output),
+        ],
+      );
+      res.json(output);
+    } catch (e) {
+      return serverError(res, e, 'weekly-flow');
+    }
+  },
+);
 
 app.get(
   '/api/reports/snapshots',
@@ -12169,6 +12708,12 @@ app.post('/api/gen/notes', requireAuth, async (req, res) => {
 app.use('/', express.static(path.join(process.cwd(), '..', 'web')));
 
 if (process.env.NODE_ENV !== 'test') {
+  ensureIterationPeriodsSchema()
+    .then(() => console.log('[boot] iteration periods are ready'))
+    .catch((error) =>
+      console.error('[boot] iteration periods failed:', error),
+    );
+
   // --- boot: ensure Standup Review notification delivery ledger exists ---
   ensureStandupNotificationSchema()
     .then(() => {

@@ -1224,6 +1224,34 @@
           </div>
           <div id="stale"></div>
         </section>
+        <!-- Sprint-aligned Weekly Developer Flow Review (PM/Admin) -->
+        <div class="manager-tab-panel" data-manager-panel="performance" data-manager-roles="pm,admin">
+          <section id="weeklyFlowCard" aria-labelledby="weeklyFlowHeader">
+            <div class="row">
+              <div>
+                <h3 id="weeklyFlowHeader" style="margin:0;">Weekly Flow Review</h3>
+                <div class="help">One developer, aligned to the authoritative TFS sprint dates.</div>
+              </div>
+              <div class="toolbar right" style="flex-wrap:wrap;">
+                <label for="weeklyFlowDev">Developer</label>
+                <select id="weeklyFlowDev" style="min-width:190px;">
+                  <option value="">— Select developer —</option>
+                </select>
+                <label for="weeklyFlowIteration">Sprint</label>
+                <select id="weeklyFlowIteration" style="min-width:240px;">
+                  <option value="">— Select sprint —</option>
+                </select>
+                <button type="button" onclick="generateWeeklyFlow(false)">Generate</button>
+                <button type="button" class="secondary" onclick="generateWeeklyFlow(true)">Refresh</button>
+                <span id="weeklyFlowStatus" class="status" role="status" aria-live="polite"></span>
+              </div>
+            </div>
+            <div id="weeklyFlowResult" style="margin-top:16px;">
+              <p class="help">Choose a developer and sprint to generate the review.</p>
+            </div>
+          </section>
+        </div>
+
         <!-- (3) Top performers (Admin-only) -->
         <div class="manager-tab-panel" data-manager-panel="performance" data-manager-roles="admin">
           <section id="topDevsCard" aria-labelledby="topDevsHeader">
@@ -1809,6 +1837,138 @@
         return role === 'pm' || role === 'admin' || role === 'lead';
       }
 
+      function weeklyFlowDateLabel(value) {
+        if (!value) return '';
+        var date = new Date(String(value).slice(0, 10) + 'T00:00:00Z');
+        if (isNaN(date.getTime())) return String(value);
+        return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
+      }
+
+      async function ensureWeeklyFlowControls() {
+        var devSelect = byId('weeklyFlowDev');
+        var iterationSelect = byId('weeklyFlowIteration');
+        var status = byId('weeklyFlowStatus');
+        if (!devSelect || !iterationSelect) return;
+        if (devSelect.getAttribute('data-loaded') && iterationSelect.getAttribute('data-loaded')) return;
+        if (status) { status.textContent = 'Loading choices…'; status.className = 'status'; }
+        var token = localStorage.getItem('pocToken') || '';
+        var headers = { Authorization: 'Bearer ' + token };
+        try {
+          var responses = await Promise.all([
+            fetch((API || location.origin) + '/api/team-members', { headers: headers }),
+            fetch((API || location.origin) + '/api/reports/weekly-flow/iterations', { headers: headers })
+          ]);
+          var members = await responses[0].json();
+          var iterations = await responses[1].json();
+          if (!responses[0].ok) throw new Error(members.error || 'Unable to load developers');
+          if (!responses[1].ok) throw new Error(iterations.error || 'Unable to load sprints');
+
+          while (devSelect.options.length > 1) devSelect.remove(1);
+          (members.items || []).forEach(function (member) {
+            var option = document.createElement('option');
+            option.value = member.email || member.alias || '';
+            option.textContent = member.display_name || member.email || member.alias || '';
+            devSelect.appendChild(option);
+          });
+          devSelect.setAttribute('data-loaded', '1');
+
+          while (iterationSelect.options.length > 1) iterationSelect.remove(1);
+          (iterations.items || []).forEach(function (iteration) {
+            var option = document.createElement('option');
+            option.value = String(iteration.iteration_id || '');
+            option.textContent = (iteration.iteration_name || '') + ' · ' +
+              weeklyFlowDateLabel(iteration.start_date) + '–' + weeklyFlowDateLabel(iteration.end_date) +
+              ' · ' + (iteration.status || '');
+            option.title = iteration.iteration_path || '';
+            iterationSelect.appendChild(option);
+          });
+          if (iterations.default_iteration_id) iterationSelect.value = String(iterations.default_iteration_id);
+          iterationSelect.setAttribute('data-loaded', '1');
+          if (status) { status.textContent = ''; status.className = 'status'; }
+        } catch (error) {
+          if (status) { status.textContent = error.message || 'Unable to load choices'; status.className = 'status err'; }
+        }
+      }
+
+      function weeklyFlowMetric(label, value, delta) {
+        var deltaText = '';
+        if (delta !== null && delta !== undefined) {
+          deltaText = ' <small class="help">(' + (delta > 0 ? '+' : '') + esc(String(delta)) + ' vs prior)</small>';
+        }
+        return '<div style="padding:10px;border:1px solid var(--border);border-radius:8px;">' +
+          '<div class="help">' + esc(label) + '</div><div style="font-size:1.35rem;font-weight:700;">' +
+          esc(String(value == null ? 0 : value)) + deltaText + '</div></div>';
+      }
+
+      function renderWeeklyFlow(data) {
+        var result = byId('weeklyFlowResult');
+        if (!result) return;
+        var period = data.period || {};
+        var coverage = data.coverage || {};
+        var flow = data.flow_snapshot || {};
+        var deltas = flow.prior_period_delta || null;
+        var attention = data.tickets_needing_attention || [];
+        var actions = data.next_period_actions || [];
+        var metricSpecs = [
+          ['Ending WIP', 'ending_wip'], ['Peak WIP', 'peak_wip'], ['Waiting / handoff', 'waiting_handoff'],
+          ['Entered WIP', 'entered_wip'], ['Newly observed', 'newly_observed'], ['Meaningful movement', 'meaningful_movement'],
+          ['Development completed', 'development_completed'], ['Left review scope', 'left_review_scope'],
+          ['Stalled', 'stalled'], ['Delivery risk', 'delivery_risk']
+        ];
+        var metricsHtml = metricSpecs.map(function (spec) {
+          return weeklyFlowMetric(spec[0], flow[spec[1]], deltas ? deltas[spec[1]] : null);
+        }).join('');
+        var attentionHtml = attention.length ? '<div class="table-wrap"><table><thead><tr><th>Ticket</th><th>Movement</th><th>Concern / evidence</th><th>Owner / action</th><th>Checkpoint</th></tr></thead><tbody>' +
+          attention.map(function (item) {
+            return '<tr><td><strong>#' + esc(item.ticket_id || '') + '</strong><br><span class="help">' + esc(item.title || '') + '</span></td>' +
+              '<td>' + esc(item.movement || '') + '</td>' +
+              '<td>' + esc(item.concern || '') + (item.evidence ? '<br><span class="help">' + esc(item.evidence) + '</span>' : '') + '</td>' +
+              '<td><strong>' + esc(item.owner || '') + '</strong><br>' + esc(item.action || '') + '</td>' +
+              '<td>' + esc(item.checkpoint || '') + '</td></tr>';
+          }).join('') + '</tbody></table></div>' : '<p class="help">No tickets need focused attention.</p>';
+        var actionsHtml = actions.length ? '<ol>' + actions.map(function (action) {
+          return '<li>' + esc(action.wording || '') + '</li>';
+        }).join('') + '</ol>' : '<p class="help">No next-period actions were generated.</p>';
+        var missing = (coverage.missing_dates || []).length ? ' · Missing: ' + coverage.missing_dates.join(', ') : '';
+
+        result.innerHTML = '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">' +
+          '<span class="badge">' + esc(data.assessment || '') + '</span>' +
+          '<span class="badge muted">Coverage: ' + esc(coverage.status || '') + ' · ' + esc(String(coverage.observed_days || 0)) + '/' + esc(String(coverage.expected_days || 0)) + '</span>' +
+          '<span class="badge muted">' + esc(data.cached ? 'Cached' : 'Generated') + '</span>' +
+          '<span class="badge muted">' + esc(data.policy_version || '') + '</span></div>' +
+          '<h4 style="margin:0 0 4px;" title="' + esc(period.iteration_path || '') + '">' + esc(period.iteration_name || '') +
+          ' · ' + esc(period.start_date || '') + '–' + esc(period.end_date || '') + '</h4>' +
+          '<p class="help" style="margin-top:0;">' + esc(period.iteration_path || '') + missing + '</p>' +
+          '<h4>Weekly Assessment</h4><p>' + esc(data.summary || '') + '</p>' +
+          '<h4>Flow Snapshot</h4><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(145px,1fr));gap:8px;">' + metricsHtml + '</div>' +
+          '<h4>Tickets Needing Attention</h4>' + attentionHtml +
+          '<h4>Next Sprint-Week Plan</h4>' + actionsHtml +
+          '<p class="help" style="margin-top:16px;">' + esc(data.advisory || '') + '</p>';
+      }
+
+      async function generateWeeklyFlow(refresh) {
+        var devSelect = byId('weeklyFlowDev');
+        var iterationSelect = byId('weeklyFlowIteration');
+        var status = byId('weeklyFlowStatus');
+        if (!devSelect || !devSelect.value || !iterationSelect || !iterationSelect.value) {
+          if (status) { status.textContent = 'Select a developer and sprint.'; status.className = 'status err'; }
+          return;
+        }
+        if (status) { status.textContent = refresh ? 'Refreshing…' : 'Generating…'; status.className = 'status'; }
+        var token = localStorage.getItem('pocToken') || '';
+        var url = (API || location.origin) + '/api/reports/weekly-flow?developer=' + encodeURIComponent(devSelect.value) +
+          '&iteration_id=' + encodeURIComponent(iterationSelect.value) + (refresh ? '&refresh=1' : '');
+        try {
+          var response = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+          var data = await response.json();
+          if (!response.ok) throw new Error(data.error || 'Unable to generate weekly review');
+          renderWeeklyFlow(data);
+          if (status) { status.textContent = data.cached ? 'Cached result' : 'Ready'; status.className = 'status ok'; }
+        } catch (error) {
+          if (status) { status.textContent = error.message || 'Unable to generate'; status.className = 'status err'; }
+        }
+      }
+
       function managerTabAllowed(tab, role) {
         if (role === 'admin') {
           return tab === 'dev' || tab === 'risks' ||
@@ -1816,7 +1976,7 @@
             tab === 'qa-report' || tab === 'ts-report';
         }
         if (role === 'pm') {
-          return tab === 'dev' || tab === 'risks' || tab === 'reports' || tab === 'ts-report' || tab === 'qa-report';
+          return tab === 'dev' || tab === 'risks' || tab === 'reports' || tab === 'performance' || tab === 'ts-report' || tab === 'qa-report';
         }
         if (role === 'lead') {
           return tab === 'dev' || tab === 'risks' || tab === 'reports';
@@ -1880,6 +2040,9 @@
 
         if (tab === 'qa-report') loadQaReport();
         if (tab === 'ts-report') loadTsReport();
+        if (tab === 'performance' && (role === 'pm' || role === 'admin')) {
+          ensureWeeklyFlowControls();
+        }
         if (tab === 'reports') {
           var isQaAllowed = (role === 'admin' || role === 'pm');
           var isTsAllowed = (role === 'admin' || role === 'pm');
@@ -6477,6 +6640,8 @@
       window.closeStandupReview = closeStandupReview;
       window.loadStandupHistoryEntry = loadStandupHistoryEntry;
       window.switchManagerTab = switchManagerTab;
+      window.ensureWeeklyFlowControls = ensureWeeklyFlowControls;
+      window.generateWeeklyFlow = generateWeeklyFlow;
 
       function loadGenTeamAssignees(team, selectId) {
         var sel = byId(selectId);

@@ -154,6 +154,25 @@ deployment; existing forecast history is not backfilled.
 - UI falls back to this value when no explicit `iterationPath` filter provided
 - **CRITICAL FIX**: Prevents UI from showing tickets across all sprints (stale data issue)
 
+### 3a. **Iteration Periods** (Authoritative sprint calendar)
+
+**Schema**: `iteration_periods`
+
+The agent posts the current TFS team iteration plus the 11 most recent completed
+iterations to `POST /api/sync/iterations`. Each row stores the project, team,
+display name, full iteration path, and TFS calendar dates. Project, team, and the
+full path form the stable identity; sprint numbers are never used to infer dates.
+
+The manager-only Weekly Flow Review uses these periods to associate stored
+Standup Review snapshots with a sprint. New snapshots carry exact iteration
+context. Current-policy legacy snapshots may be matched by date only when one
+and only one recorded period contains that date. Ambiguous or missing matches
+reduce report coverage instead of being guessed.
+
+The weekly aggregation remains independent from ticket-level `iteration_path`.
+This preserves parent Bugs/PBIs that are in review scope because a child Task is
+in the current sprint.
+
 ---
 
 ## Data Flow Stages
