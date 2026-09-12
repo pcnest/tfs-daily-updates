@@ -292,8 +292,8 @@ export function buildWeeklyFlowReview({ period, developer, days, baselineDay = n
     ? Object.fromEntries(Object.keys(metrics).map((key) => [key, metrics[key] - Number(priorMetrics[key] || 0)]))
     : null;
   const summary = assessment === 'Insufficient Data'
-    ? `Only ${coverage.observed_days} expected workdays were observed, so the sprint-week cannot be assessed reliably. Missing days are excluded rather than treated as zero activity.`
-    : `${developer.display_name || developer.email} ends the observed sprint-week with ${metrics.ending_wip} active and ${metrics.waiting_handoff} waiting/handoff ticket(s). ${attentionItems.length ? `${attentionItems.length} item(s) need focused follow-up.` : 'No unresolved flow concerns were found.'}`;
+    ? `Only ${coverage.observed_days} expected workdays were observed, so the sprint cannot be assessed reliably. Missing days are excluded rather than treated as zero activity.`
+    : `${developer.display_name || developer.email} ends the observed sprint with ${metrics.ending_wip} active and ${metrics.waiting_handoff} waiting/handoff ticket(s). ${attentionItems.length ? `${attentionItems.length} item(s) need focused follow-up.` : 'No unresolved flow concerns were found.'}`;
 
   return {
     policy_version: WEEKLY_FLOW_POLICY_VERSION,
