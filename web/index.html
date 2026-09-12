@@ -1224,8 +1224,8 @@
           </div>
           <div id="stale"></div>
         </section>
-        <!-- Sprint-aligned Weekly Developer Flow Review (PM/Admin) -->
-        <div class="manager-tab-panel" data-manager-panel="performance" data-manager-roles="pm,admin">
+        <!-- Sprint-aligned Weekly Developer Flow Review (Admin only) -->
+        <div class="manager-tab-panel" data-manager-panel="performance" data-manager-roles="admin">
           <section id="weeklyFlowCard" aria-labelledby="weeklyFlowHeader">
             <div class="row">
               <div>
@@ -1989,7 +1989,7 @@
             tab === 'qa-report' || tab === 'ts-report';
         }
         if (role === 'pm') {
-          return tab === 'dev' || tab === 'risks' || tab === 'reports' || tab === 'performance' || tab === 'ts-report' || tab === 'qa-report';
+          return tab === 'dev' || tab === 'risks' || tab === 'reports' || tab === 'ts-report' || tab === 'qa-report';
         }
         if (role === 'lead') {
           return tab === 'dev' || tab === 'risks' || tab === 'reports';
@@ -2053,7 +2053,7 @@
 
         if (tab === 'qa-report') loadQaReport();
         if (tab === 'ts-report') loadTsReport();
-        if (tab === 'performance' && (role === 'pm' || role === 'admin')) {
+        if (tab === 'performance' && role === 'admin') {
           ensureWeeklyFlowControls();
         }
         if (tab === 'reports') {

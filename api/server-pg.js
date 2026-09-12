@@ -6653,7 +6653,7 @@ async function rewriteWeeklyFlowWording(report) {
 app.get(
   '/api/reports/weekly-flow/iterations',
   requireAuth,
-  requirePMOrAdmin,
+  requireAdminOnly,
   async (_req, res) => {
     try {
       await ensureIterationPeriodsSchema();
@@ -6700,7 +6700,7 @@ app.get(
 app.get(
   '/api/reports/weekly-flow',
   requireAuth,
-  requirePMOrAdmin,
+  requireAdminOnly,
   async (req, res) => {
     try {
       const rawDeveloper = String(req.query.developer || '').trim();
